@@ -9,25 +9,25 @@ export default defineConfig({
   // GitHub Pages project site. Update `site` to your GitHub username and `base`
   // to your repo name if they differ.
   site: 'https://avetavos.github.io',
-  base: '/rust-for-typescript-developers',
+  base: '/rust-deep-dive',
   output: 'static',
   integrations: [starlight({
-      title: 'Rust for TypeScript Developers',
+      title: 'Rust Deep Dive',
       defaultLocale: 'en',
       locales: {
         en: { label: 'English', lang: 'en' },
         th: { label: 'ไทย', lang: 'th' },
       },
       customCss: ['./src/styles/custom.css'],
-      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/avetavos/rust-for-typescript-developers' }],
+      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/avetavos/rust-deep-dive' }],
       sidebar: [
-        { label: 'Introduction & Setup', items: [{ autogenerate: { directory: 'intro' } }] },
-        { label: 'Rust 101 — Fundamentals', items: [{ autogenerate: { directory: 'rust-101' } }] },
-        { label: "Rust You Won't Find in TypeScript", items: [{ autogenerate: { directory: 'rs-only' } }] },
-        { label: 'Concurrency', items: [{ autogenerate: { directory: 'concurrency' } }] },
-        { label: 'Building an API with Axum', items: [{ autogenerate: { directory: 'api-axum' } }] },
-        { label: 'Advanced Rust', items: [{ autogenerate: { directory: 'advanced' } }] },
-        { label: 'Tooling, Testing & Deployment', items: [{ autogenerate: { directory: 'tooling' } }] },
+        { label: 'Basics & Syntax', items: [{ autogenerate: { directory: 'basics' } }] },
+        { label: 'Ownership & Borrowing', items: [{ autogenerate: { directory: 'ownership-borrowing' } }] },
+        { label: 'Structs, Enums & Pattern Matching', items: [{ autogenerate: { directory: 'structs-enums-matching' } }] },
+        { label: 'Traits & Generics', items: [{ autogenerate: { directory: 'traits-generics' } }] },
+        { label: 'Error Handling', items: [{ autogenerate: { directory: 'error-handling' } }] },
+        { label: 'Collections & Iterators', items: [{ autogenerate: { directory: 'collections-iterators' } }] },
+        { label: 'Concurrency, Testing & Cargo', items: [{ autogenerate: { directory: 'concurrency-testing-cargo' } }] },
       ],
       }), preact()],
 });
