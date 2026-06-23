@@ -1,0 +1,157 @@
+---
+title: 'Ownership & Moves'
+description: 'Each value has one owner. Assigning or passing a non-Copy value moves it. Copy types are duplicated. Use .clone() for an explicit deep copy.'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## One Owner at a Time
+
+Every Rust value has exactly one owner. When you assign a value to another variable, or pass it into a function, **what happens depends on whether the type implements `Copy`**.
+
+### Non-`Copy` Types Move
+
+Types that own heap memory — like `String`, `Vec<i32>`, or `Box<i32>` — do **not** implement `Copy`. When you assign one to another variable, the value is **moved**: the original binding becomes invalid.
+
+```rust
+fn main() {
+    let s1 = String::from("hello");
+    let s2 = s1; // s1 is moved into s2
+
+    // println!("{}", s1); // ERROR: s1 was moved
+    println!("{}", s2);   // fine
+}
+```
+
+The same rule applies when you pass a value into a function:
+
+```rust
+fn consume(s: String) {
+    println!("{}", s);
+} // s is dropped here
+
+fn main() {
+    let name = String::from("Rust");
+    consume(name); // name is moved
+    // name is no longer valid here
+}
+```
+
+### `Copy` Types Are Duplicated
+
+Simple scalar types stored entirely on the stack — integers, `bool`, `char`, floating-point numbers, and tuples of these — implement `Copy`. Assigning or passing them makes a **bitwise copy**; the original remains valid.
+
+```rust
+fn main() {
+    let x: i32 = 42;
+    let y = x; // x is COPIED, not moved
+    println!("x={} y={}", x, y); // both valid
+}
+```
+
+Common `Copy` types: `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `f32`, `f64`, `bool`, `char`.
+
+### Explicit Deep Copy with `.clone()`
+
+When you need a full independent copy of a heap-owning value, call `.clone()`. This is an explicit opt-in to a potentially expensive operation.
+
+```rust
+fn main() {
+    let original = String::from("keep me");
+    let copy = original.clone(); // deep copy
+    println!("original={} copy={}", original, copy);
+}
+```
+
+### Returning Ownership
+
+A function can give ownership back to the caller by returning the value:
+
+```rust
+fn take_and_give_back(s: String) -> String {
+    s // ownership moves out of the function
+}
+
+fn main() {
+    let s1 = String::from("hello");
+    let s2 = take_and_give_back(s1);
+    println!("{}", s2);
+}
+```
+
+This is valid but verbose. In practice, you will almost always prefer **borrowing** (the next lesson) over moving-and-returning.
+
+export const ownershipMovesCode = `fn take_ownership(s: String) -> String {
+    println!("inside take_ownership: {}", s);
+    s // return ownership to caller
+}
+
+fn main() {
+    // String is NOT Copy — it moves
+    let s1 = String::from("hello");
+    let s2 = take_ownership(s1); // s1 is moved
+    println!("s2 now owns: {}", s2);
+
+    // i32 IS Copy — it is copied
+    let x = 42;
+    let y = x;
+    println!("x={} y={}", x, y);
+
+    // .clone() makes an explicit deep copy
+    let original = String::from("keep me");
+    let cloned = original.clone();
+    println!("original={} cloned={}", original, cloned);
+}`;
+
+<Playground client:visible code={ownershipMovesCode} />
+
+<Callout title="Using a moved value is a compile error">
+Once a non-`Copy` value has been moved, the compiler permanently invalidates the original binding. Any attempt to use it afterwards is a **compile-time error** — `error[E0382]: borrow of moved value`. You cannot accidentally access freed memory.
+</Callout>
+
+export const quizOwnershipMoves = [
+    {
+        q: "What happens when you assign a String to a new variable in Rust?",
+        options: [
+            "Both variables point to the same heap allocation",
+            "A deep copy is made automatically",
+            "The value is moved and the original binding becomes invalid",
+            "The compiler throws a runtime panic"
+        ],
+        answer: 2
+    },
+    {
+        q: "Which of these types implements Copy?",
+        options: ["String", "Vec<i32>", "i32", "Box<i32>"],
+        answer: 2
+    },
+    {
+        q: "How do you get an explicit independent copy of a String?",
+        options: [
+            "let b = a;",
+            "let b = a.copy();",
+            "let b = a.clone();",
+            "let b = &a;"
+        ],
+        answer: 2
+    },
+    {
+        q: "After passing a String into a function that takes ownership, can the caller use it again?",
+        options: [
+            "Yes, the function receives a copy",
+            "No, the value has been moved into the function",
+            "Yes, but only if the function returns it",
+            "Only if the String is marked mut"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="ownership-borrowing/ownership-moves" questions={quizOwnershipMoves} />
+
+<ProgressTracker client:visible id="ownership-borrowing/ownership-moves" />

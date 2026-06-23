@@ -1,0 +1,149 @@
+---
+title: 'Mutable Borrows'
+description: 'Use &mut T to modify a borrowed value. The borrow checker enforces exclusive access: one mutable borrow XOR any number of shared borrows — never both at once.'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Mutating Through a Reference
+
+A shared reference `&T` is read-only. When you need to modify a borrowed value, use a **mutable reference**: `&mut T`.
+
+Two conditions must both be true:
+1. The original variable must be declared with `mut`.
+2. The reference itself must be written as `&mut`.
+
+```rust
+fn append_world(s: &mut String) {
+    s.push_str(", world");
+}
+
+fn main() {
+    let mut greeting = String::from("hello");
+    append_world(&mut greeting);
+    println!("{}", greeting); // hello, world
+}
+```
+
+### The Exclusive-Access Rule
+
+The borrow checker enforces a single invariant:
+
+> At any given point in the code, you may have **either** any number of shared references **or** exactly **one** mutable reference to a value — **never both at the same time**.
+
+This rule prevents **data races** at compile time. A data race occurs when two or more threads access the same memory concurrently and at least one access is a write. By making simultaneous mutable access a compile error, Rust eliminates the entire class of data-race bugs — even in single-threaded code the same rule keeps logic sound.
+
+```rust
+// THIS DOES NOT COMPILE — shown for teaching only:
+//
+// fn main() {
+//     let mut s = String::from("hello");
+//     let r1 = &s;       // shared borrow
+//     let r2 = &mut s;   // error[E0502]: cannot borrow `s` as mutable
+//                        // because it is also borrowed as immutable
+//     println!("{} {}", r1, r2);
+// }
+```
+
+### Non-Lexical Lifetimes (NLL)
+
+Since Rust 2018, the compiler uses **Non-Lexical Lifetimes (NLL)**: a borrow ends at the last point it is actually used, not at the end of the enclosing block. This means you can safely start a new borrow after the previous one's last use, even within the same scope.
+
+```rust
+fn main() {
+    let mut s = String::from("hello");
+
+    let r1 = &mut s;
+    r1.push_str(", world"); // last use of r1
+    // r1's borrow ends here (NLL)
+
+    let r2 = &s; // perfectly fine — r1 is gone
+    println!("{}", r2);
+}
+```
+
+### Mutable References and Function Parameters
+
+Passing `&mut T` to a function signals that the function **may** modify the value. This makes mutation explicit and visible at the call site — you can see `&mut` at every point a value might change.
+
+```rust
+fn double(n: &mut i32) {
+    *n *= 2; // dereference to modify the value behind the reference
+}
+
+fn main() {
+    let mut value = 7;
+    double(&mut value);
+    println!("{}", value); // 14
+}
+```
+
+Note the `*n` dereference operator: to modify the value a mutable reference points to, you must dereference it first. For `String` methods like `.push_str()`, Rust applies the dereference automatically through a feature called **auto-deref**.
+
+export const mutableBorrowsCode = `fn append_world(s: &mut String) {
+    s.push_str(", world");
+}
+
+fn main() {
+    let mut greeting = String::from("hello");
+    println!("before: {}", greeting);
+    append_world(&mut greeting);
+    println!("after:  {}", greeting);
+
+    // One mutable borrow at a time
+    let r1 = &mut greeting;
+    r1.push_str("!");
+    println!("mutated: {}", r1);
+    // r1 is no longer used here (NLL ends the borrow)
+
+    let r2 = &greeting; // shared borrow is fine now
+    println!("shared:  {}", r2);
+}`;
+
+<Playground client:visible code={mutableBorrowsCode} />
+
+<Callout title="One mutable borrow OR many shared borrows — never both">
+The exclusive-access rule is the borrow checker's most important constraint. It means any function holding a `&mut T` has **guaranteed exclusive access** to that value — no other code can read or write it until the mutable borrow ends. This eliminates data races and iterator-invalidation bugs at compile time.
+</Callout>
+
+export const quizMutableBorrows = [
+    {
+        q: "What syntax creates a mutable reference to a variable named data?",
+        options: ["&data", "mut &data", "&mut data", "ref mut data"],
+        answer: 2
+    },
+    {
+        q: "How many mutable references to the same value can exist at the same time?",
+        options: ["Zero", "Exactly one", "Two", "Any number"],
+        answer: 1
+    },
+    {
+        q: "Can you hold a shared reference and a mutable reference to the same value simultaneously?",
+        options: [
+            "Yes, as long as neither is used",
+            "Yes, mutable references can coexist with shared ones",
+            "No — the borrow checker forbids this combination",
+            "Only if the value is Copy"
+        ],
+        answer: 2
+    },
+    {
+        q: "What compile-time problem does the exclusive-access rule for &mut T prevent?",
+        options: [
+            "Stack overflows",
+            "Integer overflow",
+            "Data races and iterator invalidation",
+            "Unused variable warnings"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="ownership-borrowing/mutable-borrows" questions={quizMutableBorrows} />
+
+<ProgressTracker client:visible id="ownership-borrowing/mutable-borrows" />

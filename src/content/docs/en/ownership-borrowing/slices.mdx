@@ -1,0 +1,185 @@
+---
+title: Slices
+description: 'Borrow a contiguous portion of a collection with &[T] or a string portion with &str. A slice is a borrowed view — it does not own the data it references.'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What Is a Slice?
+
+A **slice** is a reference to a contiguous sequence of elements in a collection. It does not own the data — it borrows a view into existing memory.
+
+There are two common slice types:
+
+- `&[T]` — a slice of any array or vector of type `T`
+- `&str` — a string slice; a view into UTF-8 string data
+
+Because a slice is always a reference, its lifetime is tied to the collection it borrows from.
+
+### Array and Vector Slices
+
+Given an array or vector, you create a slice using **range syntax** inside square brackets:
+
+```rust
+fn main() {
+    let numbers = [10, 20, 30, 40, 50];
+
+    let all: &[i32] = &numbers[..];      // entire array
+    let first_three: &[i32] = &numbers[..3]; // indices 0, 1, 2
+    let middle: &[i32] = &numbers[1..4]; // indices 1, 2, 3
+    let last_two: &[i32] = &numbers[3..];// indices 3, 4
+
+    println!("all:         {:?}", all);
+    println!("first three: {:?}", first_three);
+    println!("middle:      {:?}", middle);
+    println!("last two:    {:?}", last_two);
+}
+```
+
+Range syntax summary:
+
+| Syntax | Meaning |
+|---|---|
+| `[..]` | entire collection |
+| `[..n]` | first `n` elements (indices 0 to n-1) |
+| `[m..n]` | indices m to n-1 |
+| `[m..]` | from index m to the end |
+
+### String Slices (`&str`)
+
+A **string slice** (`&str`) is a reference to a portion of a `String` or a string literal. String literals themselves are `&str` — they are slices of read-only data baked into the binary.
+
+```rust
+fn main() {
+    let s = String::from("hello world");
+
+    let hello: &str = &s[..5];  // "hello"
+    let world: &str = &s[6..];  // "world"
+
+    println!("{} {}", hello, world);
+
+    // A string literal is already &str
+    let literal: &str = "Rust is fast";
+    println!("{}", literal);
+}
+```
+
+### Slices Prevent Dangling Indices
+
+Without slices, you might store an index into a string and then modify the string — leaving the index pointing to meaningless data. With a string slice, the borrow checker ensures the slice cannot outlive the data it references.
+
+```rust
+fn first_word(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    for (i, &byte) in bytes.iter().enumerate() {
+        if byte == b' ' {
+            return &s[..i]; // slice up to the space
+        }
+    }
+    s // whole string is one word
+}
+
+fn main() {
+    let sentence = String::from("hello world");
+    let word = first_word(&sentence);
+    // sentence cannot be mutated while word (a slice of it) is alive
+    println!("first word: {}", word);
+}
+```
+
+### Slices as Function Parameters
+
+Functions that operate on sequences should accept slices rather than owned types. This lets them work with arrays, vectors, and any portion thereof without requiring ownership.
+
+- Prefer `&[T]` over `&Vec<T>` for sequence parameters
+- Prefer `&str` over `&String` for string parameters
+
+Both `&Vec<T>` and `&String` coerce automatically to their slice equivalents at call sites.
+
+export const slicesCode = `fn first_word(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    for (i, &byte) in bytes.iter().enumerate() {
+        if byte == b' ' {
+            return &s[..i];
+        }
+    }
+    s
+}
+
+fn sum_slice(nums: &[i32]) -> i32 {
+    let mut total = 0;
+    for &n in nums {
+        total += n;
+    }
+    total
+}
+
+fn main() {
+    // String slice
+    let sentence = String::from("hello world");
+    let word = first_word(&sentence);
+    println!("first word: {}", word);
+
+    // Integer slice
+    let numbers = [10, 20, 30, 40, 50];
+    let middle: &[i32] = &numbers[1..4];
+    println!("middle slice: {:?}", middle);
+    println!("sum of middle: {}", sum_slice(middle));
+
+    // String slice literal
+    let greeting: &str = "Rust is safe";
+    println!("slice: {}", &greeting[..4]);
+}`;
+
+<Playground client:visible code={slicesCode} />
+
+<Callout title="A slice is a borrowed view — it does not own the data">
+A slice is always a **reference** — it borrows a contiguous portion of a collection. Because the borrow checker tracks this relationship, the compiler will reject any code that tries to modify or drop the underlying data while a slice into it is still live. This prevents the classic "iterator invalidation" and "dangling pointer" bugs at compile time.
+</Callout>
+
+export const quizSlices = [
+    {
+        q: "What type represents a borrowed view into part of a String?",
+        options: ["String", "&String", "&str", "str"],
+        answer: 2
+    },
+    {
+        q: "What does the range syntax [1..4] select from a slice?",
+        options: [
+            "Elements at indices 1, 2, 3, and 4",
+            "Elements at indices 1, 2, and 3",
+            "Elements at indices 0, 1, 2, and 3",
+            "Elements at index 1 through the end"
+        ],
+        answer: 1
+    },
+    {
+        q: "Does a slice own the data it points to?",
+        options: [
+            "Yes, it takes ownership when created",
+            "No, it is always a reference — a borrowed view",
+            "Only if it covers the entire collection",
+            "Only if the underlying collection is mutable"
+        ],
+        answer: 1
+    },
+    {
+        q: "Why should a function parameter use &[T] instead of &Vec<T>?",
+        options: [
+            "&Vec<T> is not a valid type in Rust",
+            "&[T] is faster because it avoids heap allocation",
+            "&[T] is more flexible — it accepts arrays, vector refs, and any contiguous slice",
+            "There is no practical difference"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="ownership-borrowing/slices" questions={quizSlices} />
+
+<ProgressTracker client:visible id="ownership-borrowing/slices" />

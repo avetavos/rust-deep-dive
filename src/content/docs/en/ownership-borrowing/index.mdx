@@ -1,5 +1,112 @@
 ---
-title: Ownership & Borrowing
-description: Ownership, moves, references, borrowing, and slices.
+title: 'Ownership & Borrowing'
+description: 'Learn Rusts compile-time memory model: ownership, moves, references, mutable borrows, and slices.'
+sidebar:
+  order: 1
 ---
-Coming soon.
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is Ownership?
+
+Rust's most distinctive feature is its **ownership system** — a set of rules the compiler enforces at compile time to guarantee memory safety without a garbage collector.
+
+Every piece of memory in a Rust program is owned by exactly one variable at any given moment. When that variable goes out of scope, Rust automatically frees the memory. There is no runtime bookkeeping, no GC pauses, and no possibility of use-after-free or double-free bugs — the compiler rules them out entirely.
+
+### The Three Rules of Ownership
+
+1. Every value in Rust has exactly **one owner**.
+2. When the owner goes **out of scope**, the value is **dropped** (memory is freed).
+3. Ownership can be **transferred** (moved) to a new owner — at which point the old owner is no longer valid.
+
+These three rules are the entire foundation. Everything else in this module — moves, references, mutable borrows, and slices — flows from them.
+
+```rust
+fn main() {
+    // Rule 1: one owner
+    let s = String::from("hello");
+
+    // Rule 2: out of scope → dropped
+    {
+        let inner = String::from("inner");
+        println!("{}", inner);
+    } // inner is freed here
+
+    // Rule 3: ownership transferred to t
+    let t = s;
+    println!("{}", t);
+    // s is no longer valid here
+}
+```
+
+### What This Module Covers
+
+| Lesson | Concept |
+|---|---|
+| Ownership & Moves | Each value has one owner; assignment moves non-`Copy` types |
+| References & Borrowing | Borrow a value with `&T` without taking ownership |
+| Mutable Borrows | Modify through `&mut T`; the exclusive-access rule |
+| Slices | Borrow a contiguous portion of a collection with `&[T]` or `&str` |
+
+### Why No Garbage Collector?
+
+A GC scans memory at runtime to find unreachable values and free them. This adds runtime overhead and introduces unpredictable pauses. Rust moves that work entirely to compile time: the compiler tracks every ownership transfer and scope exit and inserts the `drop` calls for you. The result is C-level performance with complete memory safety.
+
+export const ownershipIntroCode = `fn main() {
+    // Rule 1: every value has exactly one owner
+    let owner = String::from("owned by owner");
+    println!("Rule 1: {}", owner);
+
+    // Rule 2: when the owner goes out of scope, the value is dropped
+    {
+        let scoped = String::from("scoped value");
+        println!("Rule 2 inside scope: {}", scoped);
+    } // scoped is dropped here — memory is freed
+    println!("Rule 2: scoped is gone");
+
+    // Rule 3: ownership can be transferred (moved)
+    let new_owner = owner;
+    println!("Rule 3: now {}", new_owner);
+    // 'owner' is no longer valid here
+}`;
+
+<Playground client:visible code={ownershipIntroCode} />
+
+<Callout title="The compiler is your safety net">
+Ownership violations are caught at **compile time**, not at runtime. If your program compiles, the memory model guarantees are upheld — no buffer overflows, no dangling pointers, no data races from unsynchronized access.
+</Callout>
+
+export const quizOwnershipIndex = [
+    {
+        q: "How many owners can a value have at one time in Rust?",
+        options: ["Zero", "Exactly one", "As many as needed", "At most two"],
+        answer: 1
+    },
+    {
+        q: "What happens to a value when its owner goes out of scope?",
+        options: [
+            "It is moved to the next scope",
+            "It is garbage collected on the next GC cycle",
+            "It is dropped — its memory is freed immediately",
+            "It becomes a dangling pointer"
+        ],
+        answer: 2
+    },
+    {
+        q: "Which mechanism does Rust use to guarantee memory safety?",
+        options: [
+            "A reference-counting garbage collector",
+            "Compile-time ownership rules enforced by the borrow checker",
+            "A mark-and-sweep GC that runs between function calls",
+            "Manual malloc/free calls inserted by the programmer"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="ownership-borrowing/index" questions={quizOwnershipIndex} />
+
+<ProgressTracker client:visible id="ownership-borrowing/index" />
