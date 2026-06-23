@@ -1,0 +1,158 @@
+---
+title: 'References และ Borrowing'
+description: 'borrow ค่าด้วย &T เพื่อใช้งานโดยไม่ต้องเอา ownership ไป ฟังก์ชันที่รับ reference จะไม่กลืนค่าของผู้เรียก'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Borrow แทนที่จะ Move
+
+การ move ค่าเข้าไปในฟังก์ชันมักไม่จำเป็น — คุณแค่อยากให้ฟังก์ชันอ่านค่า ไม่ได้อยากให้มันเป็นเจ้าของ Rust แก้ปัญหานี้ด้วย **references** reference ช่วยให้คุณส่งค่าเข้าไปในฟังก์ชันได้โดยไม่ต้องสละ ownership
+
+syntax `&T` หมายถึง "shared reference ไปยังค่าของ type `T`" การสร้าง reference เรียกว่า **borrowing**
+
+```rust
+fn calculate_length(s: &String) -> usize {
+    s.len()
+} // s goes out of scope, but since it does not own the data, nothing is dropped
+
+fn main() {
+    let s = String::from("hello");
+    let len = calculate_length(&s); // pass a reference, not the value
+    println!("{} has {} characters", s, len); // s is still valid
+}
+```
+
+syntax `&s` สร้าง reference ไปยัง `s` ส่วน signature ของฟังก์ชัน `s: &String` ประกาศว่าพารามิเตอร์นี้เป็น reference ไม่ใช่ `String` ที่เป็นเจ้าของค่า
+
+### References ไม่ได้เป็นเจ้าของ
+
+เพราะ reference ไม่ได้เป็นเจ้าของค่าที่มันชี้ไป ค่านั้นจึง **ไม่ถูก dropped** เมื่อ reference ออกจาก scope ownership ยังคงอยู่กับตัวแปรเดิม
+
+```rust
+fn print_greeting(name: &String) {
+    println!("Hello, {}!", name);
+} // reference dropped here — name itself is unaffected
+
+fn main() {
+    let name = String::from("Alice");
+    print_greeting(&name);
+    print_greeting(&name); // can borrow again — we still own name
+    println!("Still have: {}", name);
+}
+```
+
+### Shared References หลายตัว
+
+คุณสามารถมี shared reference (`&T`) ไปยังค่าหนึ่ง **จำนวนเท่าไรก็ได้** พร้อม ๆ กัน ตราบใดที่ไม่มีตัวใดเป็น mutable reference เลย shared reference เป็นแบบ read-only
+
+```rust
+fn main() {
+    let s = String::from("shared");
+    let r1 = &s;
+    let r2 = &s;
+    let r3 = &s;
+    println!("{} {} {}", r1, r2, r3); // all three are valid simultaneously
+}
+```
+
+### References กับ Signature ของฟังก์ชัน
+
+เมื่อพารามิเตอร์ของฟังก์ชันเป็น `&String` ผู้เรียกจะส่ง `&my_string` เข้าไป เมื่อพารามิเตอร์เป็น `&str` (string slice) ฟังก์ชันจะยืดหยุ่นกว่า — มันรับได้ทั้ง `&String` และ string literal โดยทั่วไปควรเลือกใช้ `&str` แทน `&String` สำหรับพารามิเตอร์ของฟังก์ชัน
+
+```rust
+fn greet(name: &str) {
+    println!("Hello, {}!", name);
+}
+
+fn main() {
+    let owned = String::from("Bob");
+    greet(&owned);          // &String coerces to &str
+    greet("Charlie");       // string literal is already &str
+}
+```
+
+export const referencesBorrowingCode = `fn calculate_length(s: &String) -> usize {
+    s.len()
+}
+
+fn greet(name: &str) {
+    println!("Hello, {}!", name);
+}
+
+fn main() {
+    let s = String::from("hello");
+
+    // Pass a reference — s is not moved
+    let len = calculate_length(&s);
+    println!("length of {} is {}", s, len);
+
+    // Multiple shared borrows are allowed
+    let r1 = &s;
+    let r2 = &s;
+    println!("r1={} r2={}", r1, r2);
+
+    // &String coerces to &str
+    let owned = String::from("Alice");
+    greet(&owned);   // borrow, not move
+    greet("Bob");    // string literal
+    println!("owned is still: {}", owned);
+}`;
+
+<Playground client:visible code={referencesBorrowingCode} />
+
+<Callout title="reference borrow โดยไม่เอา ownership ไป">
+`&T` คือ **shared reference** — มันให้คุณอ่านค่าได้โดยไม่ต้องเป็นเจ้าของ เจ้าของเดิมยังคงเก็บค่าของมันไว้ครบถ้วน คุณสามารถมี shared reference ได้มากเท่าที่ต้องการพร้อม ๆ กัน เพราะมันเป็นแบบ read-only ทั้งหมดและไม่ขัดแย้งกันเอง
+</Callout>
+
+export const quizReferencesBorrowing = [
+    {
+        q: "สัญลักษณ์ & ทำอะไรเมื่อวางไว้หน้า type ในพารามิเตอร์ของฟังก์ชัน?",
+        options: [
+            "มัน copy ค่าเข้าไปในฟังก์ชัน",
+            "มัน move ค่าเข้าไปในฟังก์ชัน",
+            "มันสร้าง shared reference — ฟังก์ชัน borrow ค่าโดยไม่เอา ownership ไป",
+            "มันประกาศค่าให้เป็น mutable"
+        ],
+        answer: 2
+    },
+    {
+        q: "เกิดอะไรขึ้นกับ String เมื่อฟังก์ชันที่รับ &String return ออกมา?",
+        options: [
+            "String ถูกคืนเพราะ reference ออกจาก scope",
+            "String ยังใช้งานได้ — ฟังก์ชันแค่ borrow มันไป",
+            "String ถูก move กลับไปให้ผู้เรียกโดยอัตโนมัติ",
+            "String ใช้งานไม่ได้จนกว่าจะใช้ครั้งถัดไป"
+        ],
+        answer: 1
+    },
+    {
+        q: "shared reference (&T) ไปยังค่าเดียวกันสามารถมีอยู่พร้อมกันได้กี่ตัว?",
+        options: [
+            "ไม่เกินหนึ่ง",
+            "ไม่เกินสอง",
+            "ศูนย์ตัวพอดีในขณะที่มี mutable reference อยู่",
+            "จำนวนเท่าไรก็ได้ — shared reference เป็น read-only ทั้งหมด"
+        ],
+        answer: 3
+    },
+    {
+        q: "ทำไมพารามิเตอร์ของฟังก์ชันจึงควรเลือก &str แทน &String?",
+        options: [
+            "&str เป็น mutable ส่วน &String ไม่ใช่",
+            "&str รับได้ทั้ง reference ของ String ที่เป็นเจ้าของค่า และ string literal ผ่านการ coerce",
+            "&String มีให้ใช้เฉพาะใน nightly Rust เท่านั้น",
+            "ทั้งสองอย่างไม่มีความแตกต่างกัน"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="ownership-borrowing/references-borrowing" questions={quizReferencesBorrowing} />
+
+<ProgressTracker client:visible id="ownership-borrowing/references-borrowing" />

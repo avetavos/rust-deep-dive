@@ -1,0 +1,171 @@
+---
+title: 'Iterators'
+description: 'Iterator ใน Rust คือ Chain ของ Adaptor แบบ Lazy ที่ขับเคลื่อนด้วย Consumer เรียนรู้ iter/into_iter/iter_mut, map/filter/enumerate/zip และ collect/sum/fold'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Method สามแบบของ Iterator
+
+ทุก Collection มีสามวิธีในการสร้าง Iterator:
+
+| Method | ให้ผลเป็น | Ownership |
+|--------|--------|-----------|
+| `.iter()` | `&T` | ยืม Collection |
+| `.iter_mut()` | `&mut T` | ยืม Collection แบบ Mutable |
+| `.into_iter()` | `T` | Consume (Move) Collection |
+
+```rust
+let v = vec![1, 2, 3];
+
+for x in v.iter() { }        // v ยังใช้ได้หลังจากนั้น
+for x in v.into_iter() { }   // v ถูก Move — ใช้ v ไม่ได้อีก
+```
+
+## Adaptor — การแปลงแบบ Lazy
+
+Adaptor แปลง Iterator หนึ่งเป็น Iterator อื่น มัน **ไม่ทำงานจริง** จนกว่า Consumer จะขับเคลื่อน
+
+### `map`
+
+แปลง Element แต่ละตัว:
+
+```rust
+let doubled: Vec<i32> = vec![1, 2, 3].iter().map(|&x| x * 2).collect();
+// [2, 4, 6]
+```
+
+### `filter`
+
+เก็บ Element ที่ตรงกับ Predicate สังเกต: `.iter()` บน `Vec<i32>` ให้ `&&i32` ภายใน filter — ใช้ `|&&x|` เพื่อ Destructure:
+
+```rust
+let evens: Vec<i32> = vec![1, 2, 3, 4].iter().filter(|&&x| x % 2 == 0).map(|&x| x).collect();
+// [2, 4]
+```
+
+### `enumerate`
+
+จับคู่แต่ละ Element กับ Index `(usize, &T)`:
+
+```rust
+for (i, val) in vec!["a", "b", "c"].iter().enumerate() {
+    println!("[{}] {}", i, val);
+}
+```
+
+### `zip`
+
+รวม Iterator สองตัวเป็นคู่ `(A, B)` ทีละ Element โดยหยุดที่ตัวที่สั้นกว่า:
+
+```rust
+let names = vec!["Alice", "Bob"];
+let scores = vec![100, 85];
+for (name, score) in names.iter().zip(scores.iter()) {
+    println!("{}: {}", name, score);
+}
+```
+
+## Consumer — ขับเคลื่อน Chain
+
+Consumer ดึงค่าผ่าน Chain ของ Adaptor และสร้างผลลัพธ์สุดท้าย
+
+| Consumer | ผลลัพธ์ |
+|----------|--------|
+| `.collect::<Vec<T>>()` | สร้าง Collection |
+| `.sum::<i32>()` | รวมค่าตัวเลข |
+| `.fold(init, f)` | ลดเหลือค่าเดียวด้วย Accumulator |
+| `.count()` | นับ Element |
+| `.any(pred)` / `.all(pred)` | Test Boolean แบบ Short-circuit |
+
+```rust
+let nums = vec![1, 2, 3, 4, 5];
+let total: i32 = nums.iter().sum();            // 15
+let product: i32 = nums.iter().fold(1, |acc, &x| acc * x);  // 120
+```
+
+export const iteratorsCode = `fn main() {
+    let numbers = vec![1, 2, 3, 4, 5, 6];
+
+    // filter + map + collect
+    let evens_doubled: Vec<i32> = numbers
+        .iter()
+        .filter(|&&x| x % 2 == 0)
+        .map(|&x| x * 2)
+        .collect();
+    println!("evens doubled: {:?}", evens_doubled);
+
+    // enumerate
+    for (i, val) in numbers.iter().enumerate() {
+        println!("[{}] = {}", i, val);
+    }
+
+    // zip two iterators
+    let letters = vec!["a", "b", "c"];
+    for (n, l) in numbers.iter().take(3).zip(letters.iter()) {
+        println!("{} -> {}", n, l);
+    }
+
+    // consumers: sum and fold
+    let total: i32 = numbers.iter().sum();
+    let product: i32 = numbers.iter().fold(1, |acc, &x| acc * x);
+    println!("sum={} product={}", total, product);
+}`;
+
+<Playground client:visible code={iteratorsCode} />
+
+<Callout title="Iterator Adaptor เป็น Lazy — ไม่มีอะไรเกิดขึ้นจนกว่า Consumer จะทำงาน">
+การเรียก `.map(...)` หรือ `.filter(...)` ไม่ได้รันโค้ดใดๆ ทันที มันแค่สร้างคำอธิบายของการแปลง เฉพาะเมื่อ Consumer — `collect`, `sum`, `fold`, Loop `for` — ดึงค่าผ่าน Chain จึงจะเกิดการคำนวณ ทำให้ Chain ของ Adaptor ยาวๆ มีประสิทธิภาพเท่ากับ Loop ที่เขียนด้วยมือ
+</Callout>
+
+export const quizIterators = [
+    {
+        q: "ความแตกต่างสำคัญระหว่าง .iter() กับ .into_iter() บน Vec คืออะไร?",
+        options: [
+            ".iter() เร็วกว่า; .into_iter() ปลอดภัยกว่า",
+            ".iter() ยืม Vec (ยังใช้ได้); .into_iter() Consume (Move) มัน",
+            ".into_iter() ยืม Vec; .iter() Consume มัน",
+            "ไม่มีความแตกต่างในทางปฏิบัติ"
+        ],
+        answer: 1
+    },
+    {
+        q: "Adaptor .map() รัน Closure ของมันจริงเมื่อใด?",
+        options: [
+            "ทันทีที่เรียก .map()",
+            "เมื่อ Adaptor ถัดไปใน Chain ถูกแนบ",
+            "เฉพาะเมื่อ Consumer เช่น .collect() หรือ .sum() ขับเคลื่อน Iterator",
+            "เมื่อ Vec หลุด Scope"
+        ],
+        answer: 2
+    },
+    {
+        q: ".fold(0, |acc, &x| acc + x) คำนวณอะไรสำหรับ vec![1, 2, 3]?",
+        options: [
+            "ค่าสูงสุด: 3",
+            "ผลคูณ: 6",
+            "ผลรวม: 6",
+            "จำนวน Element: 3"
+        ],
+        answer: 2
+    },
+    {
+        q: "ทำไม Closure ของ filter บน .iter() ของ Vec<i32> จึงรับ &&i32?",
+        options: [
+            "มันเป็น Bug ของ Rust Compiler",
+            ".iter() ให้ &i32 และ filter ห่อ Element แต่ละตัวด้วย Reference อีกชั้น ทำให้ได้ &&i32",
+            "filter เพิ่ม Reference สองชั้นเสมอไม่ว่าจะเป็นประเภท Iterator ใด",
+            "Vec<i32> จัดเก็บ i32 เป็น Double Pointer ภายใน"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="collections-iterators/iterators" questions={quizIterators} />
+
+<ProgressTracker client:visible id="collections-iterators/iterators" />

@@ -1,0 +1,279 @@
+---
+title: 'Cargo & Testing'
+description: 'Learn Cargo commands for building and running projects, and write unit tests using #[test], assert_eq!, and #[cfg(test)] modules.'
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Cargo: The Rust Build System and Package Manager
+
+Cargo is Rust's official build system and package manager. Every Rust project is a **crate**, and Cargo manages its dependencies, builds, tests, and documentation.
+
+### Essential Cargo Commands
+
+```bash
+# Create a new binary project
+cargo new my_project
+cd my_project
+
+# Create a new library crate
+cargo new my_lib --lib
+
+# Build in debug mode (fast compile, unoptimized)
+cargo build
+
+# Build in release mode (slow compile, optimized)
+cargo build --release
+
+# Build and run in one step
+cargo run
+
+# Run with arguments
+cargo run -- arg1 arg2
+
+# Check for compile errors without producing a binary
+cargo check
+
+# Add a dependency
+cargo add serde --features derive
+
+# Update dependencies to latest compatible versions
+cargo update
+
+# Format code
+cargo fmt
+
+# Run the linter
+cargo clippy
+```
+
+### Project Structure
+
+```
+my_project/
+  Cargo.toml      ← manifest: name, version, dependencies
+  Cargo.lock      ← exact dependency versions (commit this for binaries)
+  src/
+    main.rs       ← entry point for binary crates
+    lib.rs        ← entry point for library crates
+  tests/
+    integration_test.rs  ← integration tests (optional)
+```
+
+### `Cargo.toml` Anatomy
+
+```toml
+[package]
+name    = "my_project"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde       = { version = "1", features = ["derive"] }
+tokio       = { version = "1", features = ["full"] }
+anyhow      = "1"
+
+[dev-dependencies]
+# only compiled for tests and benchmarks
+pretty_assertions = "1"
+```
+
+## Unit Testing with `#[test]`
+
+Rust has testing built into the language and Cargo — no extra test framework needed. Annotate a function with `#[test]` to mark it as a test.
+
+```rust
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[test]
+fn test_add() {
+    assert_eq!(add(2, 3), 5);
+    assert_eq!(add(-1, 1), 0);
+    assert_ne!(add(2, 3), 6);
+}
+```
+
+Run all tests with:
+
+```bash
+cargo test
+```
+
+### The `#[cfg(test)]` Module Pattern
+
+The idiomatic place for unit tests is inside the source file they test, inside a `mod tests` block gated by `#[cfg(test)]`. Cargo only compiles this module when running `cargo test`, keeping it out of production binaries.
+
+```rust
+pub fn multiply(a: i32, b: i32) -> i32 {
+    a * b
+}
+
+pub fn divide(a: f64, b: f64) -> Option<f64> {
+    if b == 0.0 {
+        None
+    } else {
+        Some(a / b)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*; // bring parent module items into scope
+
+    #[test]
+    fn test_multiply() {
+        assert_eq!(multiply(3, 4), 12);
+        assert_eq!(multiply(0, 100), 0);
+        assert_eq!(multiply(-2, 5), -10);
+    }
+
+    #[test]
+    fn test_divide_by_zero() {
+        assert_eq!(divide(10.0, 0.0), None);
+    }
+
+    #[test]
+    fn test_divide_normal() {
+        let result = divide(10.0, 4.0).unwrap();
+        assert!((result - 2.5).abs() < f64::EPSILON);
+    }
+}
+```
+
+### Test Assertions
+
+```rust
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn demonstrate_assertions() {
+        // equality
+        assert_eq!(2 + 2, 4);
+        assert_ne!(2 + 2, 5);
+
+        // boolean
+        assert!(4 > 3);
+        assert!(!"hello".is_empty());
+
+        // with custom message
+        assert_eq!(1 + 1, 2, "basic arithmetic must hold");
+
+        // panics
+        // use #[should_panic] to assert a function panics
+    }
+
+    #[test]
+    #[should_panic(expected = "divide by zero")]
+    fn test_panic() {
+        let _ = 1 / 0; // this panics — test passes because we expect it
+    }
+}
+```
+
+### Integration Tests
+
+Files under `tests/` are integration tests. They test your crate's public API as an external consumer would.
+
+```rust
+// tests/integration_test.rs
+use my_lib::multiply;
+
+#[test]
+fn integration_multiply() {
+    assert_eq!(multiply(6, 7), 42);
+}
+```
+
+Run only integration tests:
+
+```bash
+cargo test --test integration_test
+```
+
+Run a specific test by name:
+
+```bash
+cargo test test_divide
+```
+
+Run tests with output visible:
+
+```bash
+cargo test -- --nocapture
+```
+
+### Testing Async Code with tokio
+
+For async functions, use `#[tokio::test]`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_async_fetch() {
+        let result = fetch_data(1).await;
+        assert!(!result.is_empty());
+    }
+}
+```
+
+Add `tokio` to `[dev-dependencies]` to use `#[tokio::test]` without pulling it into your production binary if you do not need it there.
+
+<Callout title="Tests run with cargo test — not in the browser runner">
+Rust tests use `#[test]` functions compiled and executed by `cargo test`. The browser Playground runs `fn main()` only — `cargo test` is not available in it. Write your test code in a local Cargo project and run `cargo test` from the terminal. Use `cargo test -- --nocapture` to see `println!` output from passing tests.
+</Callout>
+
+export const quizCargoTests = [
+    {
+        q: "What does #[cfg(test)] on a mod block do?",
+        options: [
+            "It runs the module only in release builds",
+            "It compiles the module only when running cargo test, keeping it out of production binaries",
+            "It marks the module as unsafe",
+            "It disables dead-code warnings inside the module"
+        ],
+        answer: 1
+    },
+    {
+        q: "Which assertion macro checks that two values are NOT equal?",
+        options: [
+            "assert!(a != b)",
+            "assert_eq!(a, b) with a negation flag",
+            "assert_ne!(a, b)",
+            "assert_not!(a, b)"
+        ],
+        answer: 2
+    },
+    {
+        q: "Where should integration tests be placed in a Cargo project?",
+        options: [
+            "Inside src/ alongside the source files",
+            "Inside a tests/ directory at the project root",
+            "Inside #[cfg(test)] mod blocks in lib.rs",
+            "In a separate crate declared in Cargo.toml"
+        ],
+        answer: 1
+    },
+    {
+        q: "What attribute do you use to test an async function with tokio?",
+        options: [
+            "#[test]",
+            "#[async_test]",
+            "#[tokio::test]",
+            "#[cfg(async)]"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="concurrency-testing-cargo/cargo-tests" questions={quizCargoTests} />
+
+<ProgressTracker client:visible id="concurrency-testing-cargo/cargo-tests" />

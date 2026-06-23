@@ -1,0 +1,186 @@
+---
+title: 'Closures'
+description: 'Closure คือ Function นิรนามที่จับ Environment ของมัน เรียนรู้ Fn, FnMut, FnOnce, Keyword move และวิธีที่ Closure ขับเคลื่อน Iterator Adaptor'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Closure คืออะไร?
+
+**Closure** คือ Function นิรนามที่กำหนด Inline ด้วย Syntax `|params| body` ต่างจาก `fn` ทั่วไป Closure สามารถ **จับ** (Capture) ตัวแปรจาก Scope ที่ล้อมรอบมันได้
+
+```rust
+let multiplier = 3;
+let triple = |x| x * multiplier;    // จับ multiplier จาก Environment
+println!("{}", triple(7));           // 21
+```
+
+## การจับ Environment
+
+Rust มี Trait สำหรับ Closure สามแบบที่อธิบายว่า Closure ใช้ค่าที่จับไว้อย่างไร:
+
+| Trait | วิธีการจับ | สามารถเรียกได้ |
+|-------|----------------|---------------|
+| `Fn` | ยืมแบบ Immutable (`&T`) | กี่ครั้งก็ได้ |
+| `FnMut` | ยืมแบบ Mutable (`&mut T`) | กี่ครั้งก็ได้ |
+| `FnOnce` | รับ Ownership (`T`) | ครั้งเดียวเท่านั้น |
+
+ทุก Closure Implement `FnOnce` อย่างน้อย ถ้ามันแค่ยืม มันก็ Implement `Fn` ด้วย
+
+### `Fn` — ยืมแบบ Immutable
+
+```rust
+fn apply<F: Fn(i32) -> i32>(f: F, x: i32) -> i32 { f(x) }
+
+let base = 10;
+let add_base = |x| x + base;    // ยืม base แบบ Immutable
+println!("{}", apply(add_base, 5));  // 15
+```
+
+### `FnMut` — ยืมแบบ Mutable
+
+```rust
+let mut count = 0;
+let mut increment = || { count += 1; count };
+println!("{}", increment());     // 1
+println!("{}", increment());     // 2
+drop(increment);                  // ปล่อย Mutable Borrow ก่อนอ่าน count
+println!("count is {}", count);  // 2
+```
+
+ต้องเรียก `drop(increment)` ก่อนอ่าน `count` โดยตรง เพราะ `increment` ถือ `&mut count` ที่จะขัดแย้งกับ Immutable Borrow ใน `println!`
+
+### `FnOnce` — รับ Ownership
+
+```rust
+let name = String::from("Rust");
+let greet = || println!("Hello, {}!", name);   // ย้าย name เข้า Closure
+greet();    // name ถูก Consume ที่นี่
+// greet(); // Compile Error — FnOnce เรียกได้แค่ครั้งเดียว
+```
+
+## Keyword `move`
+
+`move` บังคับให้ Closure รับ Ownership ของตัวแปรที่จับทั้งหมด ไม่ว่าจะยืมเพียงอย่างเดียวก็ตาม:
+
+```rust
+let message = String::from("hi");
+let say = move || println!("{}", message);  // message ถูกย้ายเข้า say
+// println!("{}", message);  // error — message ถูกย้ายไปแล้ว
+say();
+```
+
+`move` จำเป็นเมื่อ Closure มีอายุยาวกว่า Scope ที่กำหนด (เช่น ส่งไปยัง Thread)
+
+## Closures เป็น Iterator Adaptor
+
+Iterator Adaptor เช่น `map` และ `filter` รับ Closure โดยตรง:
+
+```rust
+let threshold = 3;
+let big: Vec<i32> = vec![1, 2, 3, 4, 5]
+    .iter()
+    .filter(|&&x| x > threshold)   // Closure จับ threshold ด้วย &
+    .map(|&x| x * 10)
+    .collect();
+// [40, 50]
+```
+
+export const closuresCode = `fn apply<F: Fn(i32) -> i32>(f: F, x: i32) -> i32 {
+    f(x)
+}
+
+fn apply_mut<F: FnMut() -> i32>(mut f: F) -> i32 {
+    f() + f()
+}
+
+fn apply_once<F: FnOnce() -> String>(f: F) -> String {
+    f()
+}
+
+fn main() {
+    // Fn: borrows environment immutably
+    let multiplier = 3;
+    let triple = |x| x * multiplier;
+    println!("apply triple to 5: {}", apply(triple, 5));
+
+    // FnMut: captures and mutates
+    let mut count = 0;
+    let mut increment = || { count += 1; count };
+    let result = apply_mut(&mut increment);
+    drop(increment);   // release mutable borrow before reading count
+    println!("FnMut result: {}, count is now: {}", result, count);
+
+    // FnOnce + move: takes ownership
+    let name = String::from("Rust");
+    let greeting = move || format!("Hello, {}!", name);
+    println!("{}", apply_once(greeting));
+
+    // closures as iterator adaptors
+    let nums = vec![1, 2, 3, 4, 5];
+    let threshold = 3;
+    let big: Vec<i32> = nums
+        .iter()
+        .filter(|&&x| x > threshold)
+        .map(|&x| x * 10)
+        .collect();
+    println!("big: {:?}", big);
+}`;
+
+<Playground client:visible code={closuresCode} />
+
+<Callout title="Closure จับ Environment ของมัน; move โอน Ownership เข้า Closure">
+โดยค่าเริ่มต้น Closure ยืมตัวแปรที่จับในระดับขั้นต่ำที่จำเป็น (`Fn` หรือ `FnMut`) Keyword `move` บังคับการโอน Ownership — จำเป็นเมื่อ Closure ต้องมีอายุยาวกว่า Scope ที่กำหนด เช่น เมื่อส่งไปยัง Thread ใหม่หรือ Return จาก Function
+</Callout>
+
+export const quizClosures = [
+    {
+        q: "Closure Trait ใดอธิบาย Closure ที่ยืมตัวแปรที่จับแบบ Mutable?",
+        options: [
+            "Fn",
+            "FnMut",
+            "FnOnce",
+            "FnCapture"
+        ],
+        answer: 1
+    },
+    {
+        q: "ทำไมต้องเรียก drop(increment) ก่อน println!(\"{}\", count) ในตัวอย่าง FnMut?",
+        options: [
+            "drop คืนหน่วยความจำของตัวแปร count",
+            "increment ถือ Mutable Borrow ของ count; การเรียก drop ปล่อยมันเพื่อให้ทำ Immutable Borrow ได้",
+            "println! ต้องการ Exclusive Ownership ของ Argument",
+            "FnMut Closure ใช้ไม่ได้หลังจากถูกเรียก"
+        ],
+        answer: 1
+    },
+    {
+        q: "Keyword move ทำอะไรกับ Closure?",
+        options: [
+            "มันทำให้ Closure เรียกได้แค่ครั้งเดียว",
+            "มันป้องกัน Closure จากการจับตัวแปรใดๆ",
+            "มันบังคับ Closure ให้รับ Ownership ของตัวแปรที่จับทั้งหมด",
+            "มัน Copy ตัวแปรที่จับทั้งหมดด้วย Value"
+        ],
+        answer: 2
+    },
+    {
+        q: "Closure ที่แค่อ่านตัวแปรที่จับโดยไม่แก้ไข Implement Trait ใดบ้าง?",
+        options: [
+            "FnOnce เท่านั้น",
+            "FnOnce และ FnMut",
+            "Fn, FnMut และ FnOnce — ทั้งสามแบบ",
+            "Fn เท่านั้น"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="collections-iterators/closures" questions={quizClosures} />
+
+<ProgressTracker client:visible id="collections-iterators/closures" />

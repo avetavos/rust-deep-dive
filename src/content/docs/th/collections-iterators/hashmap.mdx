@@ -1,0 +1,157 @@
+---
+title: 'HashMap'
+description: 'HashMap<K, V> ให้การค้นหาด้วย Key เฉลี่ย O(1) เรียนรู้ insert, get, Entry API และวิธี Iterate แบบ Deterministic โดย Sort Key ก่อน'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## `HashMap<K, V>`
+
+`HashMap<K, V>` Map Key ของประเภท `K` ไปยัง Value ของประเภท `V` มันใช้ Hash Function ภายในเพื่อให้ได้ O(1) เฉลี่ยสำหรับการ Insert และค้นหา
+
+```rust
+use std::collections::HashMap;
+
+let mut scores: HashMap<String, u32> = HashMap::new();
+```
+
+Key ต้อง Implement `Eq` และ `Hash` ประเภท Key ทั่วไป — `String`, `&str`, จำนวนเต็ม — ทำเช่นนั้นอยู่แล้ว
+
+## การ Insert และอ่านค่า
+
+```rust
+scores.insert(String::from("Alice"), 100);
+scores.insert(String::from("Bob"), 85);
+
+// get คืน Option<&V>
+if let Some(score) = scores.get("Alice") {
+    println!("Alice: {}", score);
+}
+
+// Index Syntax — Panic ถ้า Key ไม่มี
+let bob_score = scores["Bob"];
+```
+
+ควรใช้ `.get(key)` ใน Production Code เพื่อจัดการกรณี Key ไม่มีอย่างถูกต้อง
+
+## Entry API
+
+`entry` API ให้วิธีที่สะอาดในการ Insert ค่าเฉพาะเมื่อ Key ยังไม่มี หลีกเลี่ยงการ Lookup สองครั้ง:
+
+```rust
+// Insert 70 สำหรับ "Dave" ถ้า "Dave" ยังไม่มีใน Map
+scores.entry(String::from("Dave")).or_insert(70);
+
+// เพิ่ม Counter — Insert 0 ถ้ายังไม่มี แล้วบวก 1
+let count = scores.entry(String::from("Eve")).or_insert(0);
+*count += 1;
+```
+
+`or_insert` คืน `&mut V` ที่ชี้ไปยัง Value เพื่อให้อัปเดตได้ทันที
+
+## การ Iterate — Sort Key เสมอสำหรับผลลัพธ์ที่ Deterministic
+
+`HashMap` **ไม่รับประกัน** Order การ Iterate การรันโปรแกรมเดียวกันสองครั้งอาจให้ Order ต่างกัน เมื่อ Order มีความสำคัญ (Tests, Playground การเรียนรู้, Logging) ให้ Sort Key ก่อน:
+
+```rust
+let mut keys: Vec<&String> = scores.keys().collect();
+keys.sort();
+for k in keys {
+    println!("{}: {}", k, scores[k]);
+}
+```
+
+## การลบ Entry
+
+```rust
+scores.remove("Bob");
+println!("Bob present: {}", scores.contains_key("Bob"));
+```
+
+export const hashmapCode = `use std::collections::HashMap;
+
+fn main() {
+    let mut scores: HashMap<String, u32> = HashMap::new();
+    scores.insert(String::from("Alice"), 100);
+    scores.insert(String::from("Bob"), 85);
+    scores.insert(String::from("Carol"), 92);
+
+    // entry API: insert if absent
+    scores.entry(String::from("Dave")).or_insert(70);
+    // Alice already exists — or_insert does nothing
+    scores.entry(String::from("Alice")).or_insert(0);
+
+    // get returns Option<&V>
+    if let Some(score) = scores.get("Alice") {
+        println!("Alice scored {}", score);
+    }
+
+    // deterministic iteration: sort keys
+    let mut keys: Vec<&String> = scores.keys().collect();
+    keys.sort();
+    for k in keys {
+        println!("{}: {}", k, scores[k]);
+    }
+
+    // remove
+    scores.remove("Bob");
+    println!("Bob present: {}", scores.contains_key("Bob"));
+}`;
+
+<Playground client:visible code={hashmapCode} />
+
+<Callout title="Order การ Iterate ของ HashMap ไม่ถูกกำหนด — Sort Key เมื่อ Order มีความสำคัญ">
+`HashMap` ของ Rust ใช้ Hash Seed แบบ Random (SipHash) โดยค่าเริ่มต้น ดังนั้น Order การ Iterate อาจต่างกันระหว่างการรันโปรแกรม เมื่อต้องการผลลัพธ์ที่คงที่ — ใน Tests, Playground, หรือ Log — ให้เก็บ Key ลงใน `Vec` เรียก `.sort()` แล้ว Iterate
+</Callout>
+
+export const quizHashmap = [
+    {
+        q: "scores.get(\"Alice\") คืนค่าอะไรเมื่อ Alice ไม่อยู่ใน Map?",
+        options: [
+            "มัน Panic พร้อมข้อผิดพลาด key-not-found",
+            "มันคืน 0",
+            "มันคืน None",
+            "มันคืน String ว่างเปล่า"
+        ],
+        answer: 2
+    },
+    {
+        q: "entry(key).or_insert(v) ทำอะไรเมื่อ Key มีอยู่แล้ว?",
+        options: [
+            "มันเขียนทับค่าที่มีอยู่ด้วย v",
+            "มันไม่ทำอะไรและคืน Mutable Reference ไปยังค่าที่มีอยู่",
+            "มันลบ Key แล้ว Insert ใหม่ด้วย v",
+            "มัน Panic เพราะ Key ซ้ำ"
+        ],
+        answer: 1
+    },
+    {
+        q: "ทำไม Order การ Iterate ของ HashMap ใน Rust จึงไม่ Deterministic?",
+        options: [
+            "มันเป็น Bug ที่จะถูกแก้ในเวอร์ชันอนาคต",
+            "HashMap Sort Key ตามตัวอักษรโดยค่าเริ่มต้น",
+            "HashMap ของ Rust ใช้ Hash Seed แบบ Random (SipHash) เพื่อต้านทาน Hash-Flooding Attacks",
+            "ต้องใช้ BTreeMap สำหรับผลลัพธ์ที่มี Order"
+        ],
+        answer: 2
+    },
+    {
+        q: "ประเภทต้อง Implement Trait Bound ใดเพื่อใช้เป็น Key ของ HashMap?",
+        options: [
+            "Clone + Copy",
+            "Display + Debug",
+            "Eq + Hash",
+            "Ord + PartialOrd"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="collections-iterators/hashmap" questions={quizHashmap} />
+
+<ProgressTracker client:visible id="collections-iterators/hashmap" />

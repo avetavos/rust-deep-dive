@@ -1,0 +1,98 @@
+---
+title: 'การจัดการข้อผิดพลาด'
+description: 'Rust จำลองข้อผิดพลาดเป็นค่า ข้อบกพร่องที่ไม่สามารถกู้คืนได้จะทำให้เกิด panic ส่วนข้อผิดพลาดที่กู้คืนได้ใช้ Result<T, E> โมดูลนี้จะพาคุณผ่านทั้งสองแบบ'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ข้อผิดพลาดสองประเภท
+
+Rust แบ่งข้อผิดพลาดออกเป็นสองประเภทที่แตกต่างกันโดยพื้นฐาน และจัดการแต่ละประเภทต่างกัน
+
+**ข้อผิดพลาดที่ไม่สามารถกู้คืนได้** — บั๊กในโปรแกรมของคุณที่คุณไม่ได้คาดการณ์ไว้และไม่สามารถดำเนินการต่อได้อย่างสมเหตุสมผล เช่น ดัชนีอาเรย์ที่เกินขอบเขต การยืนยันที่ล้มเหลว หรือค่าคงที่ทางตรรกะที่ไม่ควรถูกละเมิด Rust จัดการกับสิ่งเหล่านี้ด้วย `panic!` ซึ่งคลายสแต็กและยุติเธรด
+
+**ข้อผิดพลาดที่กู้คืนได้** — สถานการณ์ที่ความล้มเหลวเป็นสิ่งที่คาดเดาได้และผู้เรียกควรสามารถตอบสนองได้ เช่น ไฟล์อาจไม่มีอยู่ อินพุตของผู้ใช้อาจไม่สามารถแยกวิเคราะห์ได้ หรือคำขอเครือข่ายอาจหมดเวลา Rust จำลองสิ่งเหล่านี้ด้วย enum `Result<T, E>` ซึ่งบังคับให้ผู้เรียกทุกคนจัดการหรือส่งต่อข้อผิดพลาดอย่างชัดเจน
+
+ความแตกต่างนี้ถูก**บังคับใช้โดยระบบประเภท** หากฟังก์ชันสามารถล้มเหลวได้แบบที่กู้คืนได้ ประเภทการคืนค่าของมันคือ `Result<T, E>` หากมันสามารถ panic ได้ ไม่มีคำอธิบายเพิ่มเติม — panic สามารถเกิดขึ้นได้ทุกที่ แต่ควรสงวนไว้สำหรับบั๊กการเขียนโปรแกรมที่แท้จริง
+
+## เนื้อหาของโมดูลนี้
+
+| บทเรียน | หัวข้อ |
+|---------|--------|
+| Panics | `panic!`, `.unwrap()`, `.expect()`, เมื่อไหร่ที่การ panic เหมาะสม |
+| Result | `Result<T, E>`, `Ok`/`Err`, การ matching, `.unwrap_or`, `.unwrap_or_else` |
+| ตัวดำเนินการ ? | การส่งต่อแบบ early-return, การเชื่อมโยง, `main` ที่คืน `Result` |
+| ข้อผิดพลาดแบบกำหนดเอง | enum ข้อผิดพลาด, trait `Display` + `Error`, การแปลง `From` |
+
+## ลองดูตัวอย่างแรก
+
+ตัวอย่างด้านล่างแสดงข้อผิดพลาดทั้งสองประเภทเคียงข้างกัน: `panic!` ที่คุณจะเรียกเฉพาะเมื่ออินพุตเป็นข้อผิดพลาดทางตรรกะ และฟังก์ชันที่คืนค่า `Result` ซึ่งผู้เรียกต้องจัดการ
+
+export const errorHandlingIndexCode = `fn divide(a: i32, b: i32) -> Result<i32, String> {
+    if b == 0 {
+        Err(String::from("division by zero"))
+    } else {
+        Ok(a / b)
+    }
+}
+
+fn main() {
+    // Recoverable error: use Result
+    match divide(10, 2) {
+        Ok(result) => println!("10 / 2 = {}", result),
+        Err(e)     => println!("Error: {}", e),
+    }
+    match divide(5, 0) {
+        Ok(result) => println!("5 / 0 = {}", result),
+        Err(e)     => println!("Error: {}", e),
+    }
+    println!("Program continues normally after handling errors.");
+}`;
+
+<Playground client:visible code={errorHandlingIndexCode} />
+
+<Callout title="ข้อผิดพลาดคือค่าใน Rust">
+ต่างจากข้อยกเว้นในหลายภาษา `Result<T, E>` เป็นแค่ค่า enum ธรรมดา คอมไพเลอร์บังคับให้คุณจัดการมัน — คุณไม่สามารถละเลยค่า `Result` โดยเงียบๆ โดยไม่ตัดสินใจอย่างชัดเจน ทำให้เส้นทางข้อผิดพลาดมองเห็นได้และตรวจสอบได้ในระดับประเภท
+</Callout>
+
+export const quizErrorHandlingIndex = [
+    {
+        q: "โครงสร้างใดของ Rust ที่จำลองข้อผิดพลาดที่กู้คืนได้?",
+        options: [
+            "panic!",
+            "Result<T, E>",
+            "assert!",
+            "unreachable!"
+        ],
+        answer: 1
+    },
+    {
+        q: "panic! ทำอะไรใน Rust?",
+        options: [
+            "คืนค่า Err variant ให้ผู้เรียก",
+            "บันทึกข้อผิดพลาดและดำเนินการต่อ",
+            "คลายสแต็กและยุติเธรดปัจจุบัน",
+            "แปลงข้อผิดพลาดเป็น Result"
+        ],
+        answer: 2
+    },
+    {
+        q: "เหตุใดคอมไพเลอร์ Rust จึงบังคับให้คุณจัดการ Result?",
+        options: [
+            "Result เป็นคีย์เวิร์ด ไม่ใช่ enum",
+            "การละเลยค่า Result จะทำให้เกิดคำเตือนหรือข้อผิดพลาดของคอมไพเลอร์",
+            "รันไทม์จะลองดำเนินการที่ล้มเหลวใหม่โดยอัตโนมัติ",
+            "ค่า Result จะถูกปลดปล่อยทันทีหากไม่ได้ใช้"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="error-handling/index" questions={quizErrorHandlingIndex} />
+
+<ProgressTracker client:visible id="error-handling/index" />

@@ -1,0 +1,149 @@
+---
+title: Functions
+description: 'Functions in Rust are declared with fn. Parameters require type annotations. The return type is written after ->. The last expression in a function body, written without a semicolon, is the return value.'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Declaring Functions
+
+Use `fn` to declare a function. Every parameter must have an explicit type annotation — the compiler does not infer parameter types. The return type follows `->`.
+
+```rust
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+```
+
+Functions can be defined before or after they are used — Rust does not require forward declarations.
+
+### Statements vs Expressions
+
+This is the most important distinction in Rust function bodies:
+
+- A **statement** performs an action and does **not** produce a value. `let x = 5;` is a statement — it ends with a semicolon.
+- An **expression** evaluates to a value. `5 + 3` is an expression. Blocks `{ ... }` are expressions too.
+
+```rust
+fn main() {
+    // This is a statement — no value produced
+    let y = 6;
+
+    // This is an expression block — produces 12
+    let z = {
+        let x = 3;
+        x * 4  // no semicolon — this is the block's value
+    };
+
+    println!("y={}, z={}", y, z);
+}
+```
+
+Adding a semicolon to the last line of a block **converts it from an expression to a statement** — the block now returns the unit type `()` instead of the computed value.
+
+### The Trailing-Expression Return
+
+The last expression in a function body — written **without** a semicolon — is the return value. You can also use the `return` keyword for early returns, but idiomatic Rust prefers the trailing expression for the main return path.
+
+```rust
+fn square(n: i32) -> i32 {
+    n * n  // returned because it has no semicolon
+}
+
+fn max_of_two(a: i32, b: i32) -> i32 {
+    if a > b { a } else { b }  // if is an expression
+}
+```
+
+### The Unit Type
+
+Functions that do not return a meaningful value implicitly return `()` (the unit type). The signature `fn foo()` is shorthand for `fn foo() -> ()`. The unit type is similar to `void` in other languages but is a real type with exactly one value: `()`.
+
+```rust
+fn greet(name: &str) {
+    // implicitly returns ()
+    println!("Hello, {}!", name);
+}
+```
+
+export const functionsCode = `fn add(a: i32, b: i32) -> i32 {
+    a + b   // trailing expression -- no semicolon -- is the return value
+}
+
+fn describe(n: i32) -> &'static str {
+    if n > 0 { "positive" } else if n < 0 { "negative" } else { "zero" }
+}
+
+fn unit_example() {
+    // Functions without -> return the unit type ()
+    println!("unit example");
+}
+
+fn main() {
+    let sum = add(3, 4);
+    println!("add(3, 4) = {}", sum);
+
+    println!("describe(10) = {}", describe(10));
+    println!("describe(-3) = {}", describe(-3));
+    println!("describe(0) = {}", describe(0));
+
+    unit_example();
+}`;
+
+<Playground client:visible code={functionsCode} />
+
+<Callout title="The last expression (no semicolon) is the return value">
+Omitting the semicolon on the last line of a function body makes that expression the return value. Adding a semicolon turns it into a statement that returns `()`. This is not a gotcha — it is a deliberate design that makes closures, blocks, and functions all behave consistently as expressions.
+</Callout>
+
+export const quizFunctions = [
+    {
+        q: "What is the return value of a function whose last line is n * 2 (no semicolon)?",
+        options: [
+            "The unit type ()",
+            "Nothing — the value is discarded",
+            "The value of n * 2",
+            "A compile error because return is missing"
+        ],
+        answer: 2
+    },
+    {
+        q: "What happens if you add a semicolon to the last expression in a function body?",
+        options: [
+            "The function returns that expression's value as before",
+            "The expression becomes a statement and the function returns ()",
+            "The compiler inserts an implicit return keyword",
+            "The function signature must be updated to -> ()"
+        ],
+        answer: 1
+    },
+    {
+        q: "Which of the following is true about function parameter types in Rust?",
+        options: [
+            "They are optional — the compiler infers them from call sites",
+            "They are required — the compiler does not infer parameter types",
+            "They can be omitted if the function is private",
+            "They are only needed for generic functions"
+        ],
+        answer: 1
+    },
+    {
+        q: "What is the unit type () in Rust?",
+        options: [
+            "An alias for null or None",
+            "A type with no values — used for functions that never return",
+            "A real type with exactly one value, returned by functions with no meaningful output",
+            "A zero-sized struct that cannot be used in expressions"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="basics/functions" questions={quizFunctions} />
+
+<ProgressTracker client:visible id="basics/functions" />

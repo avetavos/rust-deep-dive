@@ -1,0 +1,186 @@
+---
+title: 'Closures'
+description: 'Closures are anonymous functions that capture their environment. Learn Fn, FnMut, FnOnce, the move keyword, and how closures power iterator adaptors.'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What Is a Closure?
+
+A **closure** is an anonymous function defined inline with the `|params| body` syntax. Unlike a regular `fn`, a closure can **capture** variables from its surrounding scope.
+
+```rust
+let multiplier = 3;
+let triple = |x| x * multiplier;    // captures multiplier from the environment
+println!("{}", triple(7));           // 21
+```
+
+## Capturing the Environment
+
+Rust has three closure traits that describe how a closure uses its captured values:
+
+| Trait | How it captures | Can be called |
+|-------|----------------|---------------|
+| `Fn` | Borrows immutably (`&T`) | Any number of times |
+| `FnMut` | Borrows mutably (`&mut T`) | Any number of times |
+| `FnOnce` | Takes ownership (`T`) | Exactly once |
+
+Every closure implements at least `FnOnce`. If it only borrows, it also implements `Fn`.
+
+### `Fn` — Immutable Borrow
+
+```rust
+fn apply<F: Fn(i32) -> i32>(f: F, x: i32) -> i32 { f(x) }
+
+let base = 10;
+let add_base = |x| x + base;    // borrows base immutably
+println!("{}", apply(add_base, 5));  // 15
+```
+
+### `FnMut` — Mutable Borrow
+
+```rust
+let mut count = 0;
+let mut increment = || { count += 1; count };
+println!("{}", increment());     // 1
+println!("{}", increment());     // 2
+drop(increment);                  // release the mutable borrow
+println!("count is {}", count);  // 2
+```
+
+`drop(increment)` must be called before reading `count` directly, because `increment` holds a `&mut count` that would conflict with the immutable borrow in `println!`.
+
+### `FnOnce` — Takes Ownership
+
+```rust
+let name = String::from("Rust");
+let greet = || println!("Hello, {}!", name);   // moves name into closure
+greet();    // name is consumed here
+// greet(); // would compile-error — FnOnce can only be called once
+```
+
+## The `move` Keyword
+
+`move` forces the closure to take ownership of all captured variables, regardless of whether it would otherwise only borrow:
+
+```rust
+let message = String::from("hi");
+let say = move || println!("{}", message);  // message moved into say
+// println!("{}", message);  // error — message was moved
+say();
+```
+
+`move` is essential when the closure outlives its defining scope (e.g., passing it to a thread).
+
+## Closures as Iterator Adaptors
+
+Iterator adaptors like `map` and `filter` accept closures directly:
+
+```rust
+let threshold = 3;
+let big: Vec<i32> = vec![1, 2, 3, 4, 5]
+    .iter()
+    .filter(|&&x| x > threshold)   // closure captures threshold by &
+    .map(|&x| x * 10)
+    .collect();
+// [40, 50]
+```
+
+export const closuresCode = `fn apply<F: Fn(i32) -> i32>(f: F, x: i32) -> i32 {
+    f(x)
+}
+
+fn apply_mut<F: FnMut() -> i32>(mut f: F) -> i32 {
+    f() + f()
+}
+
+fn apply_once<F: FnOnce() -> String>(f: F) -> String {
+    f()
+}
+
+fn main() {
+    // Fn: borrows environment immutably
+    let multiplier = 3;
+    let triple = |x| x * multiplier;
+    println!("apply triple to 5: {}", apply(triple, 5));
+
+    // FnMut: captures and mutates
+    let mut count = 0;
+    let mut increment = || { count += 1; count };
+    let result = apply_mut(&mut increment);
+    drop(increment);   // release mutable borrow before reading count
+    println!("FnMut result: {}, count is now: {}", result, count);
+
+    // FnOnce + move: takes ownership
+    let name = String::from("Rust");
+    let greeting = move || format!("Hello, {}!", name);
+    println!("{}", apply_once(greeting));
+
+    // closures as iterator adaptors
+    let nums = vec![1, 2, 3, 4, 5];
+    let threshold = 3;
+    let big: Vec<i32> = nums
+        .iter()
+        .filter(|&&x| x > threshold)
+        .map(|&x| x * 10)
+        .collect();
+    println!("big: {:?}", big);
+}`;
+
+<Playground client:visible code={closuresCode} />
+
+<Callout title="Closures capture their environment; move transfers ownership into the closure">
+By default, closures borrow captured variables at the minimum level needed (`Fn` or `FnMut`). The `move` keyword forces ownership transfer — essential when the closure must outlive its defining scope, such as when passing it to a new thread or returning it from a function.
+</Callout>
+
+export const quizClosures = [
+    {
+        q: "What closure trait describes a closure that mutably borrows a captured variable?",
+        options: [
+            "Fn",
+            "FnMut",
+            "FnOnce",
+            "FnCapture"
+        ],
+        answer: 1
+    },
+    {
+        q: "Why must drop(increment) be called before println!(\"{}\", count) in an FnMut example?",
+        options: [
+            "drop frees the count variable from memory",
+            "increment holds a mutable borrow of count; calling drop releases it so an immutable borrow can be made",
+            "println! requires exclusive ownership of its arguments",
+            "FnMut closures cannot be used after being called"
+        ],
+        answer: 1
+    },
+    {
+        q: "What does the move keyword do to a closure?",
+        options: [
+            "It makes the closure callable only once",
+            "It prevents the closure from capturing any variables",
+            "It forces the closure to take ownership of all captured variables",
+            "It copies all captured variables by value"
+        ],
+        answer: 2
+    },
+    {
+        q: "A closure that only reads a captured variable without modifying it implements which trait(s)?",
+        options: [
+            "Only FnOnce",
+            "FnOnce and FnMut",
+            "Fn, FnMut, and FnOnce — all three",
+            "Only Fn"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="collections-iterators/closures" questions={quizClosures} />
+
+<ProgressTracker client:visible id="collections-iterators/closures" />

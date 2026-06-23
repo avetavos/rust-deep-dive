@@ -1,0 +1,98 @@
+---
+title: 'Error Handling'
+description: 'Rust models errors as values. Unrecoverable bugs cause a panic; recoverable errors use Result<T, E>. This module walks you through both.'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Two Kinds of Errors
+
+Rust divides errors into two fundamentally different categories, and handles each one differently.
+
+**Unrecoverable errors** — bugs in your program that you did not anticipate and cannot sensibly continue from: an array index that is out of bounds, a failed assertion, or a logic invariant that should never be violated. Rust handles these with `panic!`, which unwinds the stack and terminates the thread.
+
+**Recoverable errors** — situations where failure is expected and the caller should be able to react: a file might not exist, user input might not parse, or a network request might time out. Rust models these with the `Result<T, E>` enum, which forces every caller to explicitly handle or propagate the error.
+
+This distinction is **enforced by the type system**. If a function can fail recoverably, its return type is `Result<T, E>`. If it can panic, there is no extra annotation — panics can happen anywhere, but they should be reserved for genuine programming bugs.
+
+## What This Module Covers
+
+| Lesson | Topic |
+|--------|-------|
+| Panics | `panic!`, `.unwrap()`, `.expect()`, when panicking is appropriate |
+| Result | `Result<T, E>`, `Ok`/`Err`, matching, `.unwrap_or`, `.unwrap_or_else` |
+| The ? Operator | Early-return propagation, chaining, `main` returning `Result` |
+| Custom Errors | Error enums, `Display` + `Error` traits, `From` conversions |
+
+## A First Taste
+
+The snippet below shows both error kinds side by side: a `panic!` that you would only call when the input is a logic error, and a `Result`-returning function that the caller must handle.
+
+export const errorHandlingIndexCode = `fn divide(a: i32, b: i32) -> Result<i32, String> {
+    if b == 0 {
+        Err(String::from("division by zero"))
+    } else {
+        Ok(a / b)
+    }
+}
+
+fn main() {
+    // Recoverable error: use Result
+    match divide(10, 2) {
+        Ok(result) => println!("10 / 2 = {}", result),
+        Err(e)     => println!("Error: {}", e),
+    }
+    match divide(5, 0) {
+        Ok(result) => println!("5 / 0 = {}", result),
+        Err(e)     => println!("Error: {}", e),
+    }
+    println!("Program continues normally after handling errors.");
+}`;
+
+<Playground client:visible code={errorHandlingIndexCode} />
+
+<Callout title="Errors are values in Rust">
+Unlike exceptions in many languages, a `Result<T, E>` is just a regular enum value. The compiler forces you to handle it — you cannot silently ignore a `Result` without an explicit decision. This makes error paths visible and auditable at the type level.
+</Callout>
+
+export const quizErrorHandlingIndex = [
+    {
+        q: "Which Rust construct models a recoverable error?",
+        options: [
+            "panic!",
+            "Result<T, E>",
+            "assert!",
+            "unreachable!"
+        ],
+        answer: 1
+    },
+    {
+        q: "What does panic! do in Rust?",
+        options: [
+            "Returns an Err variant to the caller",
+            "Logs the error and continues execution",
+            "Unwinds the stack and terminates the current thread",
+            "Converts the error into a Result"
+        ],
+        answer: 2
+    },
+    {
+        q: "Why does the Rust compiler force you to handle a Result?",
+        options: [
+            "Result is a keyword, not an enum",
+            "Ignoring a Result value produces a compiler warning or error",
+            "The runtime automatically retries failed operations",
+            "Result values are freed immediately if not used"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="error-handling/index" questions={quizErrorHandlingIndex} />
+
+<ProgressTracker client:visible id="error-handling/index" />

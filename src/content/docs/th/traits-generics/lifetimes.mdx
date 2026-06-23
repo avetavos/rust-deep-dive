@@ -1,0 +1,154 @@
+---
+title: 'Lifetimes'
+description: 'Lifetime annotations บอก compiler ว่า reference ต้องคงอยู่นานแค่ไหน'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+export const lifetimesCode = `// A function with a lifetime annotation:
+// the returned reference lives at least as long as the shorter of x or y.
+fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+    if x.len() > y.len() { x } else { y }
+}
+
+// A struct that holds a reference — must annotate the lifetime.
+struct Excerpt<'a> {
+    text: &'a str,
+}
+
+impl<'a> Excerpt<'a> {
+    fn announce(&self) -> &str {
+        self.text
+    }
+}
+
+fn main() {
+    let string1 = String::from("long string is long");
+    let result;
+    {
+        let string2 = String::from("xyz");
+        result = longest(string1.as_str(), string2.as_str());
+        println!("longest: {}", result);
+    }
+
+    let novel = String::from("Call me Ishmael. Some years ago...");
+    let first_sentence = novel.split('.').next().expect("Could not find '.'");
+    let excerpt = Excerpt { text: first_sentence };
+    println!("excerpt: {}", excerpt.announce());
+}`;
+
+export const quizLifetimes = [
+    {
+        q: "Lifetime annotation ใน Rust มีไว้เพื่ออะไร?",
+        options: [
+            "ป้องกัน dangling reference โดยให้ compiler ตรวจสอบว่า reference ที่คืนกลับมาไม่ได้มีชีวิตอยู่นานกว่าข้อมูลที่ชี้ไป",
+            "บอก allocator ว่าต้อง free heap memory เมื่อใด",
+            "เปิดใช้ garbage collection สำหรับ reference-counted type",
+            "ทำเครื่องหมายว่า variable ไม่เปลี่ยนแปลงตลอด scope",
+        ],
+        answer: 0,
+    },
+    {
+        q: "ใน `fn longest<'a>(x: &'a str, y: &'a str) -> &'a str` annotation `'a` รับประกันอะไร?",
+        options: [
+            "Function จัดสรร string ใหม่บน heap ด้วย lifetime `'a`",
+            "Reference ที่คืนกลับมา valid ได้แค่หนึ่ง scope block",
+            "Reference ที่คืนกลับมา valid อย่างน้อยนานเท่ากับ reference input ที่สั้นกว่า",
+            "ทั้ง `x` และ `y` ต้องมีความยาวเท่ากัน",
+        ],
+        answer: 2,
+    },
+    {
+        q: "Compiler สามารถ infer lifetime โดยอัตโนมัติโดยไม่ต้องเขียน annotation ได้เมื่อใด?",
+        options: [
+            "เสมอ — annotation เป็นแค่ optional สำหรับเอกสาร",
+            "ไม่เลย — ทุก reference ในทุก function ต้องมี annotation",
+            "เมื่อ lifetime elision rules สามระบุ output lifetime ได้ครบถ้วน",
+            "เฉพาะเมื่อ function มี return statement เดียว",
+        ],
+        answer: 2,
+    },
+    {
+        q: "การที่ lifetime annotation เป็น 'compile-time only' หมายความว่าอะไร?",
+        options: [
+            "Annotation ถูกลบออกจาก binary ดังนั้นไม่มีผลต่อพฤติกรรมของโปรแกรมหรือ runtime performance",
+            "Annotation ทำให้ compiler ใส่ runtime check สำหรับ dangling pointer",
+            "Lifetime มีผลแค่ภายใน `const` function",
+            "Annotation ป้องกัน optimizer จากการ inline function ข้าม lifetime boundary",
+        ],
+        answer: 0,
+    },
+];
+
+## Lifetimes คืออะไร
+
+**Lifetime** คือแนวคิดที่บอก compiler ว่า reference จะยังคง valid อยู่นานแค่ไหน ใน Rust ทุก reference มี lifetime แต่ในหลายกรณี compiler สามารถอนุมานได้เองโดยไม่ต้องเขียนอย่างชัดเจน
+
+จุดประสงค์หลักคือการป้องกัน *dangling reference* — situation ที่ reference ชี้ไปยังหน่วยความจำที่ถูก free ไปแล้ว
+
+<Callout title="Lifetimes มีผลเฉพาะ compile time — อธิบายความถูกต้องของ reference">
+Lifetime annotation ไม่ได้เปลี่ยนระยะเวลาที่ value มีชีวิตอยู่ มันเป็นเพียงข้อมูลสำหรับ borrow checker เพื่อตรวจสอบว่า reference ทั้งหมดถูกต้อง ณ compile time ไม่มีผลใดๆ ต่อ runtime performance หรือ memory layout
+</Callout>
+
+## Lifetime Annotation Syntax
+
+Lifetime parameter เขียนด้วย apostrophe ตามด้วยชื่อ เช่น `'a`, `'b` และต้องประกาศใน angle bracket เหมือน generic:
+
+```rust
+fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+    if x.len() > y.len() { x } else { y }
+}
+```
+
+`'a` ที่นี่หมายความว่า "return value มีชีวิตอยู่อย่างน้อยนานเท่ากับ reference ที่สั้นกว่าระหว่าง `x` และ `y`"
+
+## Lifetimes ใน Structs
+
+เมื่อ struct เก็บ reference จะต้องมี lifetime annotation:
+
+```rust
+struct Excerpt<'a> {
+    text: &'a str,
+}
+```
+
+นี่บอก compiler ว่า instance ของ `Excerpt` ต้องมีชีวิตอยู่ไม่นานกว่า `text` ที่มันชี้ไป
+
+## Lifetime Elision
+
+ในหลายกรณีทั่วไป Rust มี *elision rules* ที่ช่วยให้คุณละ lifetime annotation ได้ เช่น:
+
+```rust
+// คุณเขียนแบบนี้:
+fn first_word(s: &str) -> &str { ... }
+
+// Compiler เห็นเป็นแบบนี้:
+fn first_word<'a>(s: &'a str) -> &'a str { ... }
+```
+
+Elision rules ครอบคลุมกรณีที่พบบ่อยที่สุด ทำให้ code สะอาดขึ้นโดยไม่สูญเสียความปลอดภัย
+
+## `'static` Lifetime
+
+`'static` คือ lifetime พิเศษที่หมายความว่า reference มีชีวิตอยู่ตลอด duration ของ program:
+
+```rust
+let s: &'static str = "I have a static lifetime.";
+```
+
+String literal ทุกอันมี `'static` lifetime เพราะถูก embed อยู่ใน binary ของ program
+
+## ลองเล่น
+
+Playground ด้านล่างแสดง function `longest` พร้อม lifetime annotation และ struct `Excerpt` ที่เก็บ reference — ลองดูว่า borrow checker รับประกันความถูกต้องของ reference อย่างไร
+
+<Playground client:visible code={lifetimesCode} />
+
+<Quiz client:visible id="traits-generics/lifetimes" questions={quizLifetimes} />
+
+<ProgressTracker client:visible id="traits-generics/lifetimes" />

@@ -1,0 +1,170 @@
+---
+title: 'Threads'
+description: 'Spawn OS thread ด้วย std::thread::spawn, รวบรวมผลลัพธ์ด้วย JoinHandle และแชร์ mutable state อย่างปลอดภัยด้วย Arc<Mutex<T>>'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## การ Spawn Thread ด้วย `std::thread`
+
+standard library ของ Rust มี OS thread ผ่าน `std::thread::spawn` คุณส่ง closure และฟังก์ชันจะส่งคืน `JoinHandle<T>` — handle ที่คุณใช้รอให้ thread เสร็จสิ้นและดึงค่าที่ส่งคืน
+
+```rust
+use std::thread;
+
+fn main() {
+    let handle = thread::spawn(|| {
+        // นี่รันบน OS thread ใหม่
+        42
+    });
+
+    let result = handle.join().unwrap(); // บล็อกจนกว่า thread จะเสร็จ
+    println!("Thread returned: {}", result);
+}
+```
+
+closure จะเป็น `move || { ... }` เมื่อต้องการ capture ตัวแปรจาก scope ที่ครอบอยู่ — ไม่เช่นนั้นคอมไพเลอร์ไม่สามารถรับประกันได้ว่าข้อมูลที่ถูก capture จะมีอายุยาวพอ
+
+### การย้ายข้อมูลเข้า Thread
+
+เนื่องจาก thread อาจมีอายุยาวกว่า scope ที่ถูก spawn ข้อมูลใดก็ตามที่ thread capture จะต้องเป็นเจ้าของโดย thread คำสั่ง `move` ย้าย ownership ของตัวแปรที่ถูก capture เข้าสู่ closure
+
+```rust
+use std::thread;
+
+fn main() {
+    let message = String::from("hello from the main thread");
+
+    let handle = thread::spawn(move || {
+        // message ถูกย้ายมาที่นี่ — thread เป็นเจ้าของมันแล้ว
+        println!("{}", message);
+    });
+
+    handle.join().unwrap();
+    // println!("{}", message); // จะไม่คอมไพล์ — ถูกย้ายไปแล้ว
+}
+```
+
+### การแชร์ State ด้วย `Arc<Mutex<T>>`
+
+เพื่อแชร์ข้อมูลที่ mutable ระหว่างหลาย thread ให้ห่อมันด้วย `Arc<Mutex<T>>`:
+
+- `Mutex<T>` ให้ mutual exclusion — มีแค่ thread เดียวที่สามารถล็อคได้ในแต่ละครั้ง
+- `Arc<T>` (Atomically Reference Counted) ให้หลาย thread ถือ pointer ที่นับ reference ไปยัง allocation เดียวกัน
+
+คุณ clone `Arc` ก่อนที่จะย้ายมันเข้าไปในแต่ละ thread `Mutex` ที่อยู่ข้างในถูกแชร์ ไม่ใช่ clone
+
+```rust
+use std::thread;
+use std::sync::{Arc, Mutex};
+
+fn main() {
+    let counter = Arc::new(Mutex::new(0_i32));
+    let mut handles = Vec::new();
+
+    for _ in 0..4 {
+        let counter = Arc::clone(&counter); // เพิ่ม ref-count ราคาถูก
+        let h = thread::spawn(move || {
+            let mut n = counter.lock().unwrap(); // ขอ lock
+            *n += 1;
+        }); // lock ถูก release เมื่อ n drop
+        handles.push(h);
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    println!("Final count: {}", *counter.lock().unwrap());
+}
+```
+
+### การรวบรวมผลลัพธ์จากหลาย Thread
+
+รูปแบบที่พบบ่อยคือให้แต่ละ thread คำนวณค่าและ push เข้าไปใน `Vec` ที่แชร์กัน หลังจาก thread ทั้งหมดเสร็จสิ้น เรา sort ผลลัพธ์เพื่อให้ output เป็น deterministic ไม่ว่า scheduling order จะเป็นอย่างไร
+
+export const threadsCode = `use std::thread;
+use std::sync::{Arc, Mutex};
+
+fn main() {
+    let results = Arc::new(Mutex::new(Vec::new()));
+    let mut handles = Vec::new();
+
+    for i in 0..5 {
+        let results = Arc::clone(&results);
+        let handle = thread::spawn(move || {
+            let square = i * i;
+            let mut v = results.lock().unwrap();
+            v.push(square);
+        });
+        handles.push(handle);
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let mut final_results = results.lock().unwrap().clone();
+    final_results.sort();
+    println!("Squares: {:?}", final_results);
+    let sum: i32 = final_results.iter().sum();
+    println!("Sum: {}", sum);
+}`;
+
+<Playground client:visible code={threadsCode} />
+
+<Callout title="Send และ Sync ทำให้ Data Race เป็น Compile Error">
+ระบบประเภทของ Rust บังคับใช้ thread safety ผ่าน marker trait `Send` และ `Sync` `Arc<Mutex<T>>` เป็น `Send` (คุณสามารถย้ายมันไปยัง thread อื่น) และ `Sync` (คุณสามารถแชร์ reference ไปยังมันข้าม thread) ถ้าคุณพยายามแชร์ `Rc<T>` หรือ `RefCell<T>` ข้าม thread คอมไพเลอร์จะปฏิเสธโค้ดด้วย error ที่ชัดเจน — ไม่ต้องการ sanitizer ไม่มี panic จาก data race เวลา runtime
+</Callout>
+
+export const quizThreads = [
+    {
+        q: "JoinHandle::join() ทำอะไร?",
+        options: [
+            "รวม thread สอง thread เข้าเป็นหนึ่ง",
+            "บล็อก thread ที่เรียกจนกว่า thread ที่ spawn จะเสร็จและส่งคืนผลลัพธ์",
+            "ฆ่า spawned thread ทันที",
+            "Detach thread เพื่อให้รันอิสระ"
+        ],
+        answer: 1
+    },
+    {
+        q: "ทำไม thread closure จึงมักใช้คำสั่ง move?",
+        options: [
+            "เพราะ closure ที่ไม่มี move ไม่สามารถใช้ println! ได้",
+            "เพราะ thread อาจมีอายุยาวกว่า scope ที่ตัวแปรถูกกำหนด ดังนั้นมันจะต้องเป็นเจ้าของโดย thread",
+            "เพราะ move ทำให้ closure รันเร็วขึ้น",
+            "เพราะ move เป็นสิ่งที่ std::thread::spawn ต้องการสำหรับ closure ทั้งหมด"
+        ],
+        answer: 1
+    },
+    {
+        q: "บทบาทของ Arc ใน Arc<Mutex<T>> คืออะไร?",
+        options: [
+            "Arc ให้ lock ที่ป้องกันการเข้าถึงพร้อมกัน",
+            "Arc รับประกันว่าค่าถูก drop เมื่อ reference สุดท้ายหายไป และปลอดภัยที่จะ clone ข้าม thread",
+            "Arc เป็น alias ที่ deprecated ของ Box",
+            "Arc แปลง inner type ให้เป็น Send โดยอัตโนมัติ"
+        ],
+        answer: 1
+    },
+    {
+        q: "ทำไมเราจึง sort ผลลัพธ์หลังจาก join thread ทั้งหมด?",
+        options: [
+            "Rust ต้องการข้อมูลที่ sort แล้วก่อนพิมพ์",
+            "Thread scheduling เป็น non-deterministic ดังนั้น insertion order เข้า Vec ที่แชร์จะแตกต่างกันระหว่างการรัน",
+            "sort() เป็นวิธีเดียวที่จะ unlock Mutex ได้",
+            "ผลลัพธ์ที่ไม่ sort จะทำให้เกิด panic"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="concurrency-testing-cargo/threads" questions={quizThreads} />
+
+<ProgressTracker client:visible id="concurrency-testing-cargo/threads" />

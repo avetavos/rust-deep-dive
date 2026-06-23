@@ -1,0 +1,184 @@
+---
+title: 'Custom Error Types'
+description: 'Define your own error enums and implement Display and Error for them. Implementing From enables automatic conversion with the ? operator.'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Why Custom Errors?
+
+Using `String` or `Box<dyn std::error::Error>` as your error type is fine for quick scripts, but real libraries and applications benefit from a concrete error enum:
+
+- Callers can pattern-match on specific variants and handle each case differently.
+- The error type documents every failure mode of your API.
+- You can attach structured data (e.g., the invalid value) to each variant.
+
+## Defining an Error Enum
+
+Declare an enum with one variant per failure mode. Derive `Debug` so the error can be printed with `{:?}`:
+
+```rust
+#[derive(Debug)]
+enum AppError {
+    ParseError(std::num::ParseIntError),
+    NegativeNumber(i32),
+    TooBig(i32),
+}
+```
+
+## Implementing `Display`
+
+The `std::fmt::Display` trait controls the human-readable error message — what you see when you print with `{}`:
+
+```rust
+use std::fmt;
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::ParseError(e)     => write!(f, "parse error: {}", e),
+            AppError::NegativeNumber(n) => write!(f, "number is negative: {}", n),
+            AppError::TooBig(n)         => write!(f, "number is too big: {} (max 100)", n),
+        }
+    }
+}
+```
+
+## Implementing `std::error::Error`
+
+To be usable wherever a `dyn Error` is expected (e.g., in `Box<dyn Error>`), your type must implement `std::error::Error`. The trait has no required methods — the default implementations are sufficient for most cases. Optionally implement `source()` to expose the underlying cause:
+
+```rust
+impl std::error::Error for AppError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            AppError::ParseError(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+```
+
+## Automatic Conversion with `From`
+
+Implementing `From<SomeOtherError> for AppError` lets the `?` operator convert automatically when calling functions that return `SomeOtherError`:
+
+```rust
+impl From<std::num::ParseIntError> for AppError {
+    fn from(e: std::num::ParseIntError) -> Self {
+        AppError::ParseError(e)
+    }
+}
+```
+
+Now `s.parse::<i32>()?` in a function returning `Result<_, AppError>` will automatically wrap the `ParseIntError` into `AppError::ParseError`.
+
+export const customErrorsCode = `use std::fmt;
+use std::num::ParseIntError;
+
+#[derive(Debug)]
+enum AppError {
+    ParseError(ParseIntError),
+    NegativeNumber(i32),
+    TooBig(i32),
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::ParseError(e)     => write!(f, "parse error: {}", e),
+            AppError::NegativeNumber(n) => write!(f, "number is negative: {}", n),
+            AppError::TooBig(n)         => write!(f, "number is too big: {} (max 100)", n),
+        }
+    }
+}
+
+impl std::error::Error for AppError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            AppError::ParseError(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<ParseIntError> for AppError {
+    fn from(e: ParseIntError) -> Self {
+        AppError::ParseError(e)
+    }
+}
+
+fn parse_bounded(s: &str) -> Result<i32, AppError> {
+    let n: i32 = s.parse()?;   // ParseIntError -> AppError via From
+    if n < 0   { return Err(AppError::NegativeNumber(n)); }
+    if n > 100 { return Err(AppError::TooBig(n)); }
+    Ok(n)
+}
+
+fn main() {
+    let cases = ["42", "-5", "200", "abc"];
+    for s in &cases {
+        match parse_bounded(s) {
+            Ok(n)  => println!("{} -> Ok({})", s, n),
+            Err(e) => println!("{} -> Err: {}", s, e),
+        }
+    }
+}`;
+
+<Playground client:visible code={customErrorsCode} />
+
+<Callout title="Implement Error + Display for custom error types">
+A well-designed custom error enum makes every failure mode explicit in your API. Implement `std::fmt::Display` for user-facing messages, `std::error::Error` for compatibility with `Box<dyn Error>`, and `From<...>` for each lower-level error type you wrap. This trio lets the `?` operator do all the conversion work automatically.
+</Callout>
+
+export const quizCustomErrors = [
+    {
+        q: "Which trait provides the human-readable error message shown with {}?",
+        options: [
+            "std::error::Error",
+            "std::fmt::Debug",
+            "std::fmt::Display",
+            "std::convert::From"
+        ],
+        answer: 2
+    },
+    {
+        q: "What is the purpose of implementing From<OtherError> for MyError?",
+        options: [
+            "It allows MyError to be printed with {:?}",
+            "It lets ? automatically convert OtherError into MyError",
+            "It makes MyError implement the Error trait",
+            "It allows MyError to be used as a function argument"
+        ],
+        answer: 1
+    },
+    {
+        q: "What does source() return in std::error::Error?",
+        options: [
+            "The file and line number where the error was created",
+            "The underlying lower-level error that caused this one, if any",
+            "The Display message of the error",
+            "The variant name as a string"
+        ],
+        answer: 1
+    },
+    {
+        q: "Why is a concrete error enum better than Box<dyn Error> for a library API?",
+        options: [
+            "Box<dyn Error> does not implement Display",
+            "Callers can pattern-match on concrete variants to handle each failure differently",
+            "Box<dyn Error> cannot be used with the ? operator",
+            "A concrete enum avoids heap allocation entirely"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="error-handling/custom-errors" questions={quizCustomErrors} />
+
+<ProgressTracker client:visible id="error-handling/custom-errors" />

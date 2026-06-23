@@ -1,0 +1,75 @@
+---
+title: 'Structs, Enums และ Pattern Matching'
+description: 'ภาพรวมของประเภทข้อมูลแบบกำหนดเองใน Rust — structs, enums และ match expression'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ภาพรวมโมดูล
+
+โมดูลนี้แนะนำสามส่วนประกอบที่สำคัญที่สุดของ Rust สำหรับการสร้างแบบจำลองข้อมูลและการควบคุมการทำงาน
+
+**Structs** คือกลุ่มของ field ที่มีชื่อ ช่วยให้คุณรวมค่าที่เกี่ยวข้องกันไว้ภายใต้ประเภทเดียว ต่อ method เพิ่มเติมผ่านบล็อก `impl` และ derive trait ที่มีประโยชน์อย่าง `Debug` และ `Clone`
+
+**Enums** ใช้จำลองทางเลือก แต่ละ variant สามารถพกข้อมูลที่แตกต่างกันได้ ทำให้มีพลังแสดงออกมากกว่า enum แบบ C ที่คุณอาจรู้จักจากภาษาอื่น `Option<T>` และ `Result<T, E>` ของ Rust ก็เป็น enum ในตัวทั้งคู่
+
+**`match`** คือ expression สำหรับ pattern matching ของ Rust มันแตกสาขาตามรูปร่างของค่า ดึงข้อมูลออกจาก variant ของ enum และตรวจสอบความครบถ้วนโดยคอมไพเลอร์ — ทุกกรณีที่เป็นไปได้ต้องได้รับการจัดการ
+
+เมื่อใช้ร่วมกัน ฟีเจอร์ทั้งสามนี้ช่วยให้คุณกำหนดโมเดลข้อมูลที่ชัดเจน อ่านง่าย และเขียน control flow ที่คอมไพเลอร์ตรวจสอบให้คุณเอง
+
+export const indexCode = `#[derive(Debug)]
+struct Point { x: f64, y: f64 }
+
+#[derive(Debug)]
+enum Direction { North, South, East, West }
+
+fn main() {
+    let p = Point { x: 3.0, y: 4.0 };
+    println!("Point: ({}, {})", p.x, p.y);
+    println!("Debug: {:?}", p);
+
+    let directions = [
+        Direction::North,
+        Direction::South,
+        Direction::East,
+        Direction::West,
+    ];
+
+    for dir in &directions {
+        let label = match dir {
+            Direction::North => "North",
+            Direction::South => "South",
+            Direction::East  => "East",
+            Direction::West  => "West",
+        };
+        println!("Heading {}", label);
+    }
+}`;
+
+<Playground client:visible code={indexCode} />
+
+export const indexQuiz = [
+    {
+        q: 'keyword ใดที่ใช้ประกาศ named struct ใน Rust?',
+        options: ['type', 'struct', 'class', 'record'],
+        answer: 1,
+    },
+    {
+        q: 'match expression ใน Rust มีคุณสมบัติใดที่ภาษาอื่นหลายภาษาขาดไป?',
+        options: [
+            'มันจับคู่ได้เฉพาะค่าจำนวนเต็มเท่านั้น',
+            'คอมไพเลอร์กำหนดให้ต้องจัดการทุกกรณีที่เป็นไปได้',
+            'มันคืนค่า unit () เสมอ',
+            'มันคอมไพล์เป็น jump table เสมอ',
+        ],
+        answer: 1,
+    },
+];
+
+<Quiz client:visible id="structs-enums-matching/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="structs-enums-matching/index" />

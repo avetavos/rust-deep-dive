@@ -1,0 +1,185 @@
+---
+title: Slices
+description: 'borrow ส่วนที่ต่อเนื่องกันของ collection ด้วย &[T] หรือบางส่วนของ string ด้วย &str slice คือ view ที่ borrow มา — มันไม่ได้เป็นเจ้าของข้อมูลที่มันอ้างถึง'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Slice คืออะไร?
+
+**slice** คือ reference ไปยังลำดับของ element ที่ต่อเนื่องกันใน collection มันไม่ได้เป็นเจ้าของข้อมูล — มัน borrow view เข้าไปยังหน่วยความจำที่มีอยู่แล้ว
+
+slice มีสอง type ที่พบบ่อย:
+
+- `&[T]` — slice ของ array หรือ vector ใด ๆ ของ type `T`
+- `&str` — string slice; view เข้าไปยังข้อมูล string แบบ UTF-8
+
+เพราะ slice เป็น reference เสมอ lifetime ของมันจึงผูกอยู่กับ collection ที่มัน borrow มา
+
+### Slice ของ Array และ Vector
+
+เมื่อมี array หรือ vector คุณสร้าง slice ได้โดยใช้ **range syntax** ภายในวงเล็บเหลี่ยม:
+
+```rust
+fn main() {
+    let numbers = [10, 20, 30, 40, 50];
+
+    let all: &[i32] = &numbers[..];      // entire array
+    let first_three: &[i32] = &numbers[..3]; // indices 0, 1, 2
+    let middle: &[i32] = &numbers[1..4]; // indices 1, 2, 3
+    let last_two: &[i32] = &numbers[3..];// indices 3, 4
+
+    println!("all:         {:?}", all);
+    println!("first three: {:?}", first_three);
+    println!("middle:      {:?}", middle);
+    println!("last two:    {:?}", last_two);
+}
+```
+
+สรุป range syntax:
+
+| Syntax | ความหมาย |
+|---|---|
+| `[..]` | ทั้ง collection |
+| `[..n]` | `n` element แรก (index 0 ถึง n-1) |
+| `[m..n]` | index m ถึง n-1 |
+| `[m..]` | จาก index m ไปจนสุดท้าย |
+
+### String Slices (`&str`)
+
+**string slice** (`&str`) คือ reference ไปยังบางส่วนของ `String` หรือ string literal ตัว string literal เองก็เป็น `&str` — มันเป็น slice ของข้อมูลแบบ read-only ที่ฝังอยู่ใน binary
+
+```rust
+fn main() {
+    let s = String::from("hello world");
+
+    let hello: &str = &s[..5];  // "hello"
+    let world: &str = &s[6..];  // "world"
+
+    println!("{} {}", hello, world);
+
+    // A string literal is already &str
+    let literal: &str = "Rust is fast";
+    println!("{}", literal);
+}
+```
+
+### Slice ป้องกัน Dangling Index
+
+หากไม่มี slice คุณอาจเก็บ index เข้าไปใน string แล้วแก้ไข string นั้น — ทำให้ index ชี้ไปยังข้อมูลที่ไม่มีความหมาย ด้วย string slice borrow checker จะรับประกันว่า slice ไม่สามารถมีอายุยืนกว่าข้อมูลที่มันอ้างถึงได้
+
+```rust
+fn first_word(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    for (i, &byte) in bytes.iter().enumerate() {
+        if byte == b' ' {
+            return &s[..i]; // slice up to the space
+        }
+    }
+    s // whole string is one word
+}
+
+fn main() {
+    let sentence = String::from("hello world");
+    let word = first_word(&sentence);
+    // sentence cannot be mutated while word (a slice of it) is alive
+    println!("first word: {}", word);
+}
+```
+
+### Slice ในฐานะพารามิเตอร์ของฟังก์ชัน
+
+ฟังก์ชันที่ทำงานกับลำดับข้อมูลควรรับ slice แทนที่จะเป็น type ที่เป็นเจ้าของค่า วิธีนี้ช่วยให้มันทำงานได้กับ array, vector และส่วนใด ๆ ของพวกมันโดยไม่ต้องการ ownership
+
+- ควรเลือกใช้ `&[T]` แทน `&Vec<T>` สำหรับพารามิเตอร์ที่เป็นลำดับข้อมูล
+- ควรเลือกใช้ `&str` แทน `&String` สำหรับพารามิเตอร์ที่เป็น string
+
+ทั้ง `&Vec<T>` และ `&String` จะ coerce ไปเป็น slice ที่เทียบเท่ากันโดยอัตโนมัติ ณ จุดที่เรียก
+
+export const slicesCode = `fn first_word(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    for (i, &byte) in bytes.iter().enumerate() {
+        if byte == b' ' {
+            return &s[..i];
+        }
+    }
+    s
+}
+
+fn sum_slice(nums: &[i32]) -> i32 {
+    let mut total = 0;
+    for &n in nums {
+        total += n;
+    }
+    total
+}
+
+fn main() {
+    // String slice
+    let sentence = String::from("hello world");
+    let word = first_word(&sentence);
+    println!("first word: {}", word);
+
+    // Integer slice
+    let numbers = [10, 20, 30, 40, 50];
+    let middle: &[i32] = &numbers[1..4];
+    println!("middle slice: {:?}", middle);
+    println!("sum of middle: {}", sum_slice(middle));
+
+    // String slice literal
+    let greeting: &str = "Rust is safe";
+    println!("slice: {}", &greeting[..4]);
+}`;
+
+<Playground client:visible code={slicesCode} />
+
+<Callout title="slice คือ view ที่ borrow มา — มันไม่ได้เป็นเจ้าของข้อมูล">
+slice เป็น **reference** เสมอ — มัน borrow ส่วนที่ต่อเนื่องกันของ collection เพราะ borrow checker ติดตามความสัมพันธ์นี้ คอมไพเลอร์จะปฏิเสธโค้ดใด ๆ ที่พยายามแก้ไขหรือ drop ข้อมูลที่อยู่ข้างใต้ในขณะที่ยังมี slice เข้าไปในมันมีชีวิตอยู่ สิ่งนี้ป้องกันบั๊กคลาสสิกอย่าง "iterator invalidation" และ "dangling pointer" ตอน compile time
+</Callout>
+
+export const quizSlices = [
+    {
+        q: "type ใดแทน view ที่ borrow มาเข้าไปยังบางส่วนของ String?",
+        options: ["String", "&String", "&str", "str"],
+        answer: 2
+    },
+    {
+        q: "range syntax [1..4] เลือกอะไรออกมาจาก slice?",
+        options: [
+            "element ที่ index 1, 2, 3 และ 4",
+            "element ที่ index 1, 2 และ 3",
+            "element ที่ index 0, 1, 2 และ 3",
+            "element ที่ index 1 ไปจนสุดท้าย"
+        ],
+        answer: 1
+    },
+    {
+        q: "slice เป็นเจ้าของข้อมูลที่มันชี้ไปหรือไม่?",
+        options: [
+            "ใช่ มันเอา ownership ไปตอนถูกสร้าง",
+            "ไม่ มันเป็น reference เสมอ — view ที่ borrow มา",
+            "เฉพาะถ้ามันครอบคลุมทั้ง collection",
+            "เฉพาะถ้า collection ที่อยู่ข้างใต้เป็น mutable"
+        ],
+        answer: 1
+    },
+    {
+        q: "ทำไมพารามิเตอร์ของฟังก์ชันจึงควรใช้ &[T] แทน &Vec<T>?",
+        options: [
+            "&Vec<T> ไม่ใช่ type ที่ใช้ได้ใน Rust",
+            "&[T] เร็วกว่าเพราะหลีกเลี่ยงการจัดสรรหน่วยความจำบน heap",
+            "&[T] ยืดหยุ่นกว่า — มันรับได้ทั้ง array, reference ของ vector และ slice ที่ต่อเนื่องกันใด ๆ",
+            "ในทางปฏิบัติไม่มีความแตกต่างกัน"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="ownership-borrowing/slices" questions={quizSlices} />
+
+<ProgressTracker client:visible id="ownership-borrowing/slices" />

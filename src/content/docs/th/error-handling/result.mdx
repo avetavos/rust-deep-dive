@@ -1,0 +1,150 @@
+---
+title: 'ประเภท Result'
+description: 'Result<T, E> คือ enum ที่มีสอง variant: Ok(T) สำหรับความสำเร็จ และ Err(E) สำหรับความล้มเหลว การคืนค่า Result บังคับให้ผู้เรียกจัดการข้อผิดพลาดอย่างชัดเจน'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## `Result<T, E>` คืออะไร?
+
+`Result<T, E>` คือประเภทมาตรฐานของ Rust สำหรับการดำเนินการที่สามารถสำเร็จหรือล้มเหลวได้ในลักษณะที่คาดหวังได้ มันถูกกำหนดใน standard library ดังนี้:
+
+```rust
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+```
+
+- `Ok(T)` — การดำเนินการสำเร็จและสร้างค่าประเภท `T`
+- `Err(E)` — การดำเนินการล้มเหลวและสร้างค่าข้อผิดพลาดประเภท `E`
+
+ทั้ง `T` และ `E` เป็นพารามิเตอร์ generic ที่คุณกำหนด ตัวอย่างเช่น `Result<i32, String>` สำเร็จด้วย `i32` หรือล้มเหลวด้วยข้อความ `String`
+
+## การคืนค่า Result
+
+เพื่อส่งสัญญาณความล้มเหลวที่กู้คืนได้จากฟังก์ชัน ให้เปลี่ยนประเภทการคืนค่าเป็น `Result<T, E>` และคืน `Ok(value)` เมื่อสำเร็จ หรือ `Err(error)` เมื่อล้มเหลว:
+
+```rust
+fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+```
+
+การเรียก `.map_err` แปลงข้อผิดพลาดการแยกวิเคราะห์ของ standard library เป็นประเภท `String` ข้อผิดพลาดของคุณเอง
+
+## การจัดการ Result
+
+วิธีที่ชัดเจนที่สุดในการจัดการ `Result` คือนิพจน์ `match` — มันบังคับให้คุณจัดการทั้งสองสาขา:
+
+```rust
+fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+
+fn main() {
+    match parse_age("25") {
+        Ok(age) => println!("Parsed age: {}", age),
+        Err(e)  => println!("Error: {}", e),
+    }
+}
+```
+
+### เมธอดที่สะดวก
+
+สำหรับโค้ดที่กระชับกว่า `Result` มีเมธอดหลายตัว:
+
+| เมธอด | พฤติกรรม |
+|-------|----------|
+| `.unwrap()` | คืนค่า `Ok`; panic เมื่อ `Err` |
+| `.expect(msg)` | เหมือนกัน แต่มีข้อความ panic ที่กำหนดเอง |
+| `.unwrap_or(default)` | คืนค่า `Ok` หรือค่าเริ่มต้น |
+| `.unwrap_or_else(\|e\| ...)` | คืนค่า `Ok` หรือคำนวณค่าเริ่มต้นจากข้อผิดพลาด |
+| `.is_ok()` / `.is_err()` | การทดสอบ boolean โดยไม่ดึงค่า |
+| `.map(\|v\| ...)` | แปลงค่า `Ok` ไม่เปลี่ยน `Err` |
+| `.map_err(\|e\| ...)` | แปลงค่า `Err` ไม่เปลี่ยน `Ok` |
+
+export const resultCode = `fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+
+fn main() {
+    // Match on Result to handle both branches
+    match parse_age("25") {
+        Ok(age) => println!("Parsed age: {}", age),
+        Err(e)  => println!("Error: {}", e),
+    }
+
+    // .unwrap_or returns a default on Err
+    let age1 = parse_age("abc").unwrap_or(0);
+    println!("unwrap_or default: {}", age1);
+
+    // .unwrap_or_else lets you compute the default
+    let age2 = parse_age("not_a_number").unwrap_or_else(|e| {
+        println!("Recovering from: {}", e);
+        18
+    });
+    println!("unwrap_or_else result: {}", age2);
+
+    // is_ok / is_err for simple checks
+    println!("parse_age(\\"30\\") is_ok: {}", parse_age("30").is_ok());
+    println!("parse_age(\\"xx\\") is_err: {}", parse_age("xx").is_err());
+}`;
+
+<Playground client:visible code={resultCode} />
+
+<Callout title="ข้อผิดพลาดที่กู้คืนได้คือค่าที่คุณต้องจัดการ">
+เพราะ `Result` เป็น enum ธรรมดา คอมไพเลอร์จะเตือนหากคุณปล่อยให้ค่า `Result` ไม่ได้ใช้ เส้นทางข้อผิดพลาดทุกเส้นทางมองเห็นได้ใน type signature ของฟังก์ชันที่คืนมัน และผู้เรียกต้องตัดสินใจอย่างชัดเจนว่าจะทำอะไร — ละเลย ส่งต่อ กู้คืน หรือ panic นี้แข็งแกร่งกว่าการจัดการข้อยกเว้น ซึ่งเส้นทางข้อผิดพลาดมองไม่เห็น
+</Callout>
+
+export const quizResult = [
+    {
+        q: "สอง variant ของ Result<T, E> คืออะไร?",
+        options: [
+            "Some(T) และ None",
+            "Ok(T) และ Err(E)",
+            "Pass(T) และ Fail(E)",
+            "Value(T) และ Error(E)"
+        ],
+        answer: 1
+    },
+    {
+        q: ".unwrap_or_else(|e| ...) ทำอะไรเมื่อ Result เป็น Err(e)?",
+        options: [
+            "มัน panic ด้วยข้อผิดพลาดเป็นข้อความ",
+            "มันละเลยข้อผิดพลาดและคืนค่าเริ่มต้นสำหรับ T",
+            "มันเรียก closure ด้วยข้อผิดพลาดและคืนค่าที่ closure ส่งคืน",
+            "มันแปลง Err เป็น Ok"
+        ],
+        answer: 2
+    },
+    {
+        q: "เมธอดใดที่แปลงค่า Ok โดยไม่แตะ Err?",
+        options: [
+            ".map_err(|e| ...)",
+            ".and_then(|v| ...)",
+            ".map(|v| ...)",
+            ".unwrap_or_else(|e| ...)"
+        ],
+        answer: 2
+    },
+    {
+        q: "เหตุใดคอมไพเลอร์ Rust จึงเตือนเมื่อ Result ไม่ได้ใช้?",
+        options: [
+            "ค่า Result จัดสรรบน heap และต้องถูกปลดปล่อย",
+            "Result ที่ไม่ได้ใช้หมายความว่ากรณีข้อผิดพลาดถูกละเลยโดยเงียบ",
+            "Result implement Drop ซึ่งทริกเกอร์คำเตือน",
+            "คอมไพเลอร์เตือนเกี่ยวกับตัวแปรที่ไม่ได้ใช้ทั้งหมดเสมอ"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="error-handling/result" questions={quizResult} />
+
+<ProgressTracker client:visible id="error-handling/result" />

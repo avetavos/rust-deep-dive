@@ -1,0 +1,169 @@
+---
+title: 'Traits'
+description: 'กำหนด behavior ร่วมกันด้วย traits ซึ่งคล้ายกับ interface ในภาษาอื่น'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+export const traitsCode = `trait Shape {
+    fn area(&self) -> f64;
+    fn describe(&self) -> String {
+        format!("I am a shape with area {:.2}", self.area())
+    }
+}
+
+struct Circle { radius: f64 }
+struct Rectangle { width: f64, height: f64 }
+
+impl Shape for Circle {
+    fn area(&self) -> f64 {
+        std::f64::consts::PI * self.radius * self.radius
+    }
+}
+
+impl Shape for Rectangle {
+    fn area(&self) -> f64 {
+        self.width * self.height
+    }
+}
+
+fn main() {
+    let c = Circle { radius: 3.0 };
+    let r = Rectangle { width: 4.0, height: 5.0 };
+
+    println!("Circle area: {:.2}", c.area());
+    println!("{}", c.describe());
+    println!("Rectangle area: {:.2}", r.area());
+    println!("{}", r.describe());
+}`;
+
+export const quizTraits = [
+    {
+        q: 'คุณนิยาม trait ชื่อ `Flyable` พร้อม method `fly` ที่รับ `&self` และไม่คืนค่าอย่างไร?',
+        options: [
+            '`trait Flyable { fn fly(&self); }`',
+            '`interface Flyable { fn fly(&self); }`',
+            '`impl Flyable { fn fly(&self) {} }`',
+            '`struct Flyable { fly: fn(&self) }`',
+        ],
+        answer: 0,
+    },
+    {
+        q: 'default method ใน trait คืออะไร?',
+        options: [
+            'Method ที่เรียกได้เฉพาะบน trait เอง ไม่สามารถเรียกบน type ที่ implement ได้',
+            'Method ที่มี body ใน trait definition ซึ่ง type ที่ implement สามารถ override หรือใช้ค่าเริ่มต้นได้',
+            'Method ที่ compiler สร้างให้โดยอัตโนมัติ',
+            'Method ที่ต้อง implement ในทุก type ที่ใช้ trait',
+        ],
+        answer: 1,
+    },
+    {
+        q: 'ใน trait `Shape` ตัวอย่าง method ใดที่มี default implementation?',
+        options: ['`area`', '`describe`', 'ทั้ง `area` และ `describe`', 'ไม่มี — ทั้งสองต้อง implement เอง'],
+        answer: 1,
+    },
+    {
+        q: 'syntax ใดที่ถูกต้องสำหรับการ implement trait `Shape` ให้กับ struct ชื่อ `Triangle`?',
+        options: [
+            '`Triangle implements Shape { ... }`',
+            '`impl Triangle for Shape { ... }`',
+            '`impl Shape for Triangle { ... }`',
+            '`trait Shape impl Triangle { ... }`',
+        ],
+        answer: 2,
+    },
+];
+
+## การนิยาม Trait
+
+**Trait** คือชุดของ method signature — และ method body ที่เป็น optional — ที่อธิบายความสามารถของ type ใดก็ตามที่สัญญาว่าจะจัดหา method เหล่านั้น ถือว่า *implement* trait นั้น
+
+```rust
+trait Greet {
+    fn hello(&self) -> String;
+}
+```
+
+นี่คือการประกาศ method ที่จำเป็นหนึ่งอย่าง struct ใดที่ต้องการเป็น `Greet`-able จะต้องจัดหา implementation ของ `hello` ที่เป็น concrete
+
+<Callout title="Traits กำหนด behavior ร่วมกัน">
+Traits คล้ายกับ interface: type ใดก็ได้สามารถ implement trait ไม่ว่า type จะถูกนิยามที่ใด ต่างจาก inheritance ตรงที่ไม่มี hierarchy — คุณ compose behavior โดยการ implement หลาย trait Default method ให้ fallback implementation เพื่อที่ผู้ implement จะได้เขียนเฉพาะส่วนที่ต้องการ
+</Callout>
+
+## การ Implement Trait
+
+ใช้ `impl TraitName for TypeName` เพื่อปฏิบัติตาม trait contract:
+
+```rust
+struct Dog {
+    name: String,
+}
+
+impl Greet for Dog {
+    fn hello(&self) -> String {
+        format!("Woof! I'm {}.", self.name)
+    }
+}
+```
+
+เมื่อ `Dog` implement `Greet` แล้ว คุณสามารถเรียก `.hello()` บน `Dog` value ใดก็ได้:
+
+```rust
+let d = Dog { name: String::from("Rex") };
+println!("{}", d.hello()); // Woof! I'm Rex.
+```
+
+## Default Methods
+
+Trait สามารถจัดหา body เริ่มต้นสำหรับ method ใดก็ได้ ผู้ implement สามารถ override หรือใช้ค่าเริ่มต้นได้:
+
+```rust
+trait Shape {
+    fn area(&self) -> f64;
+
+    // Default method — implementors get this for free
+    fn describe(&self) -> String {
+        format!("I am a shape with area {:.2}", self.area())
+    }
+}
+```
+
+`Circle` และ `Rectangle` ต้อง implement แค่ `area` เท่านั้น Method `describe` จะถูกรับมาโดยอัตโนมัติและเรียก `area` ของ type นั้น ณ runtime
+
+## การเรียก Trait Methods
+
+Trait method ถูกเรียกด้วย dot syntax ปกติ ตราบเท่าที่ trait อยู่ใน scope หาก trait หลายอันมี method ชื่อเดียวกัน คุณสามารถใช้ fully qualified syntax เพื่อแยกแยะ:
+
+```rust
+<Circle as Shape>::area(&c)
+```
+
+ในทางปฏิบัติ dot syntax ใช้งานได้ในกรณีส่วนใหญ่
+
+## Traits เป็น Function Parameter
+
+คุณสามารถรับ type ใดก็ตามที่ implement trait โดยใช้ `impl TraitName` ใน function parameter:
+
+```rust
+fn print_area(shape: &impl Shape) {
+    println!("Area: {:.2}", shape.area());
+}
+```
+
+นี่คือ shorthand สำหรับ generic function พร้อม trait bound ซึ่งคุณจะเรียนรู้เพิ่มเติมในบทเรียน Generics
+
+## ลองเล่น
+
+Playground ด้านล่างนิยาม trait `Shape` พร้อม method `area` ที่ต้อง implement และ method `describe` แบบ default ทั้ง `Circle` และ `Rectangle` implement `area` และรับ `describe` มาฟรี
+
+<Playground client:visible code={traitsCode} />
+
+<Quiz client:visible id="traits-generics/traits" questions={quizTraits} />
+
+<ProgressTracker client:visible id="traits-generics/traits" />

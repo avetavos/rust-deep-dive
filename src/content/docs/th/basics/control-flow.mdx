@@ -1,0 +1,194 @@
+---
+title: 'Control Flow'
+description: 'Control flow ใน Rust: if เป็น expression ที่ return ค่าได้, loop return ค่าผ่าน break, while วนซ้ำตามเงื่อนไข และ for วนผ่าน range และ collection'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## `if` แบบ Expression
+
+ใน Rust `if` คือ **expression** — มันประเมินเป็นค่า ซึ่งหมายความว่าคุณสามารถใช้มันทางขวามือของ `let` binding ได้ ทุก branch ต้องผลิตค่าที่มี type เดียวกัน
+
+```rust
+fn main() {
+    let score = 75;
+    let grade = if score >= 90 { "A" } else if score >= 75 { "B" } else { "C" };
+    println!("grade = {}", grade);
+}
+```
+
+ไม่จำเป็นต้องมี parentheses รอบ condition และต้องมี curly brace รอบ body เสมอ
+
+### `if` แบบ Statement ปกติ
+
+เมื่อไม่ต้องการผลลัพธ์ ใช้ `if` แบบ statement:
+
+```rust
+fn main() {
+    let n = 7;
+    if n % 2 == 0 {
+        println!("even");
+    } else {
+        println!("odd");
+    }
+}
+```
+
+## Loops
+
+### `loop` — วนซ้ำไม่รู้จบ
+
+`loop` รัน body ของมันไม่หยุดจนกว่าจะพบ `break` อย่างชัดเจน ต่างจากภาษาอื่น `loop` ของ Rust สามารถ **return ค่า** ผ่าน `break` ได้
+
+```rust
+fn main() {
+    let mut counter = 0;
+    let result = loop {
+        counter += 1;
+        if counter == 5 {
+            break counter * 2; // loop ประเมินเป็นค่านี้
+        }
+    };
+    println!("result = {}", result); // 10
+}
+```
+
+### `while` — Loop ตามเงื่อนไข
+
+`while` วนซ้ำตราบเท่าที่ condition เป็น `true` ไม่สามารถ return ค่าผ่าน `break` ได้
+
+```rust
+fn main() {
+    let mut n = 1;
+    while n < 4 {
+        print!("{} ", n);
+        n += 1;
+    }
+    println!(); // newline
+}
+```
+
+### `for` — วนผ่าน Collection และ Range
+
+`for` คือ loop ที่ใช้บ่อยที่สุดใน Rust มันวนผ่าน type ใดก็ได้ที่ implement `Iterator` trait รวมถึง range และ array
+
+```rust
+fn main() {
+    // Exclusive range: 1, 2, 3
+    for i in 1..4 {
+        print!("{} ", i);
+    }
+    println!();
+
+    // Inclusive range: 1, 2, 3, 4, 5
+    for i in 1..=5 {
+        print!("{} ", i);
+    }
+    println!();
+
+    // วนผ่าน array
+    let fruits = ["apple", "banana", "cherry"];
+    for fruit in fruits {
+        print!("{} ", fruit);
+    }
+    println!();
+}
+```
+
+ควรใช้ `for` แทน `while` ที่มี index manual เสมอเมื่อเป็นไปได้ เพราะปลอดภัยกว่าและแสดงเจตนาได้ชัดเจนกว่า
+
+export const controlFlowCode = `fn main() {
+    // if as an expression
+    let score = 75;
+    let grade = if score >= 90 { "A" } else if score >= 75 { "B" } else { "C" };
+    println!("grade = {}", grade);
+
+    // loop returning a value via break
+    let mut counter = 0;
+    let result = loop {
+        counter += 1;
+        if counter == 5 {
+            break counter * 2;
+        }
+    };
+    println!("loop result = {}", result);
+
+    // while loop
+    let mut n = 1;
+    while n < 4 {
+        print!("{} ", n);
+        n += 1;
+    }
+    println!();
+
+    // for with a range
+    for i in 1..=3 {
+        print!("{} ", i);
+    }
+    println!();
+
+    // for over an array
+    let nums = [10, 20, 30];
+    for val in nums {
+        print!("{} ", val);
+    }
+    println!();
+}`;
+
+<Playground client:visible code={controlFlowCode} />
+
+<Callout title="if และ loop เป็น expression และ return ค่าได้">
+ใน Rust `if` และ `loop` เป็น expression — มันผลิตค่า การกำหนด `let x = if cond { a } else { b }` หรือ `let result = loop { break value }` เป็น Rust ที่ idiomatic ทั้งสอง arm ของ `if` expression และค่าที่ส่งให้ `break` ใน `loop` ต้องมี type เดียวกัน
+</Callout>
+
+export const quizControlFlow = [
+    {
+        q: "สิ่งที่จำเป็นสำหรับการใช้ if ของ Rust เป็น expression ทางขวาของ let คืออะไร?",
+        options: [
+            "ทุก branch ต้องผลิตค่าที่มี type เดียวกัน",
+            "condition ต้องอยู่ใน parentheses",
+            "ต้องมี keyword return อย่างชัดเจนในแต่ละ branch",
+            "if expression ต้องลงท้ายด้วย semicolon"
+        ],
+        answer: 0
+    },
+    {
+        q: "loop ใน Rust return ค่าอย่างไร?",
+        options: [
+            "ไม่สามารถทำได้ — loop return () เสมอ",
+            "โดยวาง expression สุดท้ายใน loop body โดยไม่มี semicolon",
+            "โดยส่งค่าให้ break: break value",
+            "โดยใช้ macro return_from_loop! พิเศษ"
+        ],
+        answer: 2
+    },
+    {
+        q: "ความแตกต่างระหว่าง 1..4 และ 1..=4 คืออะไร?",
+        options: [
+            "1..4 รวม 4 ส่วน 1..=4 ไม่รวม 4",
+            "1..4 ไม่รวม 4 (ผลิต 1, 2, 3) ส่วน 1..=4 รวม 4 (ผลิต 1, 2, 3, 4)",
+            "เหมือนกัน — ทั้งคู่รวม 4",
+            "1..4 ใช้ได้เฉพาะใน for loop ส่วน 1..=4 ใช้ได้ทุกที่"
+        ],
+        answer: 1
+    },
+    {
+        q: "loop construct ใดที่ idiomatic ที่สุดใน Rust เมื่อวนผ่าน collection?",
+        options: [
+            "while ที่มี index variable manual",
+            "loop ที่มี break condition",
+            "for วน collection หรือ range",
+            "การเรียก recursive function"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="basics/control-flow" questions={quizControlFlow} />
+
+<ProgressTracker client:visible id="basics/control-flow" />

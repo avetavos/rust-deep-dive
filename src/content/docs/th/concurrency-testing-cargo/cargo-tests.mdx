@@ -1,0 +1,279 @@
+---
+title: 'Cargo & Testing'
+description: 'เรียนรู้คำสั่ง Cargo สำหรับ build และรันโปรเจกต์ และเขียน unit test โดยใช้ #[test], assert_eq! และ #[cfg(test)] modules'
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Cargo: ระบบ Build และ Package Manager ของ Rust
+
+Cargo คือระบบ build อย่างเป็นทางการและ package manager ของ Rust โปรเจกต์ Rust ทุกโปรเจกต์คือ **crate** และ Cargo จัดการ dependency, build, test และเอกสารของมัน
+
+### คำสั่ง Cargo ที่จำเป็น
+
+```bash
+# สร้างโปรเจกต์ binary ใหม่
+cargo new my_project
+cd my_project
+
+# สร้าง library crate ใหม่
+cargo new my_lib --lib
+
+# Build ในโหมด debug (คอมไพล์เร็ว ไม่ optimize)
+cargo build
+
+# Build ในโหมด release (คอมไพล์ช้า optimize แล้ว)
+cargo build --release
+
+# Build และรันในขั้นตอนเดียว
+cargo run
+
+# รันพร้อม argument
+cargo run -- arg1 arg2
+
+# ตรวจสอบ compile error โดยไม่สร้าง binary
+cargo check
+
+# เพิ่ม dependency
+cargo add serde --features derive
+
+# อัปเดต dependency เป็นเวอร์ชันที่เข้ากันได้ล่าสุด
+cargo update
+
+# Format โค้ด
+cargo fmt
+
+# รัน linter
+cargo clippy
+```
+
+### โครงสร้างโปรเจกต์
+
+```
+my_project/
+  Cargo.toml      ← manifest: ชื่อ, เวอร์ชัน, dependency
+  Cargo.lock      ← เวอร์ชัน dependency ที่แน่นอน (commit นี้สำหรับ binary)
+  src/
+    main.rs       ← entry point สำหรับ binary crate
+    lib.rs        ← entry point สำหรับ library crate
+  tests/
+    integration_test.rs  ← integration test (optional)
+```
+
+### โครงสร้าง `Cargo.toml`
+
+```toml
+[package]
+name    = "my_project"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde       = { version = "1", features = ["derive"] }
+tokio       = { version = "1", features = ["full"] }
+anyhow      = "1"
+
+[dev-dependencies]
+# compile เฉพาะสำหรับ test และ benchmark
+pretty_assertions = "1"
+```
+
+## Unit Testing ด้วย `#[test]`
+
+Rust มีการทดสอบที่สร้างไว้ในภาษาและ Cargo — ไม่ต้องการ framework ทดสอบเพิ่มเติม ใส่ `#[test]` บนฟังก์ชันเพื่อทำเครื่องหมายว่าเป็น test
+
+```rust
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[test]
+fn test_add() {
+    assert_eq!(add(2, 3), 5);
+    assert_eq!(add(-1, 1), 0);
+    assert_ne!(add(2, 3), 6);
+}
+```
+
+รัน test ทั้งหมดด้วย:
+
+```bash
+cargo test
+```
+
+### รูปแบบ Module `#[cfg(test)]`
+
+สถานที่ idiomatic สำหรับ unit test คือภายในไฟล์ source ที่มันทดสอบ ภายในบล็อก `mod tests` ที่ถูกปิดกั้นด้วย `#[cfg(test)]` Cargo compile module นี้เฉพาะเมื่อรัน `cargo test` ทำให้ไม่อยู่ใน binary ที่ใช้งานจริง
+
+```rust
+pub fn multiply(a: i32, b: i32) -> i32 {
+    a * b
+}
+
+pub fn divide(a: f64, b: f64) -> Option<f64> {
+    if b == 0.0 {
+        None
+    } else {
+        Some(a / b)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*; // นำ item ของ parent module มาใช้ใน scope
+
+    #[test]
+    fn test_multiply() {
+        assert_eq!(multiply(3, 4), 12);
+        assert_eq!(multiply(0, 100), 0);
+        assert_eq!(multiply(-2, 5), -10);
+    }
+
+    #[test]
+    fn test_divide_by_zero() {
+        assert_eq!(divide(10.0, 0.0), None);
+    }
+
+    #[test]
+    fn test_divide_normal() {
+        let result = divide(10.0, 4.0).unwrap();
+        assert!((result - 2.5).abs() < f64::EPSILON);
+    }
+}
+```
+
+### Test Assertion
+
+```rust
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn demonstrate_assertions() {
+        // ความเท่ากัน
+        assert_eq!(2 + 2, 4);
+        assert_ne!(2 + 2, 5);
+
+        // boolean
+        assert!(4 > 3);
+        assert!(!"hello".is_empty());
+
+        // พร้อม custom message
+        assert_eq!(1 + 1, 2, "basic arithmetic must hold");
+
+        // panic
+        // ใช้ #[should_panic] เพื่อ assert ว่าฟังก์ชัน panic
+    }
+
+    #[test]
+    #[should_panic(expected = "divide by zero")]
+    fn test_panic() {
+        let _ = 1 / 0; // นี่ panic — test ผ่านเพราะเราคาดหวังมัน
+    }
+}
+```
+
+### Integration Tests
+
+ไฟล์ภายใต้ `tests/` คือ integration test พวกมันทดสอบ public API ของ crate ของคุณในฐานะ consumer ภายนอก
+
+```rust
+// tests/integration_test.rs
+use my_lib::multiply;
+
+#[test]
+fn integration_multiply() {
+    assert_eq!(multiply(6, 7), 42);
+}
+```
+
+รัน integration test เฉพาะ:
+
+```bash
+cargo test --test integration_test
+```
+
+รัน test เฉพาะด้วยชื่อ:
+
+```bash
+cargo test test_divide
+```
+
+รัน test พร้อม output ที่มองเห็น:
+
+```bash
+cargo test -- --nocapture
+```
+
+### การทดสอบ Async Code ด้วย tokio
+
+สำหรับ async function ใช้ `#[tokio::test]`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_async_fetch() {
+        let result = fetch_data(1).await;
+        assert!(!result.is_empty());
+    }
+}
+```
+
+เพิ่ม `tokio` ใน `[dev-dependencies]` เพื่อใช้ `#[tokio::test]` โดยไม่ดึงมันเข้า production binary ถ้าคุณไม่ต้องการมันที่นั่น
+
+<Callout title="Test รันด้วย cargo test — ไม่ใช่ใน browser runner">
+Rust test ใช้ฟังก์ชัน `#[test]` ที่ compile และรันโดย `cargo test` browser Playground รัน `fn main()` เท่านั้น — `cargo test` ไม่พร้อมใช้งานในนั้น เขียนโค้ด test ของคุณใน Cargo project ในเครื่องและรัน `cargo test` จาก terminal ใช้ `cargo test -- --nocapture` เพื่อดู output จาก `println!` ใน test ที่ผ่าน
+</Callout>
+
+export const quizCargoTests = [
+    {
+        q: "#[cfg(test)] บน mod block ทำอะไร?",
+        options: [
+            "รัน module เฉพาะใน release build",
+            "Compile module เฉพาะเมื่อรัน cargo test ทำให้ไม่อยู่ใน production binary",
+            "ทำเครื่องหมาย module ว่า unsafe",
+            "ปิดใช้งาน dead-code warning ภายใน module"
+        ],
+        answer: 1
+    },
+    {
+        q: "macro assertion ใดที่ตรวจสอบว่าสองค่าไม่เท่ากัน?",
+        options: [
+            "assert!(a != b)",
+            "assert_eq!(a, b) พร้อม negation flag",
+            "assert_ne!(a, b)",
+            "assert_not!(a, b)"
+        ],
+        answer: 2
+    },
+    {
+        q: "ควรวาง integration test ไว้ที่ไหนใน Cargo project?",
+        options: [
+            "ภายใน src/ ข้าง ๆ source file",
+            "ภายใน directory tests/ ที่ project root",
+            "ภายในบล็อก #[cfg(test)] mod ใน lib.rs",
+            "ใน crate แยกต่างหากที่ประกาศใน Cargo.toml"
+        ],
+        answer: 1
+    },
+    {
+        q: "ใช้ attribute ใดเพื่อทดสอบ async function ด้วย tokio?",
+        options: [
+            "#[test]",
+            "#[async_test]",
+            "#[tokio::test]",
+            "#[cfg(async)]"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="concurrency-testing-cargo/cargo-tests" questions={quizCargoTests} />
+
+<ProgressTracker client:visible id="concurrency-testing-cargo/cargo-tests" />

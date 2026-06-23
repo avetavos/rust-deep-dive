@@ -1,0 +1,209 @@
+---
+title: 'Channels'
+description: 'Pass values between threads using std::sync::mpsc channels. Sending a value transfers its ownership to the receiving thread.'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Message Passing with `std::sync::mpsc`
+
+Rust's standard library provides **multi-producer, single-consumer** (mpsc) channels for sending values between threads. A channel has two ends:
+
+- `tx` — the **transmitter** (sender). You can clone it to create multiple producers.
+- `rx` — the **receiver**. There is exactly one receiver per channel.
+
+```rust
+use std::sync::mpsc;
+
+fn main() {
+    let (tx, rx) = mpsc::channel();
+
+    tx.send(42).unwrap();
+
+    let value = rx.recv().unwrap(); // blocks until a value arrives
+    println!("Received: {}", value);
+}
+```
+
+`mpsc::channel()` returns the `(Sender<T>, Receiver<T>)` pair. The type `T` is inferred from the first `send` call.
+
+### Sending Values Across Threads
+
+The transmitter is `Send`, so you can move it into a thread closure. Once `tx.send(value)` is called, the value is **moved** into the channel — the sending thread no longer owns it.
+
+```rust
+use std::thread;
+use std::sync::mpsc;
+
+fn main() {
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let s = String::from("hello from thread");
+        tx.send(s).unwrap();
+        // println!("{}", s); // would not compile — s was moved into the channel
+    });
+
+    let received = rx.recv().unwrap();
+    println!("Main got: {}", received);
+}
+```
+
+### Multiple Producers
+
+Clone `tx` to create multiple senders. Each clone has its own handle to the same channel. The receiver sees messages in the order they arrive (non-deterministic across threads), so collect and sort before printing.
+
+```rust
+use std::thread;
+use std::sync::mpsc;
+
+fn main() {
+    let (tx, rx) = mpsc::channel();
+    let mut handles = Vec::new();
+
+    for i in 0..3 {
+        let tx = tx.clone(); // each thread gets its own sender clone
+        handles.push(thread::spawn(move || {
+            tx.send(format!("message {}", i)).unwrap();
+        }));
+    }
+    drop(tx); // drop the original tx so the channel closes when all clones are gone
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let mut msgs: Vec<String> = rx.iter().collect(); // collect until channel closes
+    msgs.sort();
+    for m in &msgs {
+        println!("{}", m);
+    }
+}
+```
+
+`rx.iter()` yields values until all `Sender` handles are dropped. Dropping the original `tx` (after cloning) is essential so the iterator knows when to stop.
+
+### Fan-Out: Distributing Work
+
+A single producer can send work items to a pool of threads. Each worker receives items through its own channel.
+
+```rust
+use std::thread;
+use std::sync::mpsc;
+
+fn main() {
+    let (main_tx, main_rx) = mpsc::channel::<String>();
+    let mut handles = Vec::new();
+
+    for worker_id in 0..3 {
+        let (work_tx, work_rx) = mpsc::channel::<i32>();
+        let main_tx = main_tx.clone();
+
+        handles.push(thread::spawn(move || {
+            let item = work_rx.recv().unwrap();
+            main_tx.send(format!("worker {} processed {}", worker_id, item * 2)).unwrap();
+        }));
+
+        work_tx.send(worker_id * 10).unwrap();
+    }
+    drop(main_tx);
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let mut results: Vec<String> = main_rx.iter().collect();
+    results.sort();
+    for r in &results {
+        println!("{}", r);
+    }
+}
+```
+
+### The Complete Playground Example
+
+export const channelsCode = `use std::thread;
+use std::sync::mpsc;
+
+fn main() {
+    let (tx, rx) = mpsc::channel();
+    let mut handles = Vec::new();
+
+    for i in 0..5 {
+        let tx = tx.clone();
+        let handle = thread::spawn(move || {
+            let msg = format!("result from thread {}", i);
+            tx.send(msg).unwrap();
+        });
+        handles.push(handle);
+    }
+    drop(tx);
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let mut msgs: Vec<String> = rx.iter().collect();
+    msgs.sort();
+    for m in &msgs {
+        println!("{}", m);
+    }
+}`;
+
+<Playground client:visible code={channelsCode} />
+
+<Callout title="Channels transfer ownership between threads">
+When you call `tx.send(value)`, ownership of `value` is moved into the channel. The sending thread can no longer access it. The receiving thread then owns the value after `rx.recv()`. This ownership transfer is the reason channels are data-race-free by construction — only one thread owns the value at any point in time.
+</Callout>
+
+export const quizChannels = [
+    {
+        q: "What does mpsc stand for in std::sync::mpsc?",
+        options: [
+            "Multi-process single-channel",
+            "Multi-producer single-consumer",
+            "Message-passing safe channel",
+            "Mutex-protected shared channel"
+        ],
+        answer: 1
+    },
+    {
+        q: "What happens to a value after tx.send(value) is called?",
+        options: [
+            "The value is copied into the channel; the sender retains its copy",
+            "The value is moved into the channel; the sender can no longer use it",
+            "The value is serialized to bytes before sending",
+            "The value is cloned automatically if it does not implement Copy"
+        ],
+        answer: 1
+    },
+    {
+        q: "Why must the original tx be dropped (drop(tx)) before collecting from rx.iter()?",
+        options: [
+            "drop(tx) flushes any buffered messages",
+            "rx.iter() blocks forever if any Sender handle remains alive, because the channel is still open",
+            "The compiler requires it for memory safety",
+            "drop(tx) signals the receiver to start in blocking mode"
+        ],
+        answer: 1
+    },
+    {
+        q: "How do you create multiple producers for a single receiver?",
+        options: [
+            "Call mpsc::channel() once per producer",
+            "Clone the Receiver — each clone is an independent producer",
+            "Clone the Sender (tx.clone()) — each clone can send to the same Receiver",
+            "Multiple producers are not possible with std::sync::mpsc"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="concurrency-testing-cargo/channels" questions={quizChannels} />
+
+<ProgressTracker client:visible id="concurrency-testing-cargo/channels" />

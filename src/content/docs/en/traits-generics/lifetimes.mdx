@@ -1,0 +1,152 @@
+---
+title: 'Lifetimes'
+description: 'Lifetime annotations tell the compiler how long references must remain valid.'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Why Lifetimes Exist
+
+Rust's borrow checker prevents *dangling references* — references that point to memory that has already been freed. In simple cases the compiler can figure out how long a reference is valid on its own. But when a function takes two references and returns one of them, the compiler needs help: which input does the output borrow from, and for how long?
+
+Lifetime annotations answer that question. They are written as `'a` (a tick followed by a short name) inside angle brackets.
+
+## Lifetime Annotations in Functions
+
+Here is a function that takes two string slices and returns the longer one. The return value borrows from one of the inputs — but which one? It depends on the runtime values. The annotation `'a` says: "the return value lives *at most as long as the shorter of the two inputs*."
+
+```rust
+fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+    if x.len() > y.len() { x } else { y }
+}
+```
+
+All three references share the same lifetime `'a`. The compiler uses this to ensure the returned reference never outlives the data it points to.
+
+Without the annotation, the compiler would reject this function: it cannot determine the return lifetime from the inputs alone.
+
+## A Dangling Reference Example
+
+Lifetime annotations exist precisely to catch this class of bug at compile time:
+
+```rust
+// This does NOT compile — the compiler prevents the dangling reference.
+// fn dangle() -> &String {
+//     let s = String::from("hello"); // s is created here
+//     &s                             // we return a reference to s
+// } // s is dropped here — the reference would dangle
+```
+
+Rust rejects the code above before it ever runs.
+
+## Lifetime Annotations in Structs
+
+If a struct holds a reference, you must annotate the lifetime so the compiler knows the struct cannot outlive the data it borrows:
+
+```rust
+struct Excerpt<'a> {
+    text: &'a str,
+}
+```
+
+This says: "an `Excerpt` cannot outlive the string it borrows from." The compiler enforces this guarantee automatically.
+
+## The Three Lifetime Elision Rules
+
+In many common patterns Rust can infer lifetimes automatically using three elision rules, so you do not need to write annotations every time:
+
+1. **Each reference parameter gets its own lifetime.** `fn foo(x: &str, y: &str)` becomes `fn foo<'a, 'b>(x: &'a str, y: &'b str)`.
+2. **If there is exactly one input reference, its lifetime is assigned to all output references.** `fn foo(x: &str) -> &str` becomes `fn foo<'a>(x: &'a str) -> &'a str`.
+3. **If one of the parameters is `&self` or `&mut self`, its lifetime is assigned to all output references.**
+
+When all three rules apply, no annotation is needed. When they do not fully determine the output lifetime (as in `longest`), you must annotate explicitly.
+
+export const lifetimesCode = `// A function with a lifetime annotation:
+// the returned reference lives at least as long as the shorter of x or y.
+fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+    if x.len() > y.len() { x } else { y }
+}
+
+// A struct that holds a reference — must annotate the lifetime.
+struct Excerpt<'a> {
+    text: &'a str,
+}
+
+impl<'a> Excerpt<'a> {
+    fn announce(&self) -> &str {
+        self.text
+    }
+}
+
+fn main() {
+    let string1 = String::from("long string is long");
+    let result;
+    {
+        let string2 = String::from("xyz");
+        result = longest(string1.as_str(), string2.as_str());
+        println!("longest: {}", result);
+    }
+
+    let novel = String::from("Call me Ishmael. Some years ago...");
+    let first_sentence = novel.split('.').next().expect("Could not find '.'");
+    let excerpt = Excerpt { text: first_sentence };
+    println!("excerpt: {}", excerpt.announce());
+}`;
+
+<Playground client:visible code={lifetimesCode} />
+
+<Callout title="Lifetimes are compile-time only — they describe reference validity">
+Lifetime annotations do not change how long values live in memory. They are purely a compile-time mechanism that tells the borrow checker how the lifetimes of multiple references relate to each other. At runtime there is no lifetime information — it is all erased after the compiler finishes checking.
+</Callout>
+
+export const quizLifetimes = [
+    {
+        q: "Why do lifetime annotations exist in Rust?",
+        options: [
+            "To prevent dangling references by letting the compiler verify that a returned reference does not outlive the data it points to",
+            "To tell the allocator when to free heap memory",
+            "To enable garbage collection for reference-counted types",
+            "To mark variables as immutable for the duration of a scope",
+        ],
+        answer: 0,
+    },
+    {
+        q: "In the function signature `fn longest<'a>(x: &'a str, y: &'a str) -> &'a str`, what does the `'a` annotation guarantee?",
+        options: [
+            "The function allocates a new string on the heap with lifetime `'a`",
+            "The returned reference is valid for exactly one scope block",
+            "The returned reference is valid for at least as long as the shorter of the two input references",
+            "Both `x` and `y` must have the same length",
+        ],
+        answer: 2,
+    },
+    {
+        q: "When can the compiler infer lifetimes automatically without explicit annotations?",
+        options: [
+            "Always — annotations are optional and only for documentation",
+            "Never — every reference in every function must be annotated",
+            "When the three lifetime elision rules fully determine the output lifetime",
+            "Only when the function has a single return statement",
+        ],
+        answer: 2,
+    },
+    {
+        q: "What does it mean to say that lifetime annotations are 'compile-time only'?",
+        options: [
+            "The annotations are stripped from the binary, so they have no effect on program behavior or runtime performance",
+            "The annotations cause the compiler to insert runtime checks for dangling pointers",
+            "Lifetimes are only valid inside `const` functions",
+            "The annotations prevent the optimizer from inlining functions across lifetime boundaries",
+        ],
+        answer: 0,
+    },
+];
+
+<Quiz client:visible id="traits-generics/lifetimes" questions={quizLifetimes} />
+
+<ProgressTracker client:visible id="traits-generics/lifetimes" />

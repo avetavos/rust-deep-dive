@@ -1,0 +1,155 @@
+---
+title: 'Panics and Unwrap'
+description: "panic! terminates execution for unrecoverable bugs. .unwrap() and .expect() trigger a panic when an Option or Result holds no value. Reserve panics for genuine programming errors."
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What Is a Panic?
+
+A panic is Rust's way of saying "this situation is a bug — I cannot continue safely." When a panic fires, Rust unwinds the call stack, runs destructors, and terminates the current thread. In a single-threaded program that means the whole process exits.
+
+You can trigger a panic explicitly with the `panic!` macro:
+
+```rust
+fn main() {
+    panic!("something went terribly wrong");
+}
+```
+
+Several standard operations also panic automatically when used incorrectly:
+
+```rust
+fn main() {
+    let v = vec![1, 2, 3];
+    println!("{}", v[10]); // index out of bounds — panic!
+}
+```
+
+```rust
+fn main() {
+    let x: Option<i32> = None;
+    let _ = x.unwrap(); // called unwrap() on a None value — panic!
+}
+```
+
+## `.unwrap()` and `.expect()`
+
+`.unwrap()` on an `Option<T>` or `Result<T, E>` extracts the inner value if it is `Some`/`Ok`, and **panics** if it is `None`/`Err`. It is a shortcut that trades safety for brevity.
+
+`.expect(msg)` does the same thing but lets you supply a descriptive message that appears in the panic output, making debugging much easier.
+
+```rust
+fn main() {
+    let some_value: Option<i32> = Some(42);
+    let n = some_value.unwrap();          // fine — value is Some
+    println!("n = {}", n);
+
+    let parsed: Result<i32, _> = "99".parse();
+    let m = parsed.expect("input should always be a valid integer");
+    println!("m = {}", m);
+}
+```
+
+## When Is Panicking Appropriate?
+
+Panics are appropriate when:
+
+- The situation represents **a bug in your code**, not a user or environment failure.
+- You are writing **tests or prototypes** where crashing fast is useful.
+- You have already **validated** the preconditions elsewhere and the invariant truly cannot be violated (e.g., `unwrap()` on a value you just inserted).
+
+Panics are **not** appropriate when:
+
+- The failure can come from external input (files, network, user data).
+- The caller might want to recover and try something else.
+- You are writing library code that other programs call.
+
+## Safer Defaults with `.unwrap_or` and `.unwrap_or_else`
+
+When you want a fallback value instead of a panic, use `.unwrap_or(default)` or `.unwrap_or_else(|| compute_default())`.
+
+export const panicCode = `fn safe_sqrt(n: f64) -> Result<f64, String> {
+    if n < 0.0 {
+        Err(format!("cannot take sqrt of negative number: {}", n))
+    } else {
+        Ok(n.sqrt())
+    }
+}
+
+fn main() {
+    // .unwrap_or provides a default instead of panicking
+    let a: Option<i32> = Some(42);
+    let b: Option<i32> = None;
+    println!("a unwrap_or: {}", a.unwrap_or(0));
+    println!("b unwrap_or: {}", b.unwrap_or(0));
+
+    // .expect gives a custom panic message (use only when failure is a bug)
+    let good = safe_sqrt(16.0).expect("sqrt should not fail on positive numbers");
+    println!("sqrt(16) = {}", good);
+
+    // .unwrap_or_else with a closure for recoverable defaults
+    let result = safe_sqrt(-4.0).unwrap_or_else(|e| {
+        println!("Handled: {}", e);
+        0.0
+    });
+    println!("result = {}", result);
+}`;
+
+<Playground client:visible code={panicCode} />
+
+<Callout title="Reserve panic for unrecoverable bugs">
+Use `.unwrap()` and `.expect()` only when a `None` or `Err` would mean your code has a bug, not when the failure is a normal part of program operation. For any failure that comes from user input or external state, return a `Result` and let the caller decide what to do.
+</Callout>
+
+export const quizPanic = [
+    {
+        q: "What happens when you call .unwrap() on a None value?",
+        options: [
+            "The program silently returns 0",
+            "The compiler refuses to compile the code",
+            "The program panics and terminates",
+            "The function returns an Err variant"
+        ],
+        answer: 2
+    },
+    {
+        q: "What is the difference between .unwrap() and .expect(msg)?",
+        options: [
+            ".expect() never panics; .unwrap() always panics",
+            ".expect() provides a custom message in the panic output",
+            ".unwrap() works on Result only; .expect() works on Option only",
+            "There is no difference — they are aliases"
+        ],
+        answer: 1
+    },
+    {
+        q: "Which situation is a legitimate use of panic!?",
+        options: [
+            "A file requested by the user does not exist",
+            "A network connection times out",
+            "An internal invariant that your code guarantees can never be violated actually is",
+            "User-supplied JSON fails to parse"
+        ],
+        answer: 2
+    },
+    {
+        q: "What does .unwrap_or(default) do when the Option is None?",
+        options: [
+            "It panics with the default as the message",
+            "It returns the default value without panicking",
+            "It converts None into an Err",
+            "It ignores None and returns unit ()"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="error-handling/panic" questions={quizPanic} />
+
+<ProgressTracker client:visible id="error-handling/panic" />

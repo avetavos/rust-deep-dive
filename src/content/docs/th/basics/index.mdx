@@ -1,0 +1,101 @@
+---
+title: 'พื้นฐาน & ไวยากรณ์'
+description: 'Rust คือภาษาระบบที่ออกแบบมาเพื่อความปลอดภัยและประสิทธิภาพ โดยไม่ต้องใช้ garbage collector โมดูลนี้ครอบคลุม variables, types, functions และ control flow'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ทำไมต้อง Rust?
+
+Rust คือ **ภาษาโปรแกรมระดับระบบ** (systems programming language) ที่ออกแบบมาเพื่อเป้าหมายสามประการ:
+
+1. **ความปลอดภัยของหน่วยความจำ** — คอมไพเลอร์รับประกันความปลอดภัยจาก null-pointer dereference, use-after-free bug และ data race ทั้งหมดนี้ทำที่ compile time
+2. **ประสิทธิภาพ** — Rust คอมไพล์เป็น machine code โดยตรงโดยไม่มี runtime overhead ไม่มี garbage collector ไม่มี virtual machine ไม่มี interpreter
+3. **Concurrency ที่ไม่น่ากลัว** — กฎ ownership เดียวกันที่ป้องกัน memory bug ยังป้องกัน data race ระหว่าง thread อีกด้วย
+
+แนวคิดสำคัญคือ Rust บรรลุการรับประกันเหล่านี้ผ่าน **borrow checker** ซึ่งเป็นส่วนหนึ่งของคอมไพเลอร์ที่บังคับใช้กฎ ownership และ lifetime ก่อนที่โปรแกรมจะรันจริง หากคอมไพล์ผ่าน แสดงว่าโปรแกรมปลอดภัยในด้านหน่วยความจำ
+
+### สิ่งที่โมดูลนี้ครอบคลุม
+
+| บทเรียน | แนวคิด |
+|---|---|
+| Variables & Mutability | `let`, `mut`, shadowing, `const` |
+| Data Types | Scalar, tuple, array, type inference |
+| Functions | `fn`, parameters, return types, expressions vs statements |
+| Control Flow | `if` แบบ expression, `loop`, `while`, `for`, ranges |
+
+### โปรแกรม Rust แรกของคุณ
+
+ทุก Rust binary เริ่มต้นจาก `fn main()` macro `println!` ใช้เขียนข้อความที่จัดรูปแบบแล้วออก standard output คอมไพเลอร์อนุมาน type เมื่อไม่คลุมเครือ จึงไม่จำเป็นต้องระบุ type ทุกตัวแปร
+
+```rust
+fn main() {
+    println!("Rust guarantees memory safety at compile time.");
+    println!("No garbage collector. No null pointer exceptions.");
+    println!("Zero-cost abstractions. Systems-level performance.");
+
+    let x: i32 = 42;
+    let name = "Rust";
+    println!("x = {}, name = {}", x, name);
+}
+```
+
+`{}` ใน format string คือ **ตัวแทน** (placeholder) — macro จะแทนที่ด้วยค่าของ argument ที่สอดคล้องกันขณะ runtime
+
+export const basicsIndexCode = `fn main() {
+    println!("Rust guarantees memory safety at compile time.");
+    println!("No garbage collector. No null pointer exceptions.");
+    println!("Zero-cost abstractions. Systems-level performance.");
+
+    let x: i32 = 42;
+    let name = "Rust";
+    println!("x = {}, name = {}", x, name);
+}`;
+
+<Playground client:visible code={basicsIndexCode} />
+
+<Callout title="ความปลอดภัย + ประสิทธิภาพ โดยไม่มี GC">
+Rust บังคับใช้ memory safety ผ่านกฎ ownership ที่ compile time ไม่ใช่ garbage collector ผลลัพธ์คือโปรแกรมที่เร็วเทียบเท่า C ปลอดภัยเท่าภาษาระดับสูง และมี latency ที่คาดเดาได้เพราะไม่มี GC pause
+</Callout>
+
+export const quizBasicsIndex = [
+    {
+        q: "Rust รับประกัน memory safety อย่างไร?",
+        options: [
+            "Garbage collector ทำงานระหว่าง function call",
+            "โปรแกรมเมอร์เรียก free() เองทุก allocation",
+            "กฎ ownership และ borrow-checker ที่ compile time โดยคอมไพเลอร์",
+            "Reference-counting runtime ติดตามทุก allocation"
+        ],
+        answer: 2
+    },
+    {
+        q: "Entry point ของ Rust binary คืออะไร?",
+        options: [
+            "fn start()",
+            "fn main()",
+            "fn run()",
+            "fn init()"
+        ],
+        answer: 1
+    },
+    {
+        q: "placeholder {} ใน println! format string ทำหน้าที่อะไร?",
+        options: [
+            "ประกาศตัวแปรใหม่",
+            "สร้าง block expression",
+            "แทนที่ด้วยค่าของ argument ที่สอดคล้องกันขณะ runtime",
+            "แทรก raw memory address"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="basics/index" questions={quizBasicsIndex} />
+
+<ProgressTracker client:visible id="basics/index" />

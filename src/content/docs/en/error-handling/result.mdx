@@ -1,0 +1,150 @@
+---
+title: 'The Result Type'
+description: 'Result<T, E> is an enum with two variants: Ok(T) for success and Err(E) for failure. Returning Result forces callers to handle errors explicitly.'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What Is `Result<T, E>`?
+
+`Result<T, E>` is the standard Rust type for operations that can either succeed or fail in an expected way. It is defined in the standard library as:
+
+```rust
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+```
+
+- `Ok(T)` — the operation succeeded and produced a value of type `T`.
+- `Err(E)` — the operation failed and produced an error value of type `E`.
+
+Both `T` and `E` are generic parameters you fill in. For example, `Result<i32, String>` succeeds with an `i32` or fails with a `String` error message.
+
+## Returning a Result
+
+To signal a recoverable failure from a function, change its return type to `Result<T, E>` and return `Ok(value)` on success or `Err(error)` on failure:
+
+```rust
+fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+```
+
+The `.map_err` call converts the standard library's parse error into your own `String` error type.
+
+## Handling a Result
+
+The most explicit way to handle a `Result` is a `match` expression — it forces you to address both branches:
+
+```rust
+fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+
+fn main() {
+    match parse_age("25") {
+        Ok(age) => println!("Parsed age: {}", age),
+        Err(e)  => println!("Error: {}", e),
+    }
+}
+```
+
+### Convenience Methods
+
+For less verbose code, `Result` provides several methods:
+
+| Method | Behaviour |
+|--------|-----------|
+| `.unwrap()` | Returns the `Ok` value; panics on `Err` |
+| `.expect(msg)` | Same, but with a custom panic message |
+| `.unwrap_or(default)` | Returns the `Ok` value or a default |
+| `.unwrap_or_else(\|e\| ...)` | Returns the `Ok` value or computes a default from the error |
+| `.is_ok()` / `.is_err()` | Boolean tests without extracting the value |
+| `.map(\|v\| ...)` | Transforms the `Ok` value, leaves `Err` unchanged |
+| `.map_err(\|e\| ...)` | Transforms the `Err` value, leaves `Ok` unchanged |
+
+export const resultCode = `fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+
+fn main() {
+    // Match on Result to handle both branches
+    match parse_age("25") {
+        Ok(age) => println!("Parsed age: {}", age),
+        Err(e)  => println!("Error: {}", e),
+    }
+
+    // .unwrap_or returns a default on Err
+    let age1 = parse_age("abc").unwrap_or(0);
+    println!("unwrap_or default: {}", age1);
+
+    // .unwrap_or_else lets you compute the default
+    let age2 = parse_age("not_a_number").unwrap_or_else(|e| {
+        println!("Recovering from: {}", e);
+        18
+    });
+    println!("unwrap_or_else result: {}", age2);
+
+    // is_ok / is_err for simple checks
+    println!("parse_age(\\"30\\") is_ok: {}", parse_age("30").is_ok());
+    println!("parse_age(\\"xx\\") is_err: {}", parse_age("xx").is_err());
+}`;
+
+<Playground client:visible code={resultCode} />
+
+<Callout title="Recoverable errors are values you must handle">
+Because `Result` is a plain enum, the compiler emits a warning if you let a `Result` value go unused. Every error path is visible in the type signature of the function that returns it, and callers must explicitly decide what to do — ignore, propagate, recover, or panic. This is stronger than exception handling, where error paths are invisible.
+</Callout>
+
+export const quizResult = [
+    {
+        q: "What are the two variants of Result<T, E>?",
+        options: [
+            "Some(T) and None",
+            "Ok(T) and Err(E)",
+            "Pass(T) and Fail(E)",
+            "Value(T) and Error(E)"
+        ],
+        answer: 1
+    },
+    {
+        q: "What does .unwrap_or_else(|e| ...) do when the Result is Err(e)?",
+        options: [
+            "It panics with the error as the message",
+            "It ignores the error and returns the default for T",
+            "It calls the closure with the error and returns the closure's return value",
+            "It converts the Err into an Ok"
+        ],
+        answer: 2
+    },
+    {
+        q: "Which method transforms the Ok value without touching the Err?",
+        options: [
+            ".map_err(|e| ...)",
+            ".and_then(|v| ...)",
+            ".map(|v| ...)",
+            ".unwrap_or_else(|e| ...)"
+        ],
+        answer: 2
+    },
+    {
+        q: "Why does the Rust compiler warn when a Result is unused?",
+        options: [
+            "Result values are heap-allocated and must be freed",
+            "An unused Result means the error case was silently ignored",
+            "Result implements Drop, which triggers a warning",
+            "The compiler always warns about all unused variables"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="error-handling/result" questions={quizResult} />
+
+<ProgressTracker client:visible id="error-handling/result" />

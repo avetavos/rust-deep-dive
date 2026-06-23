@@ -1,0 +1,157 @@
+---
+title: 'HashMap'
+description: 'HashMap<K, V> provides O(1) average key lookup. Learn insert, get, the entry API, and how to iterate deterministically by sorting keys first.'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## `HashMap<K, V>`
+
+`HashMap<K, V>` maps keys of type `K` to values of type `V`. It uses a hash function internally to achieve O(1) average-case insertion and lookup.
+
+```rust
+use std::collections::HashMap;
+
+let mut scores: HashMap<String, u32> = HashMap::new();
+```
+
+Keys must implement `Eq` and `Hash`. Common key types — `String`, `&str`, integers — already do.
+
+## Inserting and Reading Values
+
+```rust
+scores.insert(String::from("Alice"), 100);
+scores.insert(String::from("Bob"), 85);
+
+// get returns Option<&V>
+if let Some(score) = scores.get("Alice") {
+    println!("Alice: {}", score);
+}
+
+// index syntax — panics if key is missing
+let bob_score = scores["Bob"];
+```
+
+Prefer `.get(key)` in production code so you handle the missing-key case gracefully.
+
+## The Entry API
+
+The `entry` API provides a clean way to insert a value only if the key is absent, avoiding a double-lookup:
+
+```rust
+// Insert 70 for "Dave" if "Dave" is not yet present
+scores.entry(String::from("Dave")).or_insert(70);
+
+// Increment a counter — insert 0 first if absent, then add 1
+let count = scores.entry(String::from("Eve")).or_insert(0);
+*count += 1;
+```
+
+`or_insert` returns a `&mut V` pointing at the value, so you can update it in place.
+
+## Iterating — Always Sort Keys for Deterministic Output
+
+`HashMap` does **not** guarantee any iteration order. Two runs of the same program can yield different orderings. When output order matters (tests, learning playgrounds, logging), sort the keys first:
+
+```rust
+let mut keys: Vec<&String> = scores.keys().collect();
+keys.sort();
+for k in keys {
+    println!("{}: {}", k, scores[k]);
+}
+```
+
+## Removing Entries
+
+```rust
+scores.remove("Bob");
+println!("Bob present: {}", scores.contains_key("Bob"));
+```
+
+export const hashmapCode = `use std::collections::HashMap;
+
+fn main() {
+    let mut scores: HashMap<String, u32> = HashMap::new();
+    scores.insert(String::from("Alice"), 100);
+    scores.insert(String::from("Bob"), 85);
+    scores.insert(String::from("Carol"), 92);
+
+    // entry API: insert if absent
+    scores.entry(String::from("Dave")).or_insert(70);
+    // Alice already exists — or_insert does nothing
+    scores.entry(String::from("Alice")).or_insert(0);
+
+    // get returns Option<&V>
+    if let Some(score) = scores.get("Alice") {
+        println!("Alice scored {}", score);
+    }
+
+    // deterministic iteration: sort keys
+    let mut keys: Vec<&String> = scores.keys().collect();
+    keys.sort();
+    for k in keys {
+        println!("{}: {}", k, scores[k]);
+    }
+
+    // remove
+    scores.remove("Bob");
+    println!("Bob present: {}", scores.contains_key("Bob"));
+}`;
+
+<Playground client:visible code={hashmapCode} />
+
+<Callout title="HashMap iteration order is unspecified — sort keys when output order matters">
+Rust's `HashMap` uses a randomized hash seed (SipHash) by default, so iteration order can differ between program runs. Whenever you need stable output — in tests, playgrounds, or log output — collect the keys into a `Vec`, call `.sort()`, then iterate.
+</Callout>
+
+export const quizHashmap = [
+    {
+        q: "What does scores.get(\"Alice\") return when Alice is not in the map?",
+        options: [
+            "It panics with a key-not-found error",
+            "It returns 0",
+            "It returns None",
+            "It returns an empty String"
+        ],
+        answer: 2
+    },
+    {
+        q: "What does entry(key).or_insert(v) do when the key already exists?",
+        options: [
+            "It overwrites the existing value with v",
+            "It does nothing and returns a mutable reference to the existing value",
+            "It removes the key and re-inserts with v",
+            "It panics because the key is a duplicate"
+        ],
+        answer: 1
+    },
+    {
+        q: "Why is HashMap iteration order non-deterministic in Rust?",
+        options: [
+            "It is a bug that will be fixed in a future edition",
+            "HashMap sorts keys alphabetically by default",
+            "Rust's HashMap uses a randomized hash seed (SipHash) to resist hash-flooding attacks",
+            "You must use BTreeMap for any ordered output"
+        ],
+        answer: 2
+    },
+    {
+        q: "Which trait bounds must a type satisfy to be used as a HashMap key?",
+        options: [
+            "Clone + Copy",
+            "Display + Debug",
+            "Eq + Hash",
+            "Ord + PartialOrd"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="collections-iterators/hashmap" questions={quizHashmap} />
+
+<ProgressTracker client:visible id="collections-iterators/hashmap" />

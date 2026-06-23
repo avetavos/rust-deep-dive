@@ -1,0 +1,171 @@
+---
+title: 'Iterators'
+description: 'Rust iterators are lazy chains of adaptors driven by consumers. Master iter/into_iter/iter_mut, map/filter/enumerate/zip, and collect/sum/fold.'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The Three Iterator Methods
+
+Every collection exposes three ways to produce an iterator:
+
+| Method | Yields | Ownership |
+|--------|--------|-----------|
+| `.iter()` | `&T` | Borrows the collection |
+| `.iter_mut()` | `&mut T` | Borrows the collection mutably |
+| `.into_iter()` | `T` | Consumes (moves) the collection |
+
+```rust
+let v = vec![1, 2, 3];
+
+for x in v.iter() { }        // v still valid after
+for x in v.into_iter() { }   // v moved — cannot use v after
+```
+
+## Adaptors — Lazy Transformations
+
+Adaptors transform an iterator into another iterator. They do **no work** until driven by a consumer.
+
+### `map`
+
+Transforms each element:
+
+```rust
+let doubled: Vec<i32> = vec![1, 2, 3].iter().map(|&x| x * 2).collect();
+// [2, 4, 6]
+```
+
+### `filter`
+
+Keeps elements matching a predicate. Note: `.iter()` on `Vec<i32>` yields `&&i32` inside `filter` — destructure with `|&&x|`:
+
+```rust
+let evens: Vec<i32> = vec![1, 2, 3, 4].iter().filter(|&&x| x % 2 == 0).map(|&x| x).collect();
+// [2, 4]
+```
+
+### `enumerate`
+
+Pairs each element with its index `(usize, &T)`:
+
+```rust
+for (i, val) in vec!["a", "b", "c"].iter().enumerate() {
+    println!("[{}] {}", i, val);
+}
+```
+
+### `zip`
+
+Combines two iterators element-by-element into `(A, B)` pairs, stopping at the shorter one:
+
+```rust
+let names = vec!["Alice", "Bob"];
+let scores = vec![100, 85];
+for (name, score) in names.iter().zip(scores.iter()) {
+    println!("{}: {}", name, score);
+}
+```
+
+## Consumers — Drive the Chain
+
+A consumer pulls values through the adaptor chain and produces a final result.
+
+| Consumer | Result |
+|----------|--------|
+| `.collect::<Vec<T>>()` | Builds a collection |
+| `.sum::<i32>()` | Sums numeric elements |
+| `.fold(init, f)` | Reduces to a single value with accumulator |
+| `.count()` | Counts elements |
+| `.any(pred)` / `.all(pred)` | Short-circuit boolean tests |
+
+```rust
+let nums = vec![1, 2, 3, 4, 5];
+let total: i32 = nums.iter().sum();            // 15
+let product: i32 = nums.iter().fold(1, |acc, &x| acc * x);  // 120
+```
+
+export const iteratorsCode = `fn main() {
+    let numbers = vec![1, 2, 3, 4, 5, 6];
+
+    // filter + map + collect
+    let evens_doubled: Vec<i32> = numbers
+        .iter()
+        .filter(|&&x| x % 2 == 0)
+        .map(|&x| x * 2)
+        .collect();
+    println!("evens doubled: {:?}", evens_doubled);
+
+    // enumerate
+    for (i, val) in numbers.iter().enumerate() {
+        println!("[{}] = {}", i, val);
+    }
+
+    // zip two iterators
+    let letters = vec!["a", "b", "c"];
+    for (n, l) in numbers.iter().take(3).zip(letters.iter()) {
+        println!("{} -> {}", n, l);
+    }
+
+    // consumers: sum and fold
+    let total: i32 = numbers.iter().sum();
+    let product: i32 = numbers.iter().fold(1, |acc, &x| acc * x);
+    println!("sum={} product={}", total, product);
+}`;
+
+<Playground client:visible code={iteratorsCode} />
+
+<Callout title="Iterator adaptors are lazy — nothing happens until a consumer runs">
+Calling `.map(...)` or `.filter(...)` does not execute any code immediately. It builds a description of the transformation. Only when a consumer — `collect`, `sum`, `fold`, a `for` loop — pulls values through the chain does any computation occur. This makes long adaptor chains just as efficient as a single hand-written loop.
+</Callout>
+
+export const quizIterators = [
+    {
+        q: "What is the key difference between .iter() and .into_iter() on a Vec?",
+        options: [
+            ".iter() is faster; .into_iter() is safer",
+            ".iter() borrows the Vec (it stays valid); .into_iter() consumes (moves) it",
+            ".into_iter() borrows the Vec; .iter() consumes it",
+            "There is no practical difference"
+        ],
+        answer: 1
+    },
+    {
+        q: "When does a .map() adaptor actually execute its closure?",
+        options: [
+            "Immediately when .map() is called",
+            "When the next adaptor in the chain is attached",
+            "Only when a consumer such as .collect() or .sum() drives the iterator",
+            "When the Vec goes out of scope"
+        ],
+        answer: 2
+    },
+    {
+        q: "What does .fold(0, |acc, &x| acc + x) compute for vec![1, 2, 3]?",
+        options: [
+            "The maximum element: 3",
+            "The product: 6",
+            "The sum: 6",
+            "The count: 3"
+        ],
+        answer: 2
+    },
+    {
+        q: "Why does a filter closure on .iter() of Vec<i32> receive &&i32?",
+        options: [
+            "It is a Rust compiler bug",
+            ".iter() yields &i32, and filter wraps each element in another reference, giving &&i32",
+            "filter always adds two levels of reference regardless of the iterator type",
+            "Vec<i32> stores i32 as double pointers internally"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="collections-iterators/iterators" questions={quizIterators} />
+
+<ProgressTracker client:visible id="collections-iterators/iterators" />

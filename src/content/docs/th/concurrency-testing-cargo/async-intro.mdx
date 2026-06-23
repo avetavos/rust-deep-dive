@@ -1,0 +1,176 @@
+---
+title: 'Async Introduction'
+description: 'เรียนรู้วิธีที่ async/await และ Futures ทำงานใน Rust ว่าทำไมจึงต้องการ executor runtime อย่าง tokio และวิธีเขียนโค้ด I/O แบบ non-blocking'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Async/Await และ Futures
+
+syntax `async`/`.await` ของ Rust ให้คุณเขียนโค้ด non-blocking ที่ดูเหมือนโค้ด sequential ธรรมดา ภายใต้ประทุน `async fn` ส่งคืน **Future** — ค่าที่แสดงถึงการคำนวณที่อาจยังไม่เสร็จสมบูรณ์
+
+```rust
+use tokio::time::{sleep, Duration};
+
+async fn fetch_data(id: u32) -> String {
+    sleep(Duration::from_millis(10)).await;
+    format!("data for id={}", id)
+}
+
+#[tokio::main]
+async fn main() {
+    let result = fetch_data(1).await;
+    println!("{}", result);
+}
+```
+
+คำสั่ง `.await` ระงับ async function ปัจจุบันจนกว่า Future ที่มันถูกนำไปใช้จะ resolve ขณะที่ระงับอยู่ executor (tokio) สามารถรัน task อื่น ๆ ได้
+
+### Future คืออะไร?
+
+`Future<Output = T>` เป็น trait ที่แสดงถึงค่าประเภท `T` ที่จะพร้อมในบางจุดในอนาคต การเรียก `async fn` ไม่ได้รัน body ทันที — มันส่งคืน Future body จะรันเฉพาะเมื่อคุณ `.await` มัน (หรือ poll มันผ่าน executor)
+
+```rust
+// ยังไม่ทำอะไร — แค่สร้าง Future
+let fut = fetch_data(42);
+
+// นี่รัน body และบล็อกจนเสร็จ
+let result = fut.await;
+```
+
+การประเมินแบบ lazy นี้คือเหตุผลที่ async ของ Rust มีต้นทุนเป็นศูนย์: future ที่ไม่เคย await จะไม่รันเลย
+
+### การรัน Task พร้อมกันด้วย tokio::join!
+
+เพื่อรัน async task หลายตัวในเวลาเดียวกัน ใช้ `tokio::join!` มัน drive future ทั้งหมดพร้อมกันบน thread เดียว (หรือข้าม worker thread ขึ้นอยู่กับ runtime configuration)
+
+```rust
+use tokio::time::{sleep, Duration};
+
+async fn task(name: &str, ms: u64) -> String {
+    sleep(Duration::from_millis(ms)).await;
+    format!("{} done", name)
+}
+
+#[tokio::main]
+async fn main() {
+    let (a, b, c) = tokio::join!(
+        task("alpha", 30),
+        task("beta",  20),
+        task("gamma", 10),
+    );
+    println!("{}", a);
+    println!("{}", b);
+    println!("{}", c);
+}
+```
+
+task ทั้งสามเริ่มทันที `tokio::join!` รอจนทุกตัวเสร็จและส่งคืนผลลัพธ์ตามลำดับ
+
+### การ Spawn Async Task
+
+`tokio::spawn` เปิดตัว task บน tokio thread pool มันส่งคืน `JoinHandle` คล้ายกับ `std::thread::spawn`
+
+```rust
+use tokio::task;
+
+#[tokio::main]
+async fn main() {
+    let handle = task::spawn(async {
+        // รันพร้อมกันบน tokio thread pool
+        42_u32
+    });
+
+    let result = handle.await.unwrap();
+    println!("Spawned task returned: {}", result);
+}
+```
+
+### async vs Threads: ควรใช้อะไร
+
+| เกณฑ์ | OS Threads (`std::thread`) | Async (`tokio`) |
+|-----------|---------------------------|-----------------|
+| งาน CPU-bound | แนะนำ | ใช้ `spawn_blocking` |
+| งาน I/O-bound | สิ้นเปลือง (thread ถูกบล็อก) | แนะนำ |
+| จำนวน task พร้อมกัน | หลายร้อย (จำกัดโดย OS) | หลายล้าน (น้ำหนักเบา) |
+| ขนาด stack | ~8 MB ต่อ thread | ~ไม่กี่ KB ต่อ task |
+| ต้องการ external crate | ไม่ | ใช่ (`tokio`) |
+
+### การเพิ่ม tokio ในโปรเจกต์
+
+```bash
+cargo add tokio --features full
+```
+
+หรือใน `Cargo.toml`:
+
+```toml
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+```
+
+จากนั้น annotate entry point ของคุณ:
+
+```rust
+#[tokio::main]
+async fn main() {
+    // โค้ด async ของคุณอยู่ที่นี่
+}
+```
+
+`#[tokio::main]` คือ procedural macro ที่ห่อ `async fn main` ของคุณในการเรียก `tokio::runtime::Runtime::block_on` เพื่อเริ่ม tokio event loop
+
+<Callout title="tokio เป็น external crate — รันใน Cargo project">
+syntax `async`/`.await` ถูกสร้างไว้ใน Rust แต่การรัน future ต้องการ **executor runtime** standard library ไม่มี executor รวมอยู่ executor ที่ใช้กันมากที่สุดคือ `tokio` เพิ่มมันด้วย `cargo add tokio --features full` และ annotate entry point ของคุณด้วย `#[tokio::main]` โค้ดนี้ **ไม่สามารถรันในเบราว์เซอร์ Playground ได้** — รันมันใน Cargo project ในเครื่องของคุณ
+</Callout>
+
+export const quizAsync = [
+    {
+        q: "async fn ใน Rust ส่งคืนอะไร?",
+        options: [
+            "ค่าที่คำนวณได้ทันที",
+            "Future ที่ resolve เป็น return type เมื่อ await",
+            "Thread handle",
+            "Result ที่ห่อ return type"
+        ],
+        answer: 1
+    },
+    {
+        q: "ทำไม Rust จึงต้องการ external executor อย่าง tokio เพื่อรัน async code?",
+        options: [
+            "เพราะ async มีเฉพาะใน nightly Rust",
+            "เพราะ standard library ไม่มี runtime — future เป็น lazy และต้องการบางอย่างมา poll พวกมัน",
+            "เพราะ tokio ให้ syntax async/await",
+            "เพราะ async fn ไม่สามารถถูกเรียกจาก regular fn โดยไม่มี tokio"
+        ],
+        answer: 1
+    },
+    {
+        q: "ความแตกต่างระหว่าง tokio::join! และการ await แบบ sequential คืออะไร?",
+        options: [
+            "join! รัน task บน OS thread แยกกัน การ await แบบ sequential ไม่ทำเช่นนั้น",
+            "join! drive future ทั้งหมดพร้อมกัน การ await แบบ sequential รันทีละตัว",
+            "ไม่มีความแตกต่าง — ทั้งสองเทียบเท่ากัน",
+            "join! ทำงานได้เฉพาะกับ future ที่ implement Copy"
+        ],
+        answer: 1
+    },
+    {
+        q: "เมื่อใดควรใช้ spawn_blocking แทน tokio::spawn ธรรมดา?",
+        options: [
+            "เมื่อ task ต้องการอ่านจากไฟล์",
+            "เมื่อ task ทำงาน CPU-bound อย่างหนักที่จะบล็อก async executor thread",
+            "เมื่อต้องการมากกว่า 8 task พร้อมกัน",
+            "spawn_blocking ถูก deprecated — ไม่ควรใช้"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="concurrency-testing-cargo/async-intro" questions={quizAsync} />
+
+<ProgressTracker client:visible id="concurrency-testing-cargo/async-intro" />

@@ -1,0 +1,172 @@
+---
+title: 'Enums'
+description: 'Enum ใน Rust สามารถเก็บข้อมูลในแต่ละ variant ทำให้มีพลังมากกว่า enum แบบ C มาก'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Enum พื้นฐาน
+
+Enum กำหนดประเภทที่สามารถเป็นหนึ่งในหลาย variant ที่มีชื่อ ในรูปแบบที่เรียบง่ายที่สุดจะคล้ายกับ C enum:
+
+```rust
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+let heading = Direction::North;
+```
+
+แต่ละ variant เข้าถึงด้วย syntax `::` เพิ่ม `Debug` เพื่อแสดงผล enum ด้วย `{:?}`
+
+## Variant ที่พกข้อมูล
+
+<Callout title="Enums คือ Algebraic Data Types">
+ต่างจาก C enum แต่ละ variant ของ Rust enum สามารถเก็บข้อมูลของตัวเองได้ และ variant ต่างๆ สามารถเก็บข้อมูลประเภทและจำนวนที่แตกต่างกัน ทำให้ Rust enum เป็น *sum types* — ประเภทนั้นเป็นหนึ่งในหลายรูปร่างที่เป็นไปได้ คุณสามารถคิดถึงแต่ละ variant ว่าเป็น struct หรือ tuple ที่ไม่มีชื่อของตัวเอง ทั้งหมดรวมอยู่ใต้ชื่อประเภทเดียว
+</Callout>
+
+```rust
+enum Shape {
+    Circle(f64),               // รัศมี
+    Rectangle(f64, f64),       // กว้าง, สูง
+    Triangle(f64, f64, f64),   // สามด้าน
+}
+```
+
+คุณสร้าง variant โดยเรียกมันเหมือนฟังก์ชัน:
+
+```rust
+let c = Shape::Circle(3.0);
+let r = Shape::Rectangle(4.0, 5.0);
+```
+
+Variant ยังสามารถเก็บ field ที่มีชื่อได้ เหมือน struct:
+
+```rust
+enum Message {
+    Move { x: i32, y: i32 },
+    Write(String),
+    Quit,
+}
+```
+
+## `impl` บน Enum
+
+คุณสามารถเพิ่ม method ให้กับ enum ได้เช่นเดียวกับที่เพิ่มให้กับ struct — ด้วยบล็อก `impl` และ `match` ข้างใน:
+
+```rust
+impl Shape {
+    fn name(&self) -> &str {
+        match self {
+            Shape::Circle(_)         => "Circle",
+            Shape::Rectangle(_, _)   => "Rectangle",
+            Shape::Triangle(_, _, _) => "Triangle",
+        }
+    }
+}
+```
+
+## `Option<T>` — Enum ในตัว
+
+Rust ไม่มี `null` แต่ standard library มี `Option<T>`:
+
+```rust
+enum Option<T> {
+    Some(T),
+    None,
+}
+```
+
+`Some(value)` ห่อหุ้มค่าที่มีอยู่ `None` แทนการขาดหายของค่า คอมไพเลอร์บังคับให้คุณจัดการทั้งสองกรณีก่อนจะใช้ค่าภายใน ซึ่งกำจัดข้อผิดพลาด null-pointer ณ compile time
+
+export const enumsCode = `#[derive(Debug)]
+enum Shape {
+    Circle(f64),
+    Rectangle(f64, f64),
+    Triangle(f64, f64, f64),
+}
+
+impl Shape {
+    fn area(&self) -> f64 {
+        match self {
+            Shape::Circle(r) => std::f64::consts::PI * r * r,
+            Shape::Rectangle(w, h) => w * h,
+            Shape::Triangle(a, b, c) => {
+                let s = (a + b + c) / 2.0;
+                (s * (s - a) * (s - b) * (s - c)).sqrt()
+            }
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Shape::Circle(_) => "Circle",
+            Shape::Rectangle(_, _) => "Rectangle",
+            Shape::Triangle(_, _, _) => "Triangle",
+        }
+    }
+}
+
+fn main() {
+    let shapes: Vec<Shape> = vec![
+        Shape::Circle(3.0),
+        Shape::Rectangle(4.0, 5.0),
+        Shape::Triangle(3.0, 4.0, 5.0),
+    ];
+
+    for shape in &shapes {
+        println!("{}: area = {:.2}", shape.name(), shape.area());
+    }
+
+    let maybe: Option<i32> = Some(42);
+    println!("Option: {:?}", maybe);
+    let none: Option<i32> = None;
+    println!("None: {:?}", none);
+}`;
+
+<Playground client:visible code={enumsCode} />
+
+export const enumsQuiz = [
+    {
+        q: 'วิธีใดที่ถูกต้องในการสร้าง enum variant ที่พกข้อมูล?',
+        options: [
+            'Shape.Circle(3.0)',
+            'new Shape::Circle(3.0)',
+            'Shape::Circle(3.0)',
+            'Shape { Circle: 3.0 }',
+        ],
+        answer: 2,
+    },
+    {
+        q: 'Option<T> ของ Rust แทนที่อะไรเมื่อเทียบกับภาษาอื่น?',
+        options: [
+            'การจัดการ exception',
+            'การอ้างอิง null หรือ nil',
+            'จำนวนเต็มไม่มีเครื่องหมาย',
+            'Dynamic dispatch',
+        ],
+        answer: 1,
+    },
+    {
+        q: 'คุณสามารถกำหนด method บน enum ใน Rust ได้หรือไม่?',
+        options: [
+            'ไม่ได้ method อนุญาตเฉพาะบน struct เท่านั้น',
+            'ได้ โดยใช้บล็อก impl เหมือนกับ struct',
+            'ได้ แต่เฉพาะ associated functions เท่านั้น ไม่ใช่ instance method',
+            'ได้เฉพาะเมื่อ enum derive Default',
+        ],
+        answer: 1,
+    },
+];
+
+<Quiz client:visible id="structs-enums-matching/enums" questions={enumsQuiz} />
+
+<ProgressTracker client:visible id="structs-enums-matching/enums" />

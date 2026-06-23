@@ -1,5 +1,112 @@
 ---
-title: Ownership & Borrowing
-description: Ownership, moves, references, borrowing, and slices.
+title: 'Ownership และ Borrowing'
+description: 'เรียนรู้โมเดลหน่วยความจำแบบ compile-time ของ Rust: ownership, moves, references, mutable borrows และ slices'
+sidebar:
+  order: 1
 ---
-Coming soon.
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Ownership คืออะไร?
+
+ฟีเจอร์ที่โดดเด่นที่สุดของ Rust คือ **ระบบ ownership** — ชุดของกฎที่คอมไพเลอร์บังคับใช้ตอน compile time เพื่อรับประกันความปลอดภัยของหน่วยความจำโดยไม่ต้องใช้ garbage collector
+
+หน่วยความจำทุกส่วนในโปรแกรม Rust จะถูกเป็นเจ้าของ (owned) โดยตัวแปรเพียงตัวเดียวในแต่ละช่วงเวลา เมื่อตัวแปรนั้นออกจาก scope ไป Rust จะคืนหน่วยความจำให้อัตโนมัติ ไม่มีการจดบันทึกตอน runtime ไม่มี GC pause และไม่มีโอกาสเกิดบั๊กแบบ use-after-free หรือ double-free เลย — คอมไพเลอร์ตัดปัญหาเหล่านี้ออกไปทั้งหมด
+
+### กฎสามข้อของ Ownership
+
+1. ทุกค่าใน Rust มี **เจ้าของเพียงหนึ่งเดียว (one owner)**
+2. เมื่อเจ้าของ **ออกจาก scope** ค่านั้นจะถูก **dropped** (หน่วยความจำถูกคืน)
+3. Ownership สามารถถูก **ถ่ายโอน (move)** ไปยังเจ้าของใหม่ได้ — เมื่อถึงจุดนั้นเจ้าของเดิมจะใช้งานไม่ได้อีกต่อไป
+
+กฎสามข้อนี้คือรากฐานทั้งหมด ทุกอย่างที่เหลือในโมดูลนี้ — moves, references, mutable borrows และ slices — ล้วนต่อยอดมาจากกฎเหล่านี้
+
+```rust
+fn main() {
+    // Rule 1: one owner
+    let s = String::from("hello");
+
+    // Rule 2: out of scope → dropped
+    {
+        let inner = String::from("inner");
+        println!("{}", inner);
+    } // inner is freed here
+
+    // Rule 3: ownership transferred to t
+    let t = s;
+    println!("{}", t);
+    // s is no longer valid here
+}
+```
+
+### โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | แนวคิด |
+|---|---|
+| Ownership และ Moves | แต่ละค่ามีเจ้าของหนึ่งเดียว; การ assign จะ move ค่าที่ไม่ใช่ type `Copy` |
+| References และ Borrowing | borrow ค่าด้วย `&T` โดยไม่ต้องเอา ownership ไป |
+| Mutable Borrows | แก้ไขค่าผ่าน `&mut T`; กฎการเข้าถึงแบบ exclusive |
+| Slices | borrow ส่วนที่ต่อเนื่องกันของ collection ด้วย `&[T]` หรือ `&str` |
+
+### ทำไมถึงไม่มี Garbage Collector?
+
+GC จะสแกนหน่วยความจำตอน runtime เพื่อหาค่าที่เข้าถึงไม่ได้แล้วและคืนมัน วิธีนี้เพิ่ม overhead ตอน runtime และทำให้เกิด pause ที่คาดเดาไม่ได้ Rust ย้ายงานทั้งหมดนี้ไปทำตอน compile time แทน: คอมไพเลอร์จะติดตามทุกการถ่ายโอน ownership และทุกการออกจาก scope แล้วแทรกการเรียก `drop` ให้คุณเอง ผลลัพธ์คือประสิทธิภาพระดับ C พร้อมความปลอดภัยของหน่วยความจำอย่างสมบูรณ์
+
+export const ownershipIntroCode = `fn main() {
+    // Rule 1: every value has exactly one owner
+    let owner = String::from("owned by owner");
+    println!("Rule 1: {}", owner);
+
+    // Rule 2: when the owner goes out of scope, the value is dropped
+    {
+        let scoped = String::from("scoped value");
+        println!("Rule 2 inside scope: {}", scoped);
+    } // scoped is dropped here — memory is freed
+    println!("Rule 2: scoped is gone");
+
+    // Rule 3: ownership can be transferred (moved)
+    let new_owner = owner;
+    println!("Rule 3: now {}", new_owner);
+    // 'owner' is no longer valid here
+}`;
+
+<Playground client:visible code={ownershipIntroCode} />
+
+<Callout title="คอมไพเลอร์คือตาข่ายนิรภัยของคุณ">
+การละเมิดกฎ ownership จะถูกจับได้ตอน **compile time** ไม่ใช่ตอน runtime ถ้าโปรแกรมของคุณคอมไพล์ผ่าน การรับประกันของโมเดลหน่วยความจำก็จะเป็นจริงเสมอ — ไม่มี buffer overflow ไม่มี dangling pointer ไม่มี data race จากการเข้าถึงที่ไม่ได้ซิงค์กัน
+</Callout>
+
+export const quizOwnershipIndex = [
+    {
+        q: "ใน Rust ค่าหนึ่งค่าสามารถมีเจ้าของได้กี่คนในเวลาเดียวกัน?",
+        options: ["ศูนย์", "หนึ่งเดียวเท่านั้น", "มากเท่าที่ต้องการ", "ไม่เกินสอง"],
+        answer: 1
+    },
+    {
+        q: "เกิดอะไรขึ้นกับค่าเมื่อเจ้าของของมันออกจาก scope?",
+        options: [
+            "มันถูก move ไปยัง scope ถัดไป",
+            "มันถูกเก็บกวาดโดย GC ในรอบ GC ถัดไป",
+            "มันถูก dropped — หน่วยความจำถูกคืนทันที",
+            "มันกลายเป็น dangling pointer"
+        ],
+        answer: 2
+    },
+    {
+        q: "Rust ใช้กลไกใดเพื่อรับประกันความปลอดภัยของหน่วยความจำ?",
+        options: [
+            "garbage collector แบบนับ reference",
+            "กฎ ownership ตอน compile-time ที่บังคับใช้โดย borrow checker",
+            "GC แบบ mark-and-sweep ที่ทำงานระหว่างการเรียกฟังก์ชัน",
+            "การเรียก malloc/free ด้วยมือที่โปรแกรมเมอร์แทรกเอง"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="ownership-borrowing/index" questions={quizOwnershipIndex} />
+
+<ProgressTracker client:visible id="ownership-borrowing/index" />

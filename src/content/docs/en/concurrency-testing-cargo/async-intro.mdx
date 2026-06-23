@@ -1,0 +1,176 @@
+---
+title: 'Async Introduction'
+description: 'Learn how async/await and Futures work in Rust, why an executor runtime like tokio is required, and how to write non-blocking I/O code.'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Async/Await and Futures
+
+Rust's `async`/`.await` syntax lets you write non-blocking code that looks like ordinary sequential code. Under the hood, an `async fn` returns a **Future** — a value that represents a computation that may not have completed yet.
+
+```rust
+use tokio::time::{sleep, Duration};
+
+async fn fetch_data(id: u32) -> String {
+    sleep(Duration::from_millis(10)).await;
+    format!("data for id={}", id)
+}
+
+#[tokio::main]
+async fn main() {
+    let result = fetch_data(1).await;
+    println!("{}", result);
+}
+```
+
+The `.await` keyword suspends the current async function until the Future it is applied to resolves. While suspended, the executor (tokio) can run other tasks.
+
+### What Is a Future?
+
+A `Future<Output = T>` is a trait that represents a value of type `T` that will be available at some point in the future. Calling an `async fn` does not execute the body immediately — it returns a Future. The body only runs when you `.await` it (or poll it via an executor).
+
+```rust
+// This does nothing yet — just creates a Future
+let fut = fetch_data(42);
+
+// This runs the body and blocks until complete
+let result = fut.await;
+```
+
+This lazy evaluation is why Rust async is zero-cost: futures that are never awaited never run.
+
+### Running Tasks Concurrently with tokio::join!
+
+To run multiple async tasks at the same time, use `tokio::join!`. It drives all futures concurrently on the same thread (or across worker threads, depending on the runtime configuration).
+
+```rust
+use tokio::time::{sleep, Duration};
+
+async fn task(name: &str, ms: u64) -> String {
+    sleep(Duration::from_millis(ms)).await;
+    format!("{} done", name)
+}
+
+#[tokio::main]
+async fn main() {
+    let (a, b, c) = tokio::join!(
+        task("alpha", 30),
+        task("beta",  20),
+        task("gamma", 10),
+    );
+    println!("{}", a);
+    println!("{}", b);
+    println!("{}", c);
+}
+```
+
+All three tasks start immediately. `tokio::join!` waits until all three complete and returns their results in order.
+
+### Spawning Async Tasks
+
+`tokio::spawn` launches a task onto the tokio thread pool. It returns a `JoinHandle` similar to `std::thread::spawn`.
+
+```rust
+use tokio::task;
+
+#[tokio::main]
+async fn main() {
+    let handle = task::spawn(async {
+        // runs concurrently on the tokio thread pool
+        42_u32
+    });
+
+    let result = handle.await.unwrap();
+    println!("Spawned task returned: {}", result);
+}
+```
+
+### async vs Threads: When to Use Which
+
+| Criterion | OS Threads (`std::thread`) | Async (`tokio`) |
+|-----------|---------------------------|-----------------|
+| CPU-bound work | Preferred | Use `spawn_blocking` |
+| I/O-bound work | Wasteful (blocked thread) | Preferred |
+| Number of concurrent tasks | Hundreds (OS limit) | Millions (lightweight) |
+| Stack size | ~8 MB per thread | ~few KB per task |
+| External crate needed | No | Yes (`tokio`) |
+
+### Adding tokio to Your Project
+
+```bash
+cargo add tokio --features full
+```
+
+Or in `Cargo.toml`:
+
+```toml
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+```
+
+Then annotate your entry point:
+
+```rust
+#[tokio::main]
+async fn main() {
+    // your async code here
+}
+```
+
+`#[tokio::main]` is a procedural macro that wraps your `async fn main` in a call to `tokio::runtime::Runtime::block_on`, starting the tokio event loop.
+
+<Callout title="tokio is an external crate — run in a Cargo project">
+The `async`/`.await` syntax is built into Rust, but executing futures requires an **executor runtime**. The standard library does not include one. The most widely used executor is `tokio`. Add it with `cargo add tokio --features full` and annotate your entry point with `#[tokio::main]`. This code is **not runnable in the browser Playground** — run it in a local Cargo project.
+</Callout>
+
+export const quizAsync = [
+    {
+        q: "What does an async fn return in Rust?",
+        options: [
+            "The computed value immediately",
+            "A Future that resolves to the return type when awaited",
+            "A thread handle",
+            "A Result wrapping the return type"
+        ],
+        answer: 1
+    },
+    {
+        q: "Why does Rust require an external executor like tokio to run async code?",
+        options: [
+            "Because async is only available on nightly Rust",
+            "Because the standard library does not include a runtime — futures are lazy and need something to poll them",
+            "Because tokio provides the async/await syntax",
+            "Because async fn cannot be called from a regular fn without tokio"
+        ],
+        answer: 1
+    },
+    {
+        q: "What is the difference between tokio::join! and sequential awaits?",
+        options: [
+            "join! runs tasks on separate OS threads; sequential awaits do not",
+            "join! drives all futures concurrently; sequential awaits run one at a time",
+            "There is no difference — both are equivalent",
+            "join! only works with futures that implement Copy"
+        ],
+        answer: 1
+    },
+    {
+        q: "When should you use spawn_blocking instead of a regular tokio::spawn?",
+        options: [
+            "When the task needs to read from a file",
+            "When the task performs heavy CPU-bound work that would block the async executor thread",
+            "When you need more than 8 concurrent tasks",
+            "spawn_blocking is deprecated — never use it"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="concurrency-testing-cargo/async-intro" questions={quizAsync} />
+
+<ProgressTracker client:visible id="concurrency-testing-cargo/async-intro" />

@@ -1,0 +1,138 @@
+---
+title: 'Trait Objects'
+description: 'ใช้ dyn Trait สำหรับ runtime polymorphism เมื่อ type ไม่ทราบ ณ compile time'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+export const traitObjectsCode = `trait Animal {
+    fn sound(&self) -> &str;
+    fn name(&self) -> &str;
+}
+
+struct Dog;
+struct Cat;
+
+impl Animal for Dog {
+    fn sound(&self) -> &str { "Woof" }
+    fn name(&self) -> &str { "Dog" }
+}
+
+impl Animal for Cat {
+    fn sound(&self) -> &str { "Meow" }
+    fn name(&self) -> &str { "Cat" }
+}
+
+fn make_sound(animal: &dyn Animal) {
+    println!("{} says: {}", animal.name(), animal.sound());
+}
+
+fn main() {
+    let animals: Vec<Box<dyn Animal>> = vec![
+        Box::new(Dog),
+        Box::new(Cat),
+        Box::new(Dog),
+    ];
+
+    for animal in &animals {
+        make_sound(animal.as_ref());
+    }
+}`;
+
+export const quizTraitObjects = [
+    {
+        q: "`dyn Trait` ใน Rust หมายความว่าอะไร?",
+        options: [
+            "Generic type parameter ที่ถูก constrain ด้วย trait bound",
+            "Compile-time zero-cost abstraction บน trait implementation",
+            "Trait object ที่ใช้ dynamic dispatch — concrete type ถูก resolve ณ runtime ผ่าน vtable",
+            "Trait ที่สามารถ implement ได้โดย type เดียวเท่านั้น",
+        ],
+        answer: 2,
+    },
+    {
+        q: "vtable คืออะไร?",
+        options: [
+            "ตารางของ function pointer ที่เก็บไว้คู่กับ trait object เพื่อให้สามารถค้นหา method implementation ที่ถูกต้อง ณ runtime ได้",
+            "Compile-time lookup table ที่สร้างระหว่าง monomorphization",
+            "Hash map ของชื่อ trait method ไปยัง address ในหน่วยความจำ",
+            "Keyword พิเศษของ Rust สำหรับ virtual method dispatch",
+        ],
+        answer: 0,
+    },
+    {
+        q: "ทำไม `dyn Trait` ต้องวางไว้หลัง pointer เช่น `Box<dyn Trait>` หรือ `&dyn Trait`?",
+        options: [
+            "เพราะ trait object มักเปลี่ยนแปลงได้เสมอ",
+            "เพราะ Rust กำหนดให้ heap allocation สำหรับ polymorphic type ทุกชนิด",
+            "เพราะ size ของ concrete type ไม่ทราบ ณ compile time ทำให้ Rust ไม่สามารถ allocate บน stack ได้โดยตรง",
+            "เพราะ value ของ `dyn Trait` ไม่ implement `Sized` marker trait และ pointer มี size ที่ทราบแน่นอน",
+        ],
+        answer: 3,
+    },
+    {
+        q: "แนวทางใดที่รองรับการเก็บค่าของ concrete type ต่างกันไว้ใน `Vec` เดียวกัน?",
+        options: [
+            "Generic type parameter — `Vec<T>` ที่ `T: Animal`",
+            "Trait object — `Vec<Box<dyn Animal>>`",
+            "Enum variant — ใช้ได้เฉพาะเมื่อแต่ละ variant เก็บข้อมูลแบบเดียวกัน",
+            "ทั้ง generics และ trait object ทำงานได้เหมือนกันสำหรับจุดประสงค์นี้",
+        ],
+        answer: 1,
+    },
+];
+
+## Static Dispatch vs Dynamic Dispatch
+
+ใน Rust มีสองวิธีในการเรียก method บน type ที่ implement trait:
+
+- **Static dispatch** (generics): compiler รู้ exact type ณ compile time และสร้าง code เฉพาะสำหรับแต่ละ type — ไม่มี runtime overhead
+- **Dynamic dispatch** (trait objects): type จริงถูกกำหนด ณ runtime ผ่าน pointer พิเศษที่เรียกว่า *vtable*
+
+## Trait Objects คืออะไร
+
+**Trait object** คือ `&dyn Trait` หรือ `Box<dyn Trait>` — มันเก็บ pointer สองอัน: หนึ่งชี้ไปยังข้อมูล และอีกหนึ่งชี้ไปยัง vtable ซึ่งเป็นตารางของ function pointer สำหรับ method ของ trait นั้น
+
+<Callout title="Trait objects รองรับ runtime polymorphism ผ่าน vtable">
+เมื่อคุณเรียก method บน `&dyn Animal` Rust จะค้นหา vtable เพื่อหา function pointer ที่ถูกต้อง ณ runtime ซึ่งหมายความว่าคุณสามารถเก็บ `Dog`, `Cat` และ type อื่นๆ ที่ implement `Animal` ใน collection เดียวกันได้ — แม้ว่าจะมีขนาดต่างกัน
+</Callout>
+
+## เมื่อใดที่ใช้ `Box<dyn Trait>`
+
+`dyn Trait` โดยตัวมันเองมีขนาดที่ไม่แน่นอน ณ compile time (เนื่องจาก type จริงอาจมีขนาดต่างกัน) ดังนั้นคุณมักจะต้องวางไว้ใน `Box` ซึ่ง allocate บน heap:
+
+```rust
+let animals: Vec<Box<dyn Animal>> = vec![
+    Box::new(Dog),
+    Box::new(Cat),
+];
+```
+
+นี่คือ pattern ทั่วไปสำหรับ heterogeneous collection — รายการที่อาจเก็บ type ต่างๆ ที่ implement trait เดียวกัน
+
+## `impl Trait` vs `dyn Trait`
+
+```rust
+// Static dispatch — compiler สร้าง code เฉพาะสำหรับ type ที่ส่งมา
+fn notify(item: &impl Animal) { ... }
+
+// Dynamic dispatch — ตัดสินใจ ณ runtime
+fn notify(item: &dyn Animal) { ... }
+```
+
+ใช้ `impl Trait` เมื่อ type เป็นที่รู้จัก ณ compile time ใช้ `dyn Trait` เมื่อคุณต้องการความยืดหยุ่น ณ runtime เช่น เก็บ type ต่างๆ ใน Vec หรือส่งผ่าน closure กลับมาจาก function
+
+## ลองเล่น
+
+Playground ด้านล่างแสดง trait `Animal` กับหลาย implementor และ `Vec<Box<dyn Animal>>` สังเกตว่า `Dog` และ `Cat` อยู่ใน Vec เดียวกันได้อย่างไร
+
+<Playground client:visible code={traitObjectsCode} />
+
+<Quiz client:visible id="traits-generics/trait-objects" questions={quizTraitObjects} />
+
+<ProgressTracker client:visible id="traits-generics/trait-objects" />

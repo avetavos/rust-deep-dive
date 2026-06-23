@@ -1,0 +1,167 @@
+---
+title: 'The ? Operator'
+description: 'The ? operator propagates errors early: it unwraps Ok or returns Err immediately from the enclosing function. It works in any function returning Result or Option.'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Manual Propagation Is Noisy
+
+Without the `?` operator, propagating an error from a called function requires a match expression every time:
+
+```rust
+fn parse_and_double(s: &str) -> Result<i32, std::num::ParseIntError> {
+    let n = match s.parse::<i32>() {
+        Ok(v)  => v,
+        Err(e) => return Err(e),
+    };
+    Ok(n * 2)
+}
+```
+
+This pattern — unwrap the `Ok` or return the `Err` early — is so common that Rust has a dedicated operator for it.
+
+## The `?` Operator
+
+Placing `?` after a `Result` expression does exactly the same thing as the match above:
+
+- If the value is `Ok(v)`, it evaluates to `v`.
+- If the value is `Err(e)`, it returns `Err(e)` **immediately from the enclosing function**.
+
+The function **must** return `Result` (or `Option`) for `?` to work — the compiler enforces this.
+
+```rust
+use std::num::ParseIntError;
+
+fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
+    let n: i32 = s.parse()?;  // ? returns early on Err
+    Ok(n * 2)
+}
+```
+
+## Chaining `?`
+
+Because `?` returns the `Ok` value directly, you can call multiple fallible functions in sequence without nesting:
+
+```rust
+use std::num::ParseIntError;
+
+fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
+    let n: i32 = s.parse()?;
+    Ok(n * 2)
+}
+
+fn chain(a: &str, b: &str) -> Result<i32, ParseIntError> {
+    let x = parse_and_double(a)?;
+    let y = parse_and_double(b)?;
+    Ok(x + y)
+}
+```
+
+Each `?` either unwraps the success value or short-circuits the whole function. No nested matches, no manual early returns.
+
+## `main` Returning `Result`
+
+`main` can also return `Result<(), Box<dyn std::error::Error>>`, which lets you use `?` inside `main` itself:
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let n: i32 = "42".parse()?;
+    println!("parsed: {}", n);
+    Ok(())
+}
+```
+
+`Box<dyn std::error::Error>` is a trait object that can hold any error type, making it useful in `main` where you do not want to fix a single concrete error type.
+
+## Error Type Conversion with `?`
+
+When the error type returned by the called function differs from the error type of the enclosing function, `?` automatically calls `From::from` to convert. This is how a function returning `MyError` can use `?` on a call that returns `ParseIntError`, as long as `From<ParseIntError> for MyError` is implemented.
+
+export const questionMarkCode = `use std::num::ParseIntError;
+
+fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
+    let n: i32 = s.parse()?;  // ? returns early on Err
+    Ok(n * 2)
+}
+
+fn chain(a: &str, b: &str) -> Result<i32, ParseIntError> {
+    let x = parse_and_double(a)?;
+    let y = parse_and_double(b)?;
+    Ok(x + y)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let doubled = parse_and_double("21")?;
+    println!("doubled: {}", doubled);
+
+    let sum = chain("10", "5")?;
+    println!("chain(10, 5): {}", sum);
+
+    // Demonstrate early return on error
+    match parse_and_double("abc") {
+        Ok(v)  => println!("ok: {}", v),
+        Err(e) => println!("early return caught: {}", e),
+    }
+
+    println!("main returned Ok(())");
+    Ok(())
+}`;
+
+<Playground client:visible code={questionMarkCode} />
+
+<Callout title="? returns the error early or unwraps the Ok value">
+The `?` operator is syntactic sugar for the match-and-early-return pattern. It works in any function whose return type is `Result` or `Option`. When error types differ, `?` automatically converts via `From`. Chaining `?` calls produces clean, linear error-propagation code without any nesting.
+</Callout>
+
+export const quizQuestionMark = [
+    {
+        q: "What does ? do when applied to an Err(e) value?",
+        options: [
+            "It panics with the error message",
+            "It converts the error to a string and logs it",
+            "It returns Err(e) immediately from the enclosing function",
+            "It retries the operation up to three times"
+        ],
+        answer: 2
+    },
+    {
+        q: "What constraint must the enclosing function satisfy for ? to compile?",
+        options: [
+            "The function must be async",
+            "The function must return Result or Option",
+            "The function must be marked unsafe",
+            "The function must be a method on a struct"
+        ],
+        answer: 1
+    },
+    {
+        q: "What type is typically used in main() -> Result<(), ...> to accept any error?",
+        options: [
+            "Result<(), String>",
+            "Result<(), impl Error>",
+            "Result<(), Box<dyn std::error::Error>>",
+            "Result<(), &str>"
+        ],
+        answer: 2
+    },
+    {
+        q: "How does ? handle mismatched error types between the caller and callee?",
+        options: [
+            "It wraps the inner error in a Box automatically",
+            "It calls From::from to convert the error type",
+            "It requires the programmer to write a match to convert manually",
+            "It only works when both errors are the same type"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="error-handling/question-mark" questions={quizQuestionMark} />
+
+<ProgressTracker client:visible id="error-handling/question-mark" />

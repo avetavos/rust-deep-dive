@@ -1,0 +1,101 @@
+---
+title: 'Basics & Syntax'
+description: 'Rust is a systems language built for safety and performance — without a garbage collector. This module covers variables, types, functions, and control flow.'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Why Rust?
+
+Rust is a **systems programming language** designed around three goals:
+
+1. **Memory safety** — the compiler guarantees freedom from null-pointer dereferences, use-after-free bugs, and data races, entirely at compile time.
+2. **Performance** — Rust compiles to native machine code with no runtime overhead. There is no garbage collector, no virtual machine, no interpreter.
+3. **Fearless concurrency** — the same ownership rules that prevent memory bugs also prevent data races across threads.
+
+The key insight is that Rust achieves these guarantees through the **borrow checker** — a piece of the compiler that enforces ownership and lifetime rules before your program ever runs. If it compiles, it is memory-safe.
+
+### What This Module Covers
+
+| Lesson | Concept |
+|---|---|
+| Variables & Mutability | `let`, `mut`, shadowing, `const` |
+| Data Types | Scalars, tuples, arrays, type inference |
+| Functions | `fn`, parameters, return types, expressions vs statements |
+| Control Flow | `if` as an expression, `loop`, `while`, `for`, ranges |
+
+### A First Rust Program
+
+Every Rust binary starts from `fn main()`. The `println!` macro writes formatted text to standard output. Types are inferred by the compiler when they are unambiguous — you do not need to annotate every variable.
+
+```rust
+fn main() {
+    println!("Rust guarantees memory safety at compile time.");
+    println!("No garbage collector. No null pointer exceptions.");
+    println!("Zero-cost abstractions. Systems-level performance.");
+
+    let x: i32 = 42;
+    let name = "Rust";
+    println!("x = {}, name = {}", x, name);
+}
+```
+
+The `{}` in format strings are **placeholders** — the macro substitutes the corresponding argument value at runtime.
+
+export const basicsIndexCode = `fn main() {
+    println!("Rust guarantees memory safety at compile time.");
+    println!("No garbage collector. No null pointer exceptions.");
+    println!("Zero-cost abstractions. Systems-level performance.");
+
+    let x: i32 = 42;
+    let name = "Rust";
+    println!("x = {}, name = {}", x, name);
+}`;
+
+<Playground client:visible code={basicsIndexCode} />
+
+<Callout title="Safety + Performance, without a GC">
+Rust enforces memory safety through compile-time ownership rules — not a garbage collector. The result is programs that are as fast as C, as safe as high-level managed languages, and predictably low-latency because there is no GC pause.
+</Callout>
+
+export const quizBasicsIndex = [
+    {
+        q: "How does Rust guarantee memory safety?",
+        options: [
+            "A garbage collector runs between function calls",
+            "The programmer manually calls free() on every allocation",
+            "Compile-time ownership and borrow-checker rules enforced by the compiler",
+            "A reference-counting runtime tracks every allocation"
+        ],
+        answer: 2
+    },
+    {
+        q: "What is the entry point of every Rust binary?",
+        options: [
+            "fn start()",
+            "fn main()",
+            "fn run()",
+            "fn init()"
+        ],
+        answer: 1
+    },
+    {
+        q: "What does the {} placeholder do inside a println! format string?",
+        options: [
+            "It declares a new variable",
+            "It creates a block expression",
+            "It substitutes the corresponding argument value at runtime",
+            "It inserts a raw memory address"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="basics/index" questions={quizBasicsIndex} />
+
+<ProgressTracker client:visible id="basics/index" />

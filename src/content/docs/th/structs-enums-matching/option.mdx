@@ -1,0 +1,169 @@
+---
+title: 'ประเภท Option'
+description: 'Rust ไม่มี null — การขาดหายของค่าถูกจำลองด้วย Option<T> ซึ่งเป็น Some(value) หรือ None'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Rust ไม่มี Null
+
+หลายภาษาอนุญาตให้ตัวแปรใดก็ตามเก็บค่า "null" หรือ "nil" ซึ่งนำไปสู่ null-pointer exception ใน runtime Rust ใช้วิธีที่แตกต่าง: **ไม่มี null** เมื่อค่าอาจขาดหาย คุณใช้ `Option<T>` จาก standard library
+
+`Option<T>` คือ enum ที่กำหนดเป็น:
+
+```rust
+enum Option<T> {
+    Some(T),
+    None,
+}
+```
+
+`Some(value)` ห่อหุ้มค่าที่มีอยู่ประเภท `T` `None` แทนการขาดหายของค่า คอมไพเลอร์บังคับให้คุณจัดการทั้งสองกรณีก่อนจะใช้ค่าภายใน — ข้อผิดพลาด null-pointer กลายเป็น compile-time error
+
+เนื่องจาก `Option<T>` ใช้กันทั่วไปมาก `Some` และ `None` จึงอยู่ใน scope ทุกที่โดยไม่ต้องใช้ prefix `Option::`
+
+## จัดการ `Option<T>` ด้วย `match`
+
+วิธีที่ชัดเจนที่สุดในการจัดการ `Option<T>` คือ `match` expression:
+
+```rust
+fn divide(a: f64, b: f64) -> Option<f64> {
+    if b == 0.0 { None } else { Some(a / b) }
+}
+
+match divide(10.0, 2.0) {
+    Some(result) => println!("Result: {}", result),
+    None         => println!("Cannot divide by zero"),
+}
+```
+
+คอมไพเลอร์ปฏิเสธโค้ดที่จัดการแค่ `Some` โดยไม่มี `None` — match ต้องครบถ้วน
+
+## `if let` สำหรับ Happy Path
+
+เมื่อคุณสนใจแค่กรณี `Some` `if let` กระชับกว่า:
+
+```rust
+if let Some(value) = divide(10.0, 2.0) {
+    println!("Got: {}", value);
+}
+```
+
+ส่วน body จะ execute เฉพาะเมื่อค่าเป็น `Some` เพิ่ม `else` เพื่อจัดการ `None` ถ้าต้องการ
+
+## `unwrap_or` — ให้ค่า Default
+
+`unwrap_or(default)` คืนค่าภายในหาก `Some` หรือค่า default ที่กำหนดหาก `None`:
+
+```rust
+let maybe: Option<i32> = None;
+let value = maybe.unwrap_or(0); // 0
+```
+
+นี่คือรูปแบบที่ปลอดภัยที่สุดของ "ให้ค่าหรือ fallback" หลีกเลี่ยง `.unwrap()` แบบธรรมดาใน production code เพราะมัน panic กับ `None`
+
+## `map` — แปลงค่าภายใน
+
+`map` ใช้ closure กับค่า `Some` และคืน `Option<T>` ใหม่ หากค่าเดิมเป็น `None` มันส่ง `None` ผ่านไปโดยไม่เปลี่ยนแปลง:
+
+```rust
+let doubled = Some(5).map(|x| x * 2); // Some(10)
+let nothing: Option<i32> = None;
+let still_none = nothing.map(|x| x * 2); // None
+```
+
+`map` จำเป็นสำหรับการ chain การแปลงโดยไม่ต้อง unwrap ค่า `Option<T>` ที่อยู่ระหว่างกลาง
+
+<Callout title="Rust ไม่มี null">
+`Option<T>` ทำให้ความเป็นไปได้ของการขาดหายชัดเจนใน type system ค่าประเภท `i32` คือจำนวนเต็มที่ถูกต้องเสมอ — ไม่มีทางเป็น null เฉพาะค่าประเภท `Option<i32>` เท่านั้นที่อาจขาดหายได้ สิ่งนี้บังคับให้ผู้เรียกทุกคนต้องรับรู้และจัดการกรณีการขาดหาย กำจัด crash ทั้ง class ใน runtime
+</Callout>
+
+export const optionCode = `fn divide(a: f64, b: f64) -> Option<f64> {
+    if b == 0.0 { None } else { Some(a / b) }
+}
+
+fn find_first_even(nums: &[i32]) -> Option<i32> {
+    nums.iter().find(|&&x| x % 2 == 0).copied()
+}
+
+fn main() {
+    // match on Option
+    match divide(10.0, 3.0) {
+        Some(result) => println!("10 / 3 = {:.4}", result),
+        None         => println!("Cannot divide by zero"),
+    }
+
+    match divide(5.0, 0.0) {
+        Some(result) => println!("result = {}", result),
+        None         => println!("Cannot divide by zero"),
+    }
+
+    // if let
+    let numbers = vec![1, 3, 5, 8, 9];
+    if let Some(even) = find_first_even(&numbers) {
+        println!("First even: {}", even);
+    }
+
+    // unwrap_or
+    let missing: Option<i32> = None;
+    println!("Default: {}", missing.unwrap_or(0));
+
+    // map
+    let some_val: Option<i32> = Some(5);
+    let doubled = some_val.map(|x| x * 2);
+    println!("Doubled: {:?}", doubled);
+}`;
+
+<Playground client:visible code={optionCode} />
+
+export const quizOption = [
+    {
+        q: 'Option<T> ใน Rust แทนอะไร?',
+        options: [
+            'ค่าที่อาจ fail พร้อม error',
+            'ค่าที่เป็นได้ทั้งมีอยู่ (Some) หรือขาดหาย (None)',
+            'function parameter ที่ optional พร้อมค่า default',
+            'type alias ของ nullable pointer',
+        ],
+        answer: 1,
+    },
+    {
+        q: 'unwrap_or(default) ทำอะไรเมื่อเรียกกับ None?',
+        options: [
+            'มัน panic พร้อมข้อความ',
+            'มันคืนค่าภายใน Some',
+            'มันคืนค่า default ที่กำหนด',
+            'มันแปลง None เป็น empty string',
+        ],
+        answer: 2,
+    },
+    {
+        q: 'map ทำอะไรเมื่อเรียกกับค่า None?',
+        options: [
+            'มัน panic',
+            'มันเรียก closure ด้วยค่า default',
+            'มันคืน None โดยไม่เรียก closure',
+            'มันแปลง None เป็น Some(())',
+        ],
+        answer: 2,
+    },
+    {
+        q: 'ทำไม Rust จึงใช้ Option<T> แทน null?',
+        options: [
+            'เพราะ null จะทำให้คอมไพเลอร์ช้าลง',
+            'เพื่อให้คอมไพเลอร์บังคับการจัดการค่าที่ขาดหาย กำจัด null-pointer crash',
+            'เพราะ Option<T> ใช้หน่วยความจำน้อยกว่า nullable pointer',
+            'เพื่อให้ compatible กับ C FFI',
+        ],
+        answer: 1,
+    },
+];
+
+<Quiz client:visible id="structs-enums-matching/option" questions={quizOption} />
+
+<ProgressTracker client:visible id="structs-enums-matching/option" />

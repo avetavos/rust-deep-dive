@@ -1,0 +1,122 @@
+---
+title: 'Collections & Iterators'
+description: 'ภาพรวมของ Collections ในไลบรารีมาตรฐานของ Rust และระบบ Iterator — สองเสาหลักที่ทำให้การจัดการข้อมูลนั้นกระชับและปลอดภัย'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+Rust มาพร้อมกับชุด Collections ในไลบรารีมาตรฐานที่ทรงพลัง และระบบ Iterator แบบ Lazy ที่มีต้นทุนเป็นศูนย์ ทั้งสองสิ่งนี้ช่วยให้คุณจัดเก็บ แปลง และประมวลผลข้อมูลได้โดยไม่ต้องเขียน Loop ด้วยตนเองหรือจัดสรรหน่วยความจำโดยไม่จำเป็น
+
+โมดูลนี้แบ่งออกเป็นห้าบทเรียนที่มีโฟกัสชัดเจน:
+
+| บทเรียน | หัวข้อ |
+|--------|-------|
+| `Vec<T>` & `String` | Sequence ที่ขยายได้และข้อความที่เป็นเจ้าของ |
+| `HashMap<K, V>` | การค้นหาด้วย Key พร้อม Entry API |
+| Iterators | Chain แบบ Lazy: `map`, `filter`, `collect`, `fold` |
+| Closures | การจับ Environment; `Fn` / `FnMut` / `FnOnce` |
+
+## Collections หลักทั้งสี่
+
+Collections ที่ใช้มากที่สุดใน Rust และเมื่อไหรควรเลือกใช้แต่ละอัน:
+
+- **`Vec<T>`** — Array บน Heap แบบ Contiguous ที่เรียงลำดับได้ ใช้เมื่อต้องการเข้าถึงด้วย Index หรือต้องการ List ที่ขยายได้
+- **`String`** — ข้อความ UTF-8 ที่เป็นเจ้าของ ใช้เมื่อต้องสร้างหรือแก้ไขข้อความ ณ Runtime
+- **`HashMap<K, V>`** — Hash Table ที่ Map Key ไปยัง Value ใช้เมื่อต้องการค้นหาอย่างรวดเร็วด้วย Key
+- **`HashSet<T>`** — ชุดของค่าที่ไม่ซ้ำกัน ใช้เมื่อต้องการตรวจสอบ Membership เพียงอย่างเดียว
+
+## ระบบ Iterator
+
+ทุก Collection ใน Rust เปิดเผย Iterator การทำงานของ Iterator นั้นเป็นแบบ **Lazy** — ไม่มีงานใดเกิดขึ้นจนกว่า *Consumer* (เช่น `collect`, `sum`, หรือ `for`) จะดึงค่าผ่าน Chain
+
+```rust
+let v = vec![1, 2, 3, 4, 5];
+
+// ยังไม่มีการประมวลผล — Chain เป็นแค่คำอธิบายการแปลง
+let chain = v.iter().filter(|&&x| x % 2 == 0).map(|&x| x * 10);
+
+// Consumer เป็นตัวขับเคลื่อน Chain
+let result: Vec<i32> = chain.collect();
+```
+
+export const collectionsOverviewCode = `use std::collections::HashMap;
+use std::collections::HashSet;
+
+fn main() {
+    // Vec<i32>
+    let mut v: Vec<i32> = vec![1, 2, 3];
+    v.push(4);
+    println!("Vec: {:?}", v);
+
+    // String
+    let mut s = String::from("Hello");
+    s.push_str(", Rust!");
+    println!("String: {}", s);
+
+    // HashMap<&str, i32> — sort keys for deterministic output
+    let mut map = HashMap::new();
+    map.insert("one", 1);
+    map.insert("two", 2);
+    map.insert("three", 3);
+    let mut keys: Vec<&str> = map.keys().cloned().collect();
+    keys.sort();
+    for k in &keys {
+        println!("{}: {}", k, map[k]);
+    }
+
+    // HashSet<i32>
+    let set: HashSet<i32> = vec![1, 2, 3, 2, 1].into_iter().collect();
+    let mut items: Vec<i32> = set.into_iter().collect();
+    items.sort();
+    println!("Set: {:?}", items);
+}`;
+
+<Playground client:visible code={collectionsOverviewCode} />
+
+<Callout title="Collections อยู่บน Heap; Iterators ไม่มีต้นทุน">
+Collections ทุกตัวในไลบรารีมาตรฐานจัดสรรหน่วยความจำบน Heap และจัดการหน่วยความจำของตัวเอง Iterator Adaptor เช่น `map` และ `filter` จะถูก Compile ลงเป็น Machine Code เดียวกับ Loop ที่เขียนด้วยมือ — ไม่มี Overhead ณ Runtime จากการ Chain
+</Callout>
+
+export const quizCollectionsIndex = [
+    {
+        q: "คุณควรเลือก Collection ใดสำหรับการค้นหาอย่างรวดเร็วด้วย String Key?",
+        options: [
+            "Vec<T>",
+            "HashMap<K, V>",
+            "HashSet<T>",
+            "String"
+        ],
+        answer: 1
+    },
+    {
+        q: "Iterator Adaptor เช่น map หรือ filter ทำงานจริงเมื่อใด?",
+        options: [
+            "ทันทีที่เรียก Method ของ Adaptor",
+            "เฉพาะเมื่อ Consumer เช่น collect หรือ sum ขับเคลื่อน Chain",
+            "เมื่อ Iterator หลุด Scope",
+            "เมื่อโปรแกรมสิ้นสุดการทำงาน"
+        ],
+        answer: 1
+    },
+    {
+        q: "วิธีที่ถูกต้องในการ Iterate HashMap เพื่อให้ได้ผลลัพธ์ที่มี Order แน่นอนคืออะไร?",
+        options: [
+            "HashMap รับประกัน Order ตาม Insertion ไม่ต้อง Sort",
+            "เก็บ Key ลงใน Vec แล้ว Sort จากนั้น Iterate ผ่าน Key ที่ Sort แล้ว",
+            "ใช้ iter_mut() แทน iter()",
+            "ส่ง Comparator ให้กับ HashMap::new()"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="collections-iterators/index" questions={quizCollectionsIndex} />
+
+<ProgressTracker client:visible id="collections-iterators/index" />

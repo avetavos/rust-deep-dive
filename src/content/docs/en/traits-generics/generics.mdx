@@ -1,0 +1,184 @@
+---
+title: 'Generics'
+description: 'Write code that works for many types with zero runtime cost via monomorphization.'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+export const genericsCode = `fn largest<T: PartialOrd>(list: &[T]) -> &T {
+    let mut biggest = &list[0];
+    for item in list {
+        if item > biggest {
+            biggest = item;
+        }
+    }
+    biggest
+}
+
+struct Pair<T> {
+    first: T,
+    second: T,
+}
+
+impl<T: std::fmt::Display + PartialOrd> Pair<T> {
+    fn new(first: T, second: T) -> Self {
+        Self { first, second }
+    }
+
+    fn larger(&self) -> &T {
+        if self.first > self.second {
+            &self.first
+        } else {
+            &self.second
+        }
+    }
+}
+
+fn main() {
+    let numbers = vec![34, 50, 25, 100, 65];
+    println!("largest number: {}", largest(&numbers));
+
+    let chars = vec!['y', 'm', 'a', 'q'];
+    println!("largest char: {}", largest(&chars));
+
+    let p = Pair::new(5, 10);
+    println!("larger of pair: {}", p.larger());
+}`;
+
+export const quizGenerics = [
+    {
+        q: 'What does the `T: PartialOrd` syntax in `fn largest<T: PartialOrd>(...)` mean?',
+        options: [
+            '`T` must be a primitive numeric type',
+            '`T` must implement the `PartialOrd` trait, meaning it supports comparison operators',
+            '`T` is a subtype of `PartialOrd`',
+            '`T` will be automatically converted to `PartialOrd` at runtime',
+        ],
+        answer: 1,
+    },
+    {
+        q: 'What is monomorphization?',
+        options: [
+            'A runtime process that picks the right function version when the program runs',
+            'A compiler technique that generates a specialized copy of a generic function for each concrete type used',
+            'A way to convert traits into structs at compile time',
+            'A memory optimization that merges duplicate heap allocations',
+        ],
+        answer: 1,
+    },
+    {
+        q: 'How would you declare a generic struct `Stack` that holds elements of type `T`?',
+        options: [
+            '`struct Stack { data: T }`',
+            '`struct Stack[T] { data: Vec<T> }`',
+            '`struct Stack<T> { data: Vec<T> }`',
+            '`generic struct Stack(T) { data: Vec<T> }`',
+        ],
+        answer: 2,
+    },
+    {
+        q: 'What is the purpose of a `where` clause in a generic function?',
+        options: [
+            'To filter which values are passed to the function at runtime',
+            'To specify trait bounds in a more readable way when there are many constraints',
+            'To restrict a function to only work inside modules',
+            'To add lifetime annotations to generic parameters',
+        ],
+        answer: 1,
+    },
+];
+
+## Generic Functions
+
+Instead of writing `largest_i32`, `largest_f64`, and `largest_char` as separate functions, generics let you write one:
+
+```rust
+fn largest<T: PartialOrd>(list: &[T]) -> &T {
+    let mut biggest = &list[0];
+    for item in list {
+        if item > biggest {
+            biggest = item;
+        }
+    }
+    biggest
+}
+```
+
+The `<T: PartialOrd>` part declares a **type parameter** `T` with a **trait bound**. The bound `PartialOrd` means "this function accepts any type that supports the `>` and `<` operators." Without the bound, the compiler would refuse the comparison `item > biggest` because not every type is comparable.
+
+<Callout title="Generics are monomorphized — zero runtime cost">
+The compiler generates a specialized copy of the function for each concrete type you use — one for `i32`, one for `char`, and so on. This process is called monomorphization. The resulting machine code is identical to what you would have written by hand for each type, so generics have no runtime overhead.
+</Callout>
+
+## Generic Structs
+
+Structs can also be parameterized. A `Pair<T>` holds two values of the same type `T`:
+
+```rust
+struct Pair<T> {
+    first: T,
+    second: T,
+}
+```
+
+When you instantiate it, the compiler infers `T` from the values you provide:
+
+```rust
+let p = Pair { first: 5, second: 10 }; // T inferred as i32
+```
+
+## `impl` Blocks for Generic Structs
+
+To add methods to a generic struct, repeat the type parameter in the `impl` line:
+
+```rust
+impl<T: std::fmt::Display + PartialOrd> Pair<T> {
+    fn larger(&self) -> &T {
+        if self.first > self.second { &self.first } else { &self.second }
+    }
+}
+```
+
+Here `T` must implement both `Display` (for printing) and `PartialOrd` (for comparison). You can constrain methods further than the struct itself requires — a `Pair<T>` can exist for any `T`, but `larger` is only available when `T` is comparable.
+
+## Trait Bounds and `where` Clauses
+
+Inline bounds work well for one or two constraints. When a signature grows long, a `where` clause keeps it readable:
+
+```rust
+// Inline bounds
+fn notify<T: Clone + std::fmt::Debug>(item: T) { ... }
+
+// Equivalent where clause
+fn notify<T>(item: T)
+where
+    T: Clone + std::fmt::Debug,
+{ ... }
+```
+
+Both forms are identical to the compiler; choose whichever is clearer.
+
+## Multiple Type Parameters
+
+You are not limited to one parameter. A function can accept two or more:
+
+```rust
+fn zip_display<A: std::fmt::Display, B: std::fmt::Display>(a: A, b: B) {
+    println!("{} + {}", a, b);
+}
+```
+
+## Try It
+
+The playground demonstrates a generic `largest` function working on both integers and characters, plus a generic `Pair<T>` struct with a method constrained to comparable, displayable types.
+
+<Playground client:visible code={genericsCode} />
+
+<Quiz client:visible id="traits-generics/generics" questions={quizGenerics} />
+
+<ProgressTracker client:visible id="traits-generics/generics" />

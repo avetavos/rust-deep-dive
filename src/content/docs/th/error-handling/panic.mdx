@@ -1,0 +1,155 @@
+---
+title: 'Panics และ Unwrap'
+description: "panic! ยุติการทำงานสำหรับบั๊กที่ไม่สามารถกู้คืนได้ .unwrap() และ .expect() ทำให้เกิด panic เมื่อ Option หรือ Result ไม่มีค่า สงวน panic ไว้สำหรับข้อผิดพลาดการเขียนโปรแกรมที่แท้จริง"
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Panic คืออะไร?
+
+Panic คือวิธีที่ Rust บอกว่า "สถานการณ์นี้คือบั๊ก — ฉันไม่สามารถดำเนินการต่อได้อย่างปลอดภัย" เมื่อ panic เกิดขึ้น Rust จะคลายสแต็กการเรียก รัน destructor และยุติเธรดปัจจุบัน ในโปรแกรมแบบ single-thread หมายความว่าโปรเซสทั้งหมดจะออก
+
+คุณสามารถทริกเกอร์ panic อย่างชัดเจนด้วย macro `panic!`:
+
+```rust
+fn main() {
+    panic!("something went terribly wrong");
+}
+```
+
+หลายการดำเนินการมาตรฐานยัง panic โดยอัตโนมัติเมื่อใช้ไม่ถูกต้อง:
+
+```rust
+fn main() {
+    let v = vec![1, 2, 3];
+    println!("{}", v[10]); // index out of bounds — panic!
+}
+```
+
+```rust
+fn main() {
+    let x: Option<i32> = None;
+    let _ = x.unwrap(); // called unwrap() on a None value — panic!
+}
+```
+
+## `.unwrap()` และ `.expect()`
+
+`.unwrap()` บน `Option<T>` หรือ `Result<T, E>` ดึงค่าภายในหากเป็น `Some`/`Ok` และ**panic** หากเป็น `None`/`Err` เป็นทางลัดที่แลกความปลอดภัยกับความกระชับ
+
+`.expect(msg)` ทำสิ่งเดียวกัน แต่ให้คุณกำหนดข้อความอธิบายที่ปรากฏในผลลัพธ์ panic ทำให้การ debug ง่ายขึ้นมาก
+
+```rust
+fn main() {
+    let some_value: Option<i32> = Some(42);
+    let n = some_value.unwrap();          // fine — value is Some
+    println!("n = {}", n);
+
+    let parsed: Result<i32, _> = "99".parse();
+    let m = parsed.expect("input should always be a valid integer");
+    println!("m = {}", m);
+}
+```
+
+## เมื่อใดที่การ Panic เหมาะสม?
+
+Panic เหมาะสมเมื่อ:
+
+- สถานการณ์แสดงถึง**บั๊กในโค้ดของคุณ** ไม่ใช่ความล้มเหลวของผู้ใช้หรือสภาพแวดล้อม
+- คุณกำลังเขียน**การทดสอบหรือโปรโตไทป์** ที่การ crash อย่างรวดเร็วมีประโยชน์
+- คุณได้**ตรวจสอบ**เงื่อนไขเบื้องต้นไว้ที่อื่นแล้ว และค่าคงที่ไม่สามารถถูกละเมิดได้จริง
+
+Panic **ไม่เหมาะสม**เมื่อ:
+
+- ความล้มเหลวสามารถมาจากอินพุตภายนอก (ไฟล์ เครือข่าย ข้อมูลผู้ใช้)
+- ผู้เรียกอาจต้องการกู้คืนและลองสิ่งอื่น
+- คุณกำลังเขียนโค้ดไลบรารีที่โปรแกรมอื่นเรียกใช้
+
+## ค่าเริ่มต้นที่ปลอดภัยกว่าด้วย `.unwrap_or` และ `.unwrap_or_else`
+
+เมื่อคุณต้องการค่าสำรองแทนการ panic ให้ใช้ `.unwrap_or(default)` หรือ `.unwrap_or_else(|| compute_default())`
+
+export const panicCode = `fn safe_sqrt(n: f64) -> Result<f64, String> {
+    if n < 0.0 {
+        Err(format!("cannot take sqrt of negative number: {}", n))
+    } else {
+        Ok(n.sqrt())
+    }
+}
+
+fn main() {
+    // .unwrap_or provides a default instead of panicking
+    let a: Option<i32> = Some(42);
+    let b: Option<i32> = None;
+    println!("a unwrap_or: {}", a.unwrap_or(0));
+    println!("b unwrap_or: {}", b.unwrap_or(0));
+
+    // .expect gives a custom panic message (use only when failure is a bug)
+    let good = safe_sqrt(16.0).expect("sqrt should not fail on positive numbers");
+    println!("sqrt(16) = {}", good);
+
+    // .unwrap_or_else with a closure for recoverable defaults
+    let result = safe_sqrt(-4.0).unwrap_or_else(|e| {
+        println!("Handled: {}", e);
+        0.0
+    });
+    println!("result = {}", result);
+}`;
+
+<Playground client:visible code={panicCode} />
+
+<Callout title="สงวน panic ไว้สำหรับบั๊กที่ไม่สามารถกู้คืนได้">
+ใช้ `.unwrap()` และ `.expect()` เฉพาะเมื่อ `None` หรือ `Err` จะหมายความว่าโค้ดของคุณมีบั๊ก ไม่ใช่เมื่อความล้มเหลวเป็นส่วนปกติของการทำงานของโปรแกรม สำหรับความล้มเหลวใดๆ ที่มาจากอินพุตผู้ใช้หรือสถานะภายนอก ให้คืนค่า `Result` และปล่อยให้ผู้เรียกตัดสินใจว่าจะทำอะไร
+</Callout>
+
+export const quizPanic = [
+    {
+        q: "อะไรเกิดขึ้นเมื่อคุณเรียก .unwrap() บนค่า None?",
+        options: [
+            "โปรแกรมคืนค่า 0 โดยเงียบๆ",
+            "คอมไพเลอร์ปฏิเสธที่จะคอมไพล์โค้ด",
+            "โปรแกรม panic และยุติการทำงาน",
+            "ฟังก์ชันคืนค่า Err variant"
+        ],
+        answer: 2
+    },
+    {
+        q: "ความแตกต่างระหว่าง .unwrap() และ .expect(msg) คืออะไร?",
+        options: [
+            ".expect() ไม่เคย panic; .unwrap() panic เสมอ",
+            ".expect() ให้ข้อความที่กำหนดเองในผลลัพธ์ panic",
+            ".unwrap() ทำงานกับ Result เท่านั้น; .expect() ทำงานกับ Option เท่านั้น",
+            "ไม่มีความแตกต่าง — เป็นชื่อเรียกอื่น"
+        ],
+        answer: 1
+    },
+    {
+        q: "สถานการณ์ใดที่เป็นการใช้ panic! ที่ถูกต้อง?",
+        options: [
+            "ไฟล์ที่ผู้ใช้ขอไม่มีอยู่",
+            "การเชื่อมต่อเครือข่ายหมดเวลา",
+            "ค่าคงที่ภายในที่โค้ดรับประกันว่าไม่สามารถถูกละเมิดได้ แต่จริงๆ แล้วถูกละเมิด",
+            "JSON ที่ผู้ใช้ให้มาล้มเหลวในการแยกวิเคราะห์"
+        ],
+        answer: 2
+    },
+    {
+        q: ".unwrap_or(default) ทำอะไรเมื่อ Option เป็น None?",
+        options: [
+            "มัน panic ด้วย default เป็นข้อความ",
+            "มันคืนค่า default โดยไม่ panic",
+            "มันแปลง None เป็น Err",
+            "มันละเลย None และคืนค่า unit ()"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="error-handling/panic" questions={quizPanic} />
+
+<ProgressTracker client:visible id="error-handling/panic" />

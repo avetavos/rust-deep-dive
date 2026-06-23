@@ -1,0 +1,169 @@
+---
+title: 'The Option Type'
+description: "Rust has no null. Absence is modeled with Option<T> — either Some(value) or None."
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## No Null in Rust
+
+Many languages allow any variable to hold a "null" or "nil" value, leading to null-pointer exceptions at runtime. Rust takes a different approach: **there is no null**. When a value might be absent, you use `Option<T>` from the standard library.
+
+`Option<T>` is an enum defined as:
+
+```rust
+enum Option<T> {
+    Some(T),
+    None,
+}
+```
+
+`Some(value)` wraps a present value of type `T`. `None` represents the absence of a value. The compiler forces you to handle both cases before you can use the inner value — null-pointer bugs become compile-time errors.
+
+Because `Option<T>` is so common, `Some` and `None` are in scope everywhere without needing `Option::` prefix.
+
+## Handling `Option<T>` with `match`
+
+The most explicit way to handle an `Option<T>` is a `match` expression:
+
+```rust
+fn divide(a: f64, b: f64) -> Option<f64> {
+    if b == 0.0 { None } else { Some(a / b) }
+}
+
+match divide(10.0, 2.0) {
+    Some(result) => println!("Result: {}", result),
+    None         => println!("Cannot divide by zero"),
+}
+```
+
+The compiler rejects code that only handles `Some` without `None` — the match must be exhaustive.
+
+## `if let` for the Happy Path
+
+When you only care about the `Some` case, `if let` is cleaner:
+
+```rust
+if let Some(value) = divide(10.0, 2.0) {
+    println!("Got: {}", value);
+}
+```
+
+The body executes only when the value is `Some`. Add `else` to handle `None` if needed.
+
+## `unwrap_or` — Providing a Default
+
+`unwrap_or(default)` returns the inner value if `Some`, or the given default if `None`:
+
+```rust
+let maybe: Option<i32> = None;
+let value = maybe.unwrap_or(0); // 0
+```
+
+This is the safest form of "just give me a value or a fallback." Avoid plain `.unwrap()` in production code — it panics on `None`.
+
+## `map` — Transforming the Inner Value
+
+`map` applies a closure to the `Some` value and returns a new `Option<T>`. If the original is `None`, it passes `None` through unchanged:
+
+```rust
+let doubled = Some(5).map(|x| x * 2); // Some(10)
+let nothing: Option<i32> = None;
+let still_none = nothing.map(|x| x * 2); // None
+```
+
+`map` is essential for chaining transformations without unwrapping intermediate `Option<T>` values.
+
+<Callout title="Rust has no null">
+`Option<T>` makes the possibility of absence explicit in the type system. A value of type `i32` is always a valid integer — it can never be null. Only a value of type `Option<i32>` might be absent. This forces every caller to acknowledge and handle the absence case, eliminating an entire class of runtime crashes.
+</Callout>
+
+export const optionCode = `fn divide(a: f64, b: f64) -> Option<f64> {
+    if b == 0.0 { None } else { Some(a / b) }
+}
+
+fn find_first_even(nums: &[i32]) -> Option<i32> {
+    nums.iter().find(|&&x| x % 2 == 0).copied()
+}
+
+fn main() {
+    // match on Option
+    match divide(10.0, 3.0) {
+        Some(result) => println!("10 / 3 = {:.4}", result),
+        None         => println!("Cannot divide by zero"),
+    }
+
+    match divide(5.0, 0.0) {
+        Some(result) => println!("result = {}", result),
+        None         => println!("Cannot divide by zero"),
+    }
+
+    // if let
+    let numbers = vec![1, 3, 5, 8, 9];
+    if let Some(even) = find_first_even(&numbers) {
+        println!("First even: {}", even);
+    }
+
+    // unwrap_or
+    let missing: Option<i32> = None;
+    println!("Default: {}", missing.unwrap_or(0));
+
+    // map
+    let some_val: Option<i32> = Some(5);
+    let doubled = some_val.map(|x| x * 2);
+    println!("Doubled: {:?}", doubled);
+}`;
+
+<Playground client:visible code={optionCode} />
+
+export const quizOption = [
+    {
+        q: "What does Option<T> represent in Rust?",
+        options: [
+            'A value that might fail with an error.',
+            'A value that is either present (Some) or absent (None).',
+            'An optional function parameter with a default value.',
+            'A type alias for a nullable pointer.',
+        ],
+        answer: 1,
+    },
+    {
+        q: 'What does unwrap_or(default) do when called on None?',
+        options: [
+            'It panics with a message.',
+            'It returns the inner Some value.',
+            'It returns the provided default value.',
+            'It converts None to an empty string.',
+        ],
+        answer: 2,
+    },
+    {
+        q: 'What does map do when called on a None value?',
+        options: [
+            'It panics.',
+            'It calls the closure with a default value.',
+            'It returns None without calling the closure.',
+            'It converts None to Some(()).',
+        ],
+        answer: 2,
+    },
+    {
+        q: "Why does Rust use Option<T> instead of null?",
+        options: [
+            'Because null would slow down the compiler.',
+            'So the compiler can enforce handling of absent values, eliminating null-pointer crashes.',
+            'Because Option<T> uses less memory than a nullable pointer.',
+            'To remain compatible with C FFI.',
+        ],
+        answer: 1,
+    },
+];
+
+<Quiz client:visible id="structs-enums-matching/option" questions={quizOption} />
+
+<ProgressTracker client:visible id="structs-enums-matching/option" />

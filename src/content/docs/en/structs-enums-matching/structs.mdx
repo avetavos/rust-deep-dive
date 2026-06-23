@@ -1,0 +1,165 @@
+---
+title: 'Structs'
+description: 'Define named data types with struct, add methods with impl, and use tuple structs for lightweight wrappers.'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Defining Structs
+
+A struct groups related fields under a single named type. Each field has a name and a type.
+
+```rust
+struct Point {
+    x: f64,
+    y: f64,
+}
+```
+
+You create an instance by providing values for every field.
+
+```rust
+let p = Point { x: 3.0, y: 4.0 };
+```
+
+## Field Access
+
+Access fields with dot notation: `p.x`, `p.y`. Fields are private to the module by default; prefix them with `pub` to expose them.
+
+## Struct Update Syntax
+
+When you want a new instance that shares most fields with an existing one, use the `..` update syntax:
+
+```rust
+let p2 = Point { x: 10.0, ..p };
+```
+
+This copies the remaining fields (`y` in this case) from `p`. Note that fields implementing `Copy` are copied; fields that are `Move`-only are moved.
+
+## Methods
+
+Add behaviour to a struct in an `impl` block. Each method takes the receiver as its first parameter.
+
+<Callout title="Methods take self, &self, or &mut self">
+- `self` — the method takes ownership of the instance (consuming it).
+- `&self` — the method borrows the instance immutably; it can read fields but not change them.
+- `&mut self` — the method borrows the instance mutably; it can read and modify fields.
+
+Most methods use `&self` (read-only) or `&mut self` (read-write). Use `self` only when you intentionally want to consume the value, such as in a builder pattern.
+</Callout>
+
+```rust
+impl Point {
+    fn distance_from_origin(&self) -> f64 {
+        (self.x * self.x + self.y * self.y).sqrt()
+    }
+}
+```
+
+## Associated Functions (the `new` Pattern)
+
+Functions inside `impl` that do not take a `self` parameter are called *associated functions*. They are called with `::` syntax. The conventional name for a constructor is `new`:
+
+```rust
+impl Point {
+    fn new(x: f64, y: f64) -> Self {
+        Point { x, y }
+    }
+}
+
+let p = Point::new(1.0, 2.0);
+```
+
+`Self` inside an `impl` block is an alias for the type being implemented.
+
+## Tuple Structs
+
+Tuple structs give a name to an unnamed sequence of fields. They are useful as lightweight type-safe wrappers.
+
+```rust
+struct Color(u8, u8, u8);
+
+let red = Color(255, 0, 0);
+println!("{}", red.0); // access by index
+```
+
+Unlike a plain tuple, a `Color` and a `Point` with the same field types are distinct types — the compiler will reject mixing them up.
+
+export const structsCode = `#[derive(Debug)]
+struct Rectangle {
+    width: f64,
+    height: f64,
+}
+
+impl Rectangle {
+    fn new(width: f64, height: f64) -> Self {
+        Rectangle { width, height }
+    }
+
+    fn area(&self) -> f64 {
+        self.width * self.height
+    }
+
+    fn perimeter(&self) -> f64 {
+        2.0 * (self.width + self.height)
+    }
+
+    fn is_square(&self) -> bool {
+        self.width == self.height
+    }
+}
+
+struct Color(u8, u8, u8);
+
+fn main() {
+    let rect = Rectangle::new(5.0, 3.0);
+    println!("Rectangle: {:?}", rect);
+    println!("Area: {}", rect.area());
+    println!("Perimeter: {}", rect.perimeter());
+    println!("Is square: {}", rect.is_square());
+
+    let square = Rectangle::new(4.0, 4.0);
+    println!("Is square: {}", square.is_square());
+
+    let red = Color(255, 0, 0);
+    println!("Red: ({}, {}, {})", red.0, red.1, red.2);
+}`;
+
+<Playground client:visible code={structsCode} />
+
+export const structsQuiz = [
+    {
+        q: 'Which receiver type should you use for a method that only needs to read struct fields?',
+        options: ['self', '&self', '&mut self', 'Self'],
+        answer: 1,
+    },
+    {
+        q: 'How do you call an associated function named new on a struct called Rectangle?',
+        options: [
+            'Rectangle.new()',
+            'Rectangle->new()',
+            'Rectangle::new()',
+            'new Rectangle()',
+        ],
+        answer: 2,
+    },
+    {
+        q: 'What distinguishes a tuple struct from a plain tuple?',
+        options: [
+            'Tuple structs can only hold primitive types.',
+            'Tuple structs are always public.',
+            'A tuple struct is a distinct named type, so two tuple structs with the same field types are not interchangeable.',
+            'Tuple structs cannot derive Debug.',
+        ],
+        answer: 2,
+    },
+];
+
+<Quiz client:visible id="structs-enums-matching/structs" questions={structsQuiz} />
+
+<ProgressTracker client:visible id="structs-enums-matching/structs" />

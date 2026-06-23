@@ -1,0 +1,122 @@
+---
+title: 'Collections & Iterators'
+description: 'An overview of Rust standard-library collections and the iterator system — the two pillars that make data manipulation expressive and safe.'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What This Module Covers
+
+Rust ships with a powerful set of standard-library collections and a lazy, zero-cost iterator system. Together they let you store, transform, and consume data without manual loops or unnecessary allocations.
+
+This module walks through five focused lessons:
+
+| Lesson | Topic |
+|--------|-------|
+| `Vec<T>` & `String` | Growable sequences and owned text |
+| `HashMap<K, V>` | Key-value lookup with the entry API |
+| Iterators | Lazy chains: `map`, `filter`, `collect`, `fold` |
+| Closures | Capturing environments; `Fn` / `FnMut` / `FnOnce` |
+
+## The Four Core Collections
+
+Rust's most-used collections and when to reach for each:
+
+- **`Vec<T>`** — ordered, contiguous heap array. Use when you need indexed access or a growable list.
+- **`String`** — owned, UTF-8 text. Use when you need to build or mutate text at runtime.
+- **`HashMap<K, V>`** — hash table mapping keys to values. Use for fast lookup by key.
+- **`HashSet<T>`** — set of unique values. Use when membership testing is all you need.
+
+## The Iterator System
+
+Every Rust collection exposes an iterator. Iterators are **lazy** — no work happens until a *consumer* (like `collect`, `sum`, or `for`) pulls values through the chain.
+
+```rust
+let v = vec![1, 2, 3, 4, 5];
+
+// Nothing executes yet — adaptor chain is just a description
+let chain = v.iter().filter(|&&x| x % 2 == 0).map(|&x| x * 10);
+
+// Consumer drives the chain
+let result: Vec<i32> = chain.collect();
+```
+
+export const collectionsOverviewCode = `use std::collections::HashMap;
+use std::collections::HashSet;
+
+fn main() {
+    // Vec<i32>
+    let mut v: Vec<i32> = vec![1, 2, 3];
+    v.push(4);
+    println!("Vec: {:?}", v);
+
+    // String
+    let mut s = String::from("Hello");
+    s.push_str(", Rust!");
+    println!("String: {}", s);
+
+    // HashMap<&str, i32> — sort keys for deterministic output
+    let mut map = HashMap::new();
+    map.insert("one", 1);
+    map.insert("two", 2);
+    map.insert("three", 3);
+    let mut keys: Vec<&str> = map.keys().cloned().collect();
+    keys.sort();
+    for k in &keys {
+        println!("{}: {}", k, map[k]);
+    }
+
+    // HashSet<i32>
+    let set: HashSet<i32> = vec![1, 2, 3, 2, 1].into_iter().collect();
+    let mut items: Vec<i32> = set.into_iter().collect();
+    items.sort();
+    println!("Set: {:?}", items);
+}`;
+
+<Playground client:visible code={collectionsOverviewCode} />
+
+<Callout title="Collections live on the heap; iterators are free">
+All standard collections allocate on the heap and manage their own memory. Iterator adaptors like `map` and `filter` compile down to the same machine code as hand-written loops — there is no runtime overhead for chaining them.
+</Callout>
+
+export const quizCollectionsIndex = [
+    {
+        q: "Which collection would you choose for fast lookup by a String key?",
+        options: [
+            "Vec<T>",
+            "HashMap<K, V>",
+            "HashSet<T>",
+            "String"
+        ],
+        answer: 1
+    },
+    {
+        q: "When does an iterator adaptor (like map or filter) actually execute its work?",
+        options: [
+            "Immediately when the adaptor method is called",
+            "Only when a consumer such as collect or sum drives the chain",
+            "When the iterator goes out of scope",
+            "When the program exits"
+        ],
+        answer: 1
+    },
+    {
+        q: "What is the idiomatic way to iterate a HashMap and get deterministic output order?",
+        options: [
+            "HashMap guarantees insertion order, so no sorting is needed",
+            "Collect the keys into a Vec, sort it, then iterate over the sorted keys",
+            "Use iter_mut() instead of iter()",
+            "Pass a comparator to HashMap::new()"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="collections-iterators/index" questions={quizCollectionsIndex} />
+
+<ProgressTracker client:visible id="collections-iterators/index" />

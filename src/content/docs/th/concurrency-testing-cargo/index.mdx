@@ -1,0 +1,95 @@
+---
+title: 'Concurrency, Testing & Cargo'
+description: 'ภาพรวมของการทำงานพร้อมกันแบบ fearless ด้วย threads และ channels, การเขียนโปรแกรม async ด้วย tokio, การทดสอบด้วย cargo test และระบบ build ของ Cargo'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Fearless Concurrency — สิ่งที่จะได้เรียนในโมดูลนี้
+
+หนึ่งในข้อเรียกร้องที่กล้าหาญที่สุดของ Rust คือ **fearless concurrency** (การทำงานพร้อมกันอย่างไม่หวั่นเกรง): การเขียนโปรแกรมแบบหลาย-thread โดยไม่มี data race ที่รบกวน C, C++ หรือแม้แต่ Java คอมไพเลอร์บังคับใช้กฎ ownership เดิมที่ขอบเขตของ thread เปลี่ยนบั๊กทั้งคลาสให้เป็น compile-time error แทนที่จะเป็น runtime failure ที่หาได้ยาก
+
+โมดูลนี้สำรวจสี่เสาหลักของ Rust ในการใช้งานจริง:
+
+| บทเรียน | หัวข้อ | รันได้ |
+|--------|-------|---------|
+| Threads | `std::thread`, `Arc<Mutex<T>>`, การ join handle | ได้ — Playground ในเบราว์เซอร์ |
+| Channels | `std::sync::mpsc`, send/receive, การส่งต่อ ownership | ได้ — Playground ในเบราว์เซอร์ |
+| Async Intro | `async`/`.await`, futures, tokio runtime | เฉพาะ Cargo project เท่านั้น |
+| Cargo & Tests | `cargo new`, `#[test]`, `cargo test` | เฉพาะ Cargo project เท่านั้น |
+
+### สองโมเดลของ Concurrency
+
+standard library ของ Rust มี **OS threads** ผ่าน `std::thread` แต่ละ thread คือ thread ระดับ OS จริง ๆ ที่มี stack ของตัวเอง สถานะที่แชร์กันระหว่าง thread ถูกป้องกันด้วย `Arc<Mutex<T>>` — คอมไพเลอร์จะไม่ยอมให้คุณส่งประเภทที่ไม่ใช่ `Send` ข้ามขอบเขต thread
+
+สำหรับ **workload ที่ผูกติดกับ I/O** — network server, การดำเนินการกับไฟล์, งานที่เกิดขึ้นพร้อมกันจำนวนมาก — โมเดล `async`/`.await` มีประสิทธิภาพมากกว่า โดยใช้ event loop แบบ single-threaded หรือ multi-threaded (โดยทั่วไปคือ `tokio`) เพื่อกำหนดเวลาของงานนับพัน ๆ งานโดยไม่มีค่าใช้จ่ายของ OS thread ต่องาน
+
+### ทำไม Concurrency ใน Rust จึงแตกต่าง
+
+ในภาษาส่วนใหญ่ data race คือปัญหา runtime คุณเขียนโค้ด รันมัน และบางครั้งมันก็ crash หรือส่งคืนผลลัพธ์ที่ผิดเมื่อมีการโหลดสูง ใน Rust:
+
+- ประเภทที่เป็น `Send` หมายความว่าปลอดภัยที่จะย้ายไปยัง thread อื่น
+- ประเภทที่เป็น `Sync` หมายความว่าปลอดภัยที่จะแชร์ reference ข้าม thread
+- คอมไพเลอร์ปฏิเสธโค้ดที่ละเมิดสัญญาเหล่านี้ — ไม่ต้องการ sanitizer หรือ runtime check
+
+### ตัวอย่างสั้น ๆ
+
+นี่คือโปรแกรม Rust แบบ concurrent ที่เล็กที่สุดที่มีความหมาย — spawn thread รอ แล้วทำงานต่อใน main
+
+export const indexCode = `use std::thread;
+
+fn main() {
+    let handle = thread::spawn(|| {
+        println!("Hello from a spawned thread!");
+    });
+    handle.join().unwrap();
+    println!("Main thread done.");
+}`;
+
+<Playground client:visible code={indexCode} />
+
+<Callout title="กฎ Ownership ใช้บังคับที่ขอบเขตของ Thread">
+trait ของ `Send` และ `Sync` เป็นกลไกเบื้องหลัง fearless concurrency `Send` หมายความว่าค่าสามารถย้ายไปยัง thread อื่นได้ `Sync` หมายความว่า shared reference ไปยังค่าสามารถส่งได้ ประเภทอย่าง `Rc<T>` และ raw pointer ไม่ใช่ทั้งคู่ ดังนั้นคอมไพเลอร์จะหยุดคุณไม่ให้แชร์พวกมันข้าม thread
+</Callout>
+
+export const quizIndex = [
+    {
+        q: "การที่ประเภทหนึ่งเป็น Send ใน Rust หมายความว่าอะไร?",
+        options: [
+            "มันสามารถ serialize เป็น JSON ได้",
+            "มันสามารถย้ายไปยัง thread อื่นได้อย่างปลอดภัย",
+            "มันสามารถแชร์ผ่าน network socket ได้",
+            "มันสามารถ copy ได้โดยไม่ต้อง clone"
+        ],
+        answer: 1
+    },
+    {
+        q: "ประเภทใดใน standard library ที่ใช้แชร์ mutable state ระหว่าง thread อย่างปลอดภัย?",
+        options: [
+            "Rc<RefCell<T>>",
+            "Box<T>",
+            "Arc<Mutex<T>>",
+            "Cell<T>"
+        ],
+        answer: 2
+    },
+    {
+        q: "ควรใช้ async/await แทน OS thread เมื่อใด?",
+        options: [
+            "สำหรับการคำนวณ CPU อย่างเข้มข้น",
+            "สำหรับงานที่ผูกกับ I/O ที่มีการดำเนินการพร้อมกันจำนวนมากและน้ำหนักเบา",
+            "เมื่อต้องการ thread มากกว่า 8 ตัว",
+            "async/await ช้ากว่า thread เสมอ"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="concurrency-testing-cargo/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="concurrency-testing-cargo/index" />

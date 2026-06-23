@@ -1,0 +1,193 @@
+---
+title: 'Pattern Matching'
+description: 'match expression ต้องครอบคลุมทุกกรณี และสามารถ destructure variant ของ enum พร้อมดึงข้อมูลและใช้ guard ได้'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## `match` Expression
+
+`match` เปรียบเทียบค่ากับชุด **pattern** และ execute arm ที่ pattern ตรงกัน ต่างจาก `switch` ใน C, `match` ของ Rust เป็น expression — มันสร้างค่า — และคอมไพเลอร์ตรวจสอบความครบถ้วน
+
+```rust
+let x: i32 = 3;
+let description = match x {
+    1 => "one",
+    2 => "two",
+    3 => "three",
+    _ => "something else",
+};
+println!("{}", description); // three
+```
+
+Pattern `_` จับคู่กับค่าใดก็ตามที่คุณยังไม่ได้ระบุ หากไม่มี (และไม่ครอบคลุมทุกกรณี) โค้ดจะไม่ compile
+
+## การจับคู่ Enum Variant และการ Bind ข้อมูล
+
+พลังที่แท้จริงของ `match` มาจากการ destructure enum variant และ bind ข้อมูลของมันกับชื่อ local:
+
+```rust
+enum Coin {
+    Penny,
+    Quarter(String),
+}
+
+match coin {
+    Coin::Penny           => println!("Penny"),
+    Coin::Quarter(state)  => println!("Quarter from {}", state),
+}
+```
+
+ตัวระบุ `state` ใน `Coin::Quarter(state)` คือ binding — มันรับค่า `String` ที่ variant นั้นพกมา คุณสามารถใช้มันได้อย่างอิสระในส่วนของ arm
+
+### Range Patterns
+
+Pattern สามารถจับคู่ช่วงของจำนวนเต็มด้วย `..=`:
+
+```rust
+match score {
+    90..=100 => "A",
+    80..=89  => "B",
+    _        => "C or below",
+}
+```
+
+## Wildcard `_`
+
+`_` เป็น catch-all ที่จับคู่กับทุกอย่างโดยไม่ bind วางไว้ท้ายสุด arm ใดๆ หลัง `_` จะ unreachable และคอมไพเลอร์จะเตือน
+
+## `if let` — การจับคู่ Variant เดียว
+
+เมื่อคุณสนใจแค่ variant เดียว `if let` กระชับกว่า `match` แบบเต็ม:
+
+```rust
+let temperature = Some(22);
+if let Some(t) = temperature {
+    println!("Temperature: {}C", t);
+}
+```
+
+นี่ bind `t` กับค่าภายในหาก pattern ตรงกัน และไม่ทำอะไรกับ `None` คุณสามารถต่อ `else` สำหรับกรณีที่ไม่ตรง
+
+## Match Guards
+
+**Guard** คือเงื่อนไข `if` พิเศษบน match arm ที่จำกัดค่าที่ arm จะรับ:
+
+```rust
+match number {
+    n if n < 0 => println!("negative: {}", n),
+    0          => println!("zero"),
+    n          => println!("positive: {}", n),
+}
+```
+
+Guard ทำงานหลังจาก structural pattern ตรงกันแล้ว ดังนั้น binding (`n`) จึงใช้ได้ภายในเงื่อนไข guard
+
+<Callout title="match ต้องครอบคลุมทุกกรณี">
+Rust กำหนดให้ `match` expression ครอบคลุมทุกค่าที่เป็นไปได้ของประเภทที่จับคู่ หากคุณพลาดกรณีใด คอมไพเลอร์จะส่ง error — ไม่ใช่แค่ warning Pattern `_` เป็นวิธีมาตรฐานในการครอบคลุมกรณีที่เหลือ การรับประกันนี้หมายความว่า `match` บน enum จะไม่มีวันเงียบๆ ข้าม variant ใหม่ที่เพิ่มเข้ามาทีหลัง
+</Callout>
+
+export const patternMatchingCode = `#[derive(Debug)]
+enum Coin {
+    Penny,
+    Nickel,
+    Dime,
+    Quarter(String),
+}
+
+fn value_in_cents(coin: &Coin) -> u32 {
+    match coin {
+        Coin::Penny           => 1,
+        Coin::Nickel          => 5,
+        Coin::Dime            => 10,
+        Coin::Quarter(state)  => {
+            println!("Quarter from {}!", state);
+            25
+        }
+    }
+}
+
+fn describe_number(n: i32) -> &'static str {
+    match n {
+        0          => "zero",
+        1..=9      => "single digit",
+        10..=99    => "double digit",
+        _          => "large",
+    }
+}
+
+fn main() {
+    let coins = vec![
+        Coin::Penny,
+        Coin::Nickel,
+        Coin::Quarter(String::from("Alaska")),
+        Coin::Dime,
+    ];
+
+    for coin in &coins {
+        println!("{:?} = {} cents", coin, value_in_cents(coin));
+    }
+
+    for n in [0, 7, 42, 100] {
+        println!("{} is {}", n, describe_number(n));
+    }
+
+    let temperature = Some(22);
+    if let Some(t) = temperature {
+        println!("Temperature: {}C", t);
+    }
+}`;
+
+<Playground client:visible code={patternMatchingCode} />
+
+export const quizPatternMatching = [
+    {
+        q: 'จะเกิดอะไรขึ้นหาก match expression ไม่ครอบคลุมค่าที่เป็นไปได้ทั้งหมดของประเภทที่จับคู่?',
+        options: [
+            'compile สำเร็จพร้อม warning และข้ามกรณีที่ไม่ตรงใน runtime',
+            'โปรแกรม panic ใน runtime เมื่อพบค่าที่ไม่ตรง',
+            'คอมไพเลอร์ส่ง error และปฏิเสธการ compile',
+            'arm สุดท้ายถูกใช้เป็น fallback อัตโนมัติ',
+        ],
+        answer: 2,
+    },
+    {
+        q: 'pattern _ ใน match arm ทำอะไร?',
+        options: [
+            'จับคู่เฉพาะ variant None ของ Option เท่านั้น',
+            'จับคู่กับค่าใดก็ได้โดยไม่ bind มัน',
+            'break ออกจาก match expression',
+            'เป็น syntax error',
+        ],
+        answer: 1,
+    },
+    {
+        q: 'ควรใช้ if let แทน match แบบเต็มเมื่อใด?',
+        options: [
+            'เสมอ — if let เร็วกว่า match',
+            'เมื่อคุณสนใจแค่ pattern เดียวและต้องการละเลยส่วนที่เหลือ',
+            'เมื่อประเภทที่จับคู่มีมากกว่าสี่ variant',
+            'เมื่อค่าที่จับคู่เป็น reference',
+        ],
+        answer: 1,
+    },
+    {
+        q: 'match guard คืออะไร?',
+        options: [
+            'trait ที่ต้อง implement เพื่อใช้ match',
+            'เงื่อนไข if พิเศษบน match arm ที่กรองค่าที่ตรงกันเพิ่มเติม',
+            'pattern wildcard _ ที่ท้าย match',
+            'การตรวจสอบ compile-time ว่า match ครบถ้วน',
+        ],
+        answer: 1,
+    },
+];
+
+<Quiz client:visible id="structs-enums-matching/pattern-matching" questions={quizPatternMatching} />
+
+<ProgressTracker client:visible id="structs-enums-matching/pattern-matching" />

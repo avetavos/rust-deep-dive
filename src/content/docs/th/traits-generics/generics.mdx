@@ -1,0 +1,162 @@
+---
+title: 'Generics'
+description: 'เขียน code ที่รองรับหลาย type ด้วย zero runtime cost ผ่าน monomorphization'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+export const genericsCode = `fn largest<T: PartialOrd>(list: &[T]) -> &T {
+    let mut biggest = &list[0];
+    for item in list {
+        if item > biggest {
+            biggest = item;
+        }
+    }
+    biggest
+}
+
+struct Pair<T> {
+    first: T,
+    second: T,
+}
+
+impl<T: std::fmt::Display + PartialOrd> Pair<T> {
+    fn new(first: T, second: T) -> Self {
+        Self { first, second }
+    }
+
+    fn larger(&self) -> &T {
+        if self.first > self.second {
+            &self.first
+        } else {
+            &self.second
+        }
+    }
+}
+
+fn main() {
+    let numbers = vec![34, 50, 25, 100, 65];
+    println!("largest number: {}", largest(&numbers));
+
+    let chars = vec!['y', 'm', 'a', 'q'];
+    println!("largest char: {}", largest(&chars));
+
+    let p = Pair::new(5, 10);
+    println!("larger of pair: {}", p.larger());
+}`;
+
+export const quizGenerics = [
+    {
+        q: "`T: PartialOrd` ใน `fn largest<T: PartialOrd>(...)` หมายความว่าอะไร?",
+        options: [
+            "`T` ต้องเป็น primitive numeric type",
+            "`T` ต้อง implement trait `PartialOrd` ซึ่งหมายความว่ารองรับ comparison operator",
+            "`T` เป็น subtype ของ `PartialOrd`",
+            "`T` จะถูกแปลงเป็น `PartialOrd` โดยอัตโนมัติ ณ runtime",
+        ],
+        answer: 1,
+    },
+    {
+        q: "monomorphization คืออะไร?",
+        options: [
+            "กระบวนการ runtime ที่เลือก function version ที่ถูกต้องเมื่อโปรแกรมทำงาน",
+            "เทคนิคของ compiler ที่สร้าง copy เฉพาะของ generic function สำหรับแต่ละ concrete type ที่ใช้",
+            "วิธีแปลง trait เป็น struct ณ compile time",
+            "การ optimize memory ที่รวม heap allocation ที่ซ้ำกัน",
+        ],
+        answer: 1,
+    },
+    {
+        q: "จะประกาศ generic struct `Stack` ที่เก็บ element ของ type `T` อย่างไร?",
+        options: [
+            "`struct Stack { data: T }`",
+            "`struct Stack[T] { data: Vec<T> }`",
+            "`struct Stack<T> { data: Vec<T> }`",
+            "`generic struct Stack(T) { data: Vec<T> }`",
+        ],
+        answer: 2,
+    },
+    {
+        q: "จุดประสงค์ของ `where` clause ใน generic function คืออะไร?",
+        options: [
+            "กรองค่าที่ส่งเข้า function ณ runtime",
+            "ระบุ trait bound ในรูปแบบที่อ่านง่ายขึ้นเมื่อมี constraint หลายอย่าง",
+            "จำกัด function ให้ทำงานได้เฉพาะใน module",
+            "เพิ่ม lifetime annotation ให้ generic parameter",
+        ],
+        answer: 1,
+    },
+];
+
+## Generic Functions
+
+ลองนึกภาพว่าคุณต้องหาค่าที่ใหญ่ที่สุดใน slice สำหรับ integer คุณเขียน `largest_i32` สำหรับ char คุณเขียน `largest_char` — body เหมือนกันทุกอย่างแต่ต่าง type Generics แก้ปัญหานี้โดยให้คุณใช้ **type parameter** แทน concrete type:
+
+```rust
+fn largest<T: PartialOrd>(list: &[T]) -> &T {
+    // ...
+}
+```
+
+ตัว `<T: PartialOrd>` อ่านว่า "สำหรับ type ใดก็ตาม `T` ที่ implement `PartialOrd`" Trait bound `PartialOrd` บอก compiler ว่า `T` รองรับการเปรียบเทียบด้วย `>`
+
+<Callout title="Generics ถูก monomorphize — zero runtime cost">
+เมื่อคุณเรียก `largest(&numbers)` โดยที่ `numbers` เป็น `Vec<i32>` compiler จะสร้าง version เฉพาะของ function สำหรับ `i32` ไม่มี overhead ณ runtime ไม่มีการตรวจสอบ type ขณะรัน — ทุกอย่างเกิดขึ้น ณ compile time
+</Callout>
+
+## Generic Structs
+
+คุณสามารถทำให้ struct เป็น generic ได้เช่นกัน ทำให้ field ทำงานกับ type ใดก็ได้:
+
+```rust
+struct Pair<T> {
+    first: T,
+    second: T,
+}
+```
+
+`Pair<i32>` เก็บ integer สองอัน `Pair<String>` เก็บ String สองอัน เป็นต้น
+
+## Trait Bounds บน impl Blocks
+
+เมื่อคุณต้องการ implement method สำหรับ generic struct ด้วย constraint บางอย่าง:
+
+```rust
+impl<T: std::fmt::Display + PartialOrd> Pair<T> {
+    fn larger(&self) -> &T {
+        if self.first > self.second { &self.first } else { &self.second }
+    }
+}
+```
+
+`T: Display + PartialOrd` บอกว่า method `larger` มีให้เฉพาะ `Pair<T>` ที่ `T` รองรับทั้ง formatting และการเปรียบเทียบ
+
+## Where Clauses
+
+เมื่อ trait bound ยาวหรือซับซ้อน คุณสามารถย้ายไปไว้ใน `where` clause เพื่อให้อ่านง่ายขึ้น:
+
+```rust
+fn notify<T>(item: &T)
+where
+    T: std::fmt::Display + Clone,
+{
+    println!("{}", item);
+}
+```
+
+ทั้งสอง syntax ทำงานเหมือนกันทุกประการ — `where` เป็นแค่ทางเลือกที่อ่านง่ายกว่าสำหรับ bound ที่ซับซ้อน
+
+## ลองเล่น
+
+Playground ด้านล่างแสดง `largest` function แบบ generic, struct `Pair<T>` และ method ที่มี compound trait bound
+
+<Playground client:visible code={genericsCode} />
+
+<Quiz client:visible id="traits-generics/generics" questions={quizGenerics} />
+
+<ProgressTracker client:visible id="traits-generics/generics" />

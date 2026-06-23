@@ -1,0 +1,170 @@
+---
+title: 'Data Types'
+description: 'Rust เป็น statically typed: ทุกค่ามี type ที่คอมไพเลอร์รู้จักตั้งแต่ compile time Scalar types ครอบคลุม integer, float, boolean และ char ส่วน compound types ได้แก่ tuple และ array'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Scalar Types
+
+**Scalar** type แทนค่าเดียว Rust มี scalar type หลักสี่ประเภท
+
+### Integers
+
+Integer type ฝัง signedness และขนาดบิตไว้ในชื่อ
+
+| Signed | Unsigned | ขนาด |
+|---|---|---|
+| `i8` | `u8` | 8-bit |
+| `i16` | `u16` | 16-bit |
+| `i32` | `u32` | 32-bit (ค่าเริ่มต้น) |
+| `i64` | `u64` | 64-bit |
+| `i128` | `u128` | 128-bit |
+| `isize` | `usize` | ขนาด pointer |
+
+Integer type เริ่มต้นคือ `i32` ใช้ `usize` สำหรับ index เข้าถึง array และ slice
+
+### Floating-Point Numbers
+
+Rust มี `f32` (single precision) และ `f64` (double precision เป็นค่าเริ่มต้น) ควรใช้ `f64` เสมอ เว้นแต่จะมีเหตุผลเฉพาะด้านหน่วยความจำหรือ precision ให้ใช้ `f32`
+
+### Booleans และ Characters
+
+`bool` มีค่าเป็น `true` หรือ `false` `char` แทน Unicode scalar value เดียวและมีขนาด **สี่ byte** — รองรับ emoji, ตัวอักษร CJK และ Unicode codepoint อื่นๆ ทั้งหมด
+
+```rust
+fn main() {
+    let flag: bool = true;
+    let letter: char = 'R';
+    let emoji: char = '\u{1F980}'; // crab emoji
+    println!("flag={}, letter={}, emoji={}", flag, letter, emoji);
+}
+```
+
+## Compound Types
+
+### Tuples
+
+**Tuple** จัดกลุ่มค่าที่อาจมี type ต่างกันเข้าเป็นค่าเดียว มีความยาวคงที่ เข้าถึงแต่ละ element ด้วย dot notation และ index ที่นับจาก 0
+
+```rust
+fn main() {
+    let point: (i32, f64, bool) = (1, 2.5, false);
+    println!("{} {} {}", point.0, point.1, point.2);
+
+    // Destructuring tuple
+    let (a, b, c) = point;
+    println!("a={}, b={}, c={}", a, b, c);
+}
+```
+
+### Arrays
+
+**Array** เก็บค่าจำนวนคงที่ที่มี **type เดียวกัน** annotation ของ type คือ `[T; N]` โดย `T` คือ element type และ `N` คือความยาว ทั้งสองรู้ที่ compile time ใช้ slice (`&[T]`) เมื่อต้องการ view ที่มีขนาดแบบ dynamic
+
+```rust
+fn main() {
+    let arr: [i32; 4] = [10, 20, 30, 40];
+    println!("first={}, last={}, len={}", arr[0], arr[3], arr.len());
+
+    // Repeat initializer: [value; count]
+    let zeros = [0_i32; 5];
+    println!("zeros len = {}", zeros.len());
+}
+```
+
+## Type Inference
+
+ระบบ type ของ Rust เป็น **static** — ทุกค่ามี type ที่รู้ที่ compile time — แต่คุณแทบไม่ต้องเขียนมันออกมา คอมไพเลอร์อนุมาน type จาก context คุณต้องใส่ annotation เมื่อการอนุมานมีความคลุมเครือเท่านั้น
+
+```rust
+fn main() {
+    let n = 42;         // อนุมานเป็น i32
+    let f = 1.5;        // อนุมานเป็น f64
+    let s = "hello";    // อนุมานเป็น &str
+
+    // Suffix syntax บังคับให้ใช้ numeric type เฉพาะ
+    let byte = 255_u8;
+    println!("{} {} {} {}", n, f, s, byte);
+}
+```
+
+export const dataTypesCode = `fn main() {
+    // Scalar types
+    let n: i32 = -42;
+    let f: f64 = 3.14;
+    let b: bool = true;
+    let c: char = 'R';
+
+    println!("i32: {}, f64: {}, bool: {}, char: {}", n, f, b, c);
+
+    // Tuple: fixed-length, mixed types
+    let tup: (i32, f64, bool) = (1, 2.5, false);
+    println!("tuple.0 = {}, tuple.1 = {}, tuple.2 = {}", tup.0, tup.1, tup.2);
+
+    // Array: fixed-length, same type
+    let arr: [i32; 4] = [10, 20, 30, 40];
+    println!("arr[0] = {}, arr[3] = {}, len = {}", arr[0], arr[3], arr.len());
+
+    // Type inference
+    let inferred = 99_u8;
+    println!("inferred u8: {}", inferred);
+}`;
+
+<Playground client:visible code={dataTypesCode} />
+
+<Callout title="Rust เป็น statically typed แต่อนุมาน type ส่วนใหญ่ได้เอง">
+คุณได้รับความปลอดภัยของภาษาที่ typed อย่างสมบูรณ์โดยไม่ต้องเขียน annotation ทุกตัวแปร คอมไพเลอร์อนุมาน type จาก context ใส่ annotation เมื่อการอนุมานมีความคลุมเครือ หรือเพื่อทำให้ intent ชัดเจนสำหรับผู้อ่านในอนาคต
+</Callout>
+
+export const quizDataTypes = [
+    {
+        q: "เมื่อเขียน let x = 42 integer type เริ่มต้นคืออะไร?",
+        options: [
+            "u32",
+            "i64",
+            "i32",
+            "usize"
+        ],
+        answer: 2
+    },
+    {
+        q: "ค่า char ใน Rust มีขนาดเท่าไร?",
+        options: [
+            "1 byte (ASCII เท่านั้น)",
+            "2 byte (UTF-16)",
+            "4 byte (Unicode scalar value)",
+            "ขนาดแปรผันตาม character"
+        ],
+        answer: 2
+    },
+    {
+        q: "annotation ใดอธิบาย array ของค่า i32 จำนวนห้าค่า?",
+        options: [
+            "[i32]",
+            "Vec[i32; 5]",
+            "[i32; 5]",
+            "(i32, i32, i32, i32, i32)"
+        ],
+        answer: 2
+    },
+    {
+        q: "suffix ใน 255_u8 บอกอะไรแก่คอมไพเลอร์?",
+        options: [
+            "ค่าควรเก็บบน heap",
+            "integer literal นี้ควรถือเป็น unsigned 8-bit integer",
+            "ค่านี้เป็น floating-point number",
+            "ตัวแปรนี้ mutable"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="basics/data-types" questions={quizDataTypes} />
+
+<ProgressTracker client:visible id="basics/data-types" />

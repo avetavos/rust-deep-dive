@@ -1,0 +1,146 @@
+---
+title: 'Variables & Mutability'
+description: 'ใน Rust ตัวแปรจะ immutable โดยค่าเริ่มต้น ใช้ mut เพื่อเปิดใช้การเปลี่ยนค่า, const สำหรับค่าคงที่ที่ compile time และ shadowing สำหรับการผูกชื่อเดิมกับค่าใหม่'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ตัวแปร Immutable โดยค่าเริ่มต้น
+
+เมื่อประกาศตัวแปรด้วย `let` ตัวแปรนั้นจะ **immutable** — คุณไม่สามารถกำหนดค่าให้มันอีกครั้ง นี่ไม่ใช่ข้อจำกัด แต่คือคุณสมบัติที่ตั้งใจออกแบบมา ความ immutable โดยค่าเริ่มต้นช่วยให้คอมไพเลอร์ตรวจจับการเปลี่ยนแปลงที่ไม่ได้ตั้งใจและวิเคราะห์โค้ดได้แม่นยำกว่า
+
+```rust
+fn main() {
+    let x = 5;
+    // x = 6; // error[E0384]: cannot assign twice to immutable variable `x`
+    println!("x = {}", x);
+}
+```
+
+เพื่ออนุญาตให้เปลี่ยนค่าได้ ให้เพิ่ม `mut` หลัง `let`:
+
+```rust
+fn main() {
+    let mut y = 10;
+    y = 20;  // อนุญาตเพราะ y เป็น mut
+    println!("y = {}", y);
+}
+```
+
+### Shadowing
+
+Shadowing แตกต่างจาก mutation คุณ **ประกาศใหม่** ตัวแปรที่มีชื่อเดิมด้วย `let` binding ใหม่ binding ใหม่จะ **บดบัง** ของเดิมตลอด scope ที่เหลือ คุณแม้แต่เปลี่ยน type ได้เมื่อ shadow
+
+```rust
+fn main() {
+    let z = 3;
+    let z = z * 2;   // shadow z ตัวก่อนหน้า
+    let z = z + 1;   // shadow อีกครั้ง
+    println!("z = {}", z); // 7
+
+    // Shadowing เปลี่ยน type ได้
+    let word = "hello";
+    let word = word.len(); // shadow ด้วย usize
+    println!("len = {}", word);
+}
+```
+
+Shadowing ไม่เหมือน `mut` ด้วย `mut` คุณกำหนดค่าใหม่ให้ตัวแปรเดิม ด้วย shadowing คุณสร้างตัวแปรใหม่ที่มีชื่อเดียวกัน เมื่อ scope สิ้นสุด binding ด้านนอกจะกลับมามองเห็นได้อีกครั้ง
+
+### Constants
+
+`const` ประกาศ **ค่าคงที่ที่ compile time** ต่างจาก `let` constants จะ:
+
+- **ต้องการ** annotation ของ type อย่างชัดเจน
+- ต้องกำหนดเป็น constant expression (ไม่ใช่ค่า runtime)
+- มีอายุตลอด scope ที่มันถูกประกาศ
+- ใช้ `SCREAMING_SNAKE_CASE` ตามธรรมเนียม
+
+```rust
+const MAX_POINTS: u32 = 100_000;
+const GRAVITY: f64 = 9.81;
+
+fn main() {
+    println!("MAX_POINTS = {}", MAX_POINTS);
+    println!("GRAVITY = {}", GRAVITY);
+}
+```
+
+เครื่องหมาย underscore ใน `100_000` คือ **ตัวคั่นตัวเลข** (numeric separator) เป็นเพียงการแสดงผลและคอมไพเลอร์จะเพิกเฉยต่อมัน ใช้เพื่อให้ตัวเลขขนาดใหญ่อ่านได้ง่ายขึ้น
+
+export const variablesMutabilityCode = `fn main() {
+    let x = 5;
+    // x = 6; // error: cannot assign twice to immutable variable
+
+    let mut y = 10;
+    y = 20;
+    println!("y = {}", y);
+
+    // Shadowing: re-bind the same name
+    let z = 3;
+    let z = z * 2;
+    let z = z + 1;
+    println!("z = {}", z);
+
+    // Constants are always immutable and require a type annotation
+    const MAX_POINTS: u32 = 100_000;
+    println!("MAX_POINTS = {}", MAX_POINTS);
+}`;
+
+<Playground client:visible code={variablesMutabilityCode} />
+
+<Callout title="ตัวแปร immutable โดยค่าเริ่มต้น — เปิดใช้การเปลี่ยนค่าด้วย mut">
+การทำให้ immutable เป็นค่าเริ่มต้นบังคับให้คุณต้องระบุชัดเจนว่าข้อมูลใดเปลี่ยนแปลงได้ เมื่อเห็น `mut` คุณรู้ว่าตัวแปรนั้นถูกออกแบบมาเพื่อเปลี่ยนค่า เมื่อไม่เห็น `mut` คอมไพเลอร์รับประกันว่าไม่มีการเปลี่ยนค่าเกิดขึ้น
+</Callout>
+
+export const quizVariablesMutability = [
+    {
+        q: "keyword mut ทำหน้าที่อะไร?",
+        options: [
+            "ทำให้ตัวแปร public",
+            "อนุญาตให้กำหนดค่าใหม่ให้ตัวแปรหลังจาก binding แรก",
+            "ป้องกันการ shadow ตัวแปร",
+            "จัดสรรตัวแปรบน heap"
+        ],
+        answer: 1
+    },
+    {
+        q: "ความแตกต่างหลักระหว่าง shadowing และ mut คืออะไร?",
+        options: [
+            "ไม่มีความแตกต่าง เป็นเพียงสองวิธีในการทำสิ่งเดียวกัน",
+            "mut อนุญาตให้เปลี่ยน type ได้ ส่วน shadowing ไม่ได้",
+            "Shadowing สร้าง binding ใหม่ (เปลี่ยน type ได้) ส่วน mut กำหนดค่าใหม่ให้ binding เดิม",
+            "Shadowing ใช้ได้เฉพาะใน loop เท่านั้น"
+        ],
+        answer: 2
+    },
+    {
+        q: "อะไรที่จำเป็นต้องมีในการประกาศ const?",
+        options: [
+            "keyword mut",
+            "การระบุ type อย่างชัดเจน",
+            "heap allocation ด้วย Box",
+            "lifetime parameter"
+        ],
+        answer: 1
+    },
+    {
+        q: "underscore ใน 100_000 มีความหมายอย่างไรต่อคอมไพเลอร์ Rust?",
+        options: [
+            "คั่นระหว่างค่า integer สองค่า",
+            "เป็น wildcard ที่ match ตัวเลขใดก็ได้",
+            "ถูกเพิกเฉย เป็นเพียงตัวคั่นที่มองเห็นได้เท่านั้น",
+            "บ่งชี้ว่าเป็น unsigned integer type"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="basics/variables-mutability" questions={quizVariablesMutability} />
+
+<ProgressTracker client:visible id="basics/variables-mutability" />

@@ -1,0 +1,164 @@
+---
+title: 'Vec and String'
+description: 'Vec<T> is a growable heap array; String is owned, growable UTF-8 text. Learn push, pop, indexing, iteration, and how String relates to &str.'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## `Vec<T>` — Growable Heap Array
+
+`Vec<T>` is Rust's workhorse sequential collection. It stores elements of type `T` contiguously on the heap and automatically resizes when you push beyond its current capacity.
+
+```rust
+let mut v: Vec<i32> = Vec::new();     // empty Vec
+let w = vec![1, 2, 3];               // vec! macro shorthand
+```
+
+### Pushing, Popping, and Indexing
+
+```rust
+let mut v = vec![10, 20, 30];
+
+v.push(40);                       // append an element
+let last = v.pop();               // remove and return the last element → Some(40)
+let first = v[0];                 // index — panics if out of bounds
+let safe = v.get(100);            // returns Option<&T> — None if out of bounds
+```
+
+Prefer `.get(i)` when the index might be out of range so you handle the `None` case instead of panicking.
+
+### Iterating Over a Vec
+
+```rust
+let nums = vec![1, 2, 3];
+
+for n in &nums {                  // borrow each element as &i32
+    println!("{}", n);
+}
+
+// nums is still valid after the loop because we only borrowed it
+```
+
+Using `&nums` borrows the vector; using `nums` would move it and make it unavailable after the loop.
+
+## `String` — Owned, Growable Text
+
+`String` is Rust's heap-allocated, mutable text type. It owns its bytes and manages deallocation.
+
+```rust
+let mut s = String::from("hello");
+s.push(' ');                          // push a single char
+s.push_str("world");                  // append a string slice
+let combined = s + " again";          // + moves s and appends
+```
+
+### `String` vs `&str`
+
+| | `String` | `&str` |
+|---|---|---|
+| Ownership | Owned | Borrowed slice |
+| Location | Heap | Stack / static / inside a String |
+| Mutable | Yes (with `mut`) | No |
+| Typical use | Building/modifying text | Reading text |
+
+A `&String` automatically coerces to `&str`, so prefer `&str` in function parameters for maximum flexibility.
+
+```rust
+fn shout(s: &str) -> String {
+    s.to_uppercase()
+}
+
+let owned = String::from("hello");
+shout(&owned);          // &String coerces to &str
+shout("world");         // string literal is already &str
+```
+
+export const vecStringCode = `fn main() {
+    // Vec<i32> basics
+    let mut nums: Vec<i32> = Vec::new();
+    nums.push(10);
+    nums.push(20);
+    nums.push(30);
+    println!("len={}, first={}", nums.len(), nums[0]);
+
+    // pop returns Option<T>
+    let last = nums.pop();
+    println!("popped: {:?}, remaining: {:?}", last, nums);
+
+    // safe get returns Option<&T>
+    println!("get(5) = {:?}", nums.get(5));
+
+    // iterate by reference — nums still valid after
+    for n in &nums {
+        println!("item: {}", n);
+    }
+    println!("nums still valid: {:?}", nums);
+
+    // String vs &str
+    let literal: &str = "hello";
+    let mut owned: String = String::from(literal);
+    owned.push_str(" world");
+    println!("{}", owned);
+
+    // slice into a String
+    let slice: &str = &owned[0..5];
+    println!("slice: {}", slice);
+}`;
+
+<Playground client:visible code={vecStringCode} />
+
+<Callout title="Vec<T> owns a growable heap array">
+`Vec<T>` allocates its elements on the heap. When a `Vec<T>` is dropped, all its elements are dropped too. Iterating with `&v` borrows the elements; iterating with `v` consumes (moves) the vector. Prefer `&v` when you still need the vector after the loop.
+</Callout>
+
+export const quizVecString = [
+    {
+        q: "What does Vec::pop() return when the Vec is empty?",
+        options: [
+            "It panics with index out of bounds",
+            "It returns None",
+            "It returns 0",
+            "It returns an empty Vec"
+        ],
+        answer: 1
+    },
+    {
+        q: "What is the difference between iterating with &nums versus nums?",
+        options: [
+            "There is no difference — both borrow the Vec",
+            "&nums borrows the Vec (it stays valid); nums moves it (it cannot be used after)",
+            "nums borrows the Vec; &nums moves it",
+            "Both consume the Vec and free its memory"
+        ],
+        answer: 1
+    },
+    {
+        q: "Why should function parameters prefer &str over &String?",
+        options: [
+            "&str is faster at runtime because it avoids heap allocation",
+            "&String is deprecated in Rust 2021",
+            "&str accepts both owned String references and string literals via automatic coercion",
+            "String does not implement the Display trait"
+        ],
+        answer: 2
+    },
+    {
+        q: "Which method should you use instead of v[i] when the index might be out of bounds?",
+        options: [
+            "v.at(i)",
+            "v.get(i) — returns Option<&T>",
+            "v.safe_index(i)",
+            "v.try_get(i)"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="collections-iterators/vec-string" questions={quizVecString} />
+
+<ProgressTracker client:visible id="collections-iterators/vec-string" />

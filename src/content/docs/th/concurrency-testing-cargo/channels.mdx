@@ -1,0 +1,209 @@
+---
+title: 'Channels'
+description: 'ส่งค่าระหว่าง thread โดยใช้ std::sync::mpsc channels การส่งค่าจะย้าย ownership ไปยัง thread ที่รับ'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## การส่งข้อความด้วย `std::sync::mpsc`
+
+standard library ของ Rust มี channel แบบ **multi-producer, single-consumer** (mpsc) สำหรับส่งค่าระหว่าง thread channel มีสองปลาย:
+
+- `tx` — **transmitter** (ผู้ส่ง) คุณสามารถ clone มันเพื่อสร้าง producer หลายตัว
+- `rx` — **receiver** (ผู้รับ) มี receiver เพียงตัวเดียวต่อ channel
+
+```rust
+use std::sync::mpsc;
+
+fn main() {
+    let (tx, rx) = mpsc::channel();
+
+    tx.send(42).unwrap();
+
+    let value = rx.recv().unwrap(); // บล็อกจนกว่าค่าจะมาถึง
+    println!("Received: {}", value);
+}
+```
+
+`mpsc::channel()` ส่งคืนคู่ `(Sender<T>, Receiver<T>)` ประเภท `T` ถูก infer จาก `send` call แรก
+
+### การส่งค่าข้าม Thread
+
+transmitter เป็น `Send` ดังนั้นคุณสามารถย้ายมันเข้าไปใน thread closure เมื่อ `tx.send(value)` ถูกเรียก ค่านั้นจะถูก **ย้าย** เข้าไปใน channel — thread ผู้ส่งไม่ได้เป็นเจ้าของมันอีกต่อไป
+
+```rust
+use std::thread;
+use std::sync::mpsc;
+
+fn main() {
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let s = String::from("hello from thread");
+        tx.send(s).unwrap();
+        // println!("{}", s); // จะไม่คอมไพล์ — s ถูกย้ายเข้า channel แล้ว
+    });
+
+    let received = rx.recv().unwrap();
+    println!("Main got: {}", received);
+}
+```
+
+### Multiple Producers
+
+Clone `tx` เพื่อสร้าง sender หลายตัว แต่ละ clone มี handle ของตัวเองไปยัง channel เดียวกัน receiver เห็นข้อความตามลำดับที่มาถึง (non-deterministic ข้าม thread) ดังนั้นให้รวบรวมและ sort ก่อนพิมพ์
+
+```rust
+use std::thread;
+use std::sync::mpsc;
+
+fn main() {
+    let (tx, rx) = mpsc::channel();
+    let mut handles = Vec::new();
+
+    for i in 0..3 {
+        let tx = tx.clone(); // แต่ละ thread ได้รับ clone ของ sender
+        handles.push(thread::spawn(move || {
+            tx.send(format!("message {}", i)).unwrap();
+        }));
+    }
+    drop(tx); // drop tx ตัวเดิมเพื่อให้ channel ปิดเมื่อ clone ทั้งหมดหายไป
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let mut msgs: Vec<String> = rx.iter().collect(); // รวบรวมจนกว่า channel จะปิด
+    msgs.sort();
+    for m in &msgs {
+        println!("{}", m);
+    }
+}
+```
+
+`rx.iter()` ให้ค่าจนกว่า `Sender` handle ทั้งหมดจะถูก drop การ drop `tx` ตัวเดิม (หลัง clone) จำเป็นเพื่อให้ iterator รู้ว่าจะหยุดเมื่อใด
+
+### Fan-Out: การกระจายงาน
+
+producer คนเดียวสามารถส่ง work item ไปยัง pool ของ thread แต่ละ worker รับ item ผ่าน channel ของตัวเอง
+
+```rust
+use std::thread;
+use std::sync::mpsc;
+
+fn main() {
+    let (main_tx, main_rx) = mpsc::channel::<String>();
+    let mut handles = Vec::new();
+
+    for worker_id in 0..3 {
+        let (work_tx, work_rx) = mpsc::channel::<i32>();
+        let main_tx = main_tx.clone();
+
+        handles.push(thread::spawn(move || {
+            let item = work_rx.recv().unwrap();
+            main_tx.send(format!("worker {} processed {}", worker_id, item * 2)).unwrap();
+        }));
+
+        work_tx.send(worker_id * 10).unwrap();
+    }
+    drop(main_tx);
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let mut results: Vec<String> = main_rx.iter().collect();
+    results.sort();
+    for r in &results {
+        println!("{}", r);
+    }
+}
+```
+
+### ตัวอย่าง Playground แบบสมบูรณ์
+
+export const channelsCode = `use std::thread;
+use std::sync::mpsc;
+
+fn main() {
+    let (tx, rx) = mpsc::channel();
+    let mut handles = Vec::new();
+
+    for i in 0..5 {
+        let tx = tx.clone();
+        let handle = thread::spawn(move || {
+            let msg = format!("result from thread {}", i);
+            tx.send(msg).unwrap();
+        });
+        handles.push(handle);
+    }
+    drop(tx);
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let mut msgs: Vec<String> = rx.iter().collect();
+    msgs.sort();
+    for m in &msgs {
+        println!("{}", m);
+    }
+}`;
+
+<Playground client:visible code={channelsCode} />
+
+<Callout title="Channels ย้าย Ownership ระหว่าง Thread">
+เมื่อคุณเรียก `tx.send(value)` ownership ของ `value` จะถูกย้ายเข้าไปใน channel thread ผู้ส่งไม่สามารถเข้าถึงมันได้อีกต่อไป thread ผู้รับจะเป็นเจ้าของค่านั้นหลัง `rx.recv()` การย้าย ownership นี้คือเหตุผลที่ channel ปลอดจาก data race โดยโครงสร้าง — มีเพียง thread เดียวที่เป็นเจ้าของค่าในแต่ละจุดของเวลา
+</Callout>
+
+export const quizChannels = [
+    {
+        q: "mpsc ใน std::sync::mpsc ย่อมาจากอะไร?",
+        options: [
+            "Multi-process single-channel",
+            "Multi-producer single-consumer",
+            "Message-passing safe channel",
+            "Mutex-protected shared channel"
+        ],
+        answer: 1
+    },
+    {
+        q: "อะไรเกิดขึ้นกับค่าหลังจาก tx.send(value) ถูกเรียก?",
+        options: [
+            "ค่าถูก copy เข้า channel ผู้ส่งยังคง copy ของตัวเองไว้",
+            "ค่าถูกย้ายเข้า channel ผู้ส่งไม่สามารถใช้มันได้อีกต่อไป",
+            "ค่าถูก serialize เป็น bytes ก่อนส่ง",
+            "ค่าถูก clone อัตโนมัติหากไม่ implement Copy"
+        ],
+        answer: 1
+    },
+    {
+        q: "ทำไมต้อง drop tx ตัวเดิม (drop(tx)) ก่อนรวบรวมจาก rx.iter()?",
+        options: [
+            "drop(tx) flush ข้อความที่ buffer ไว้",
+            "rx.iter() บล็อกตลอดไปหาก Sender handle ยังมีชีวิตอยู่ เพราะ channel ยังเปิดอยู่",
+            "คอมไพเลอร์ต้องการเพื่อความปลอดภัยของ memory",
+            "drop(tx) ส่งสัญญาณให้ receiver เริ่มในโหมด blocking"
+        ],
+        answer: 1
+    },
+    {
+        q: "คุณสร้าง producer หลายตัวสำหรับ receiver ตัวเดียวได้อย่างไร?",
+        options: [
+            "เรียก mpsc::channel() ครั้งหนึ่งต่อ producer",
+            "Clone Receiver — แต่ละ clone เป็น producer อิสระ",
+            "Clone Sender (tx.clone()) — แต่ละ clone สามารถส่งไปยัง Receiver เดียวกันได้",
+            "ไม่สามารถมี producer หลายตัวกับ std::sync::mpsc ได้"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="concurrency-testing-cargo/channels" questions={quizChannels} />
+
+<ProgressTracker client:visible id="concurrency-testing-cargo/channels" />

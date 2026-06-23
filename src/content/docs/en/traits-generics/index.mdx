@@ -1,0 +1,119 @@
+---
+title: 'Traits & Generics'
+description: 'Overview of traits and generics in Rust: shared behavior and parametric code.'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Welcome to Traits & Generics
+
+Two of Rust's most powerful features work together to let you write code that is both **flexible** and **safe**:
+
+- **Traits** define *shared behavior* — a contract that any type can fulfill.
+- **Generics** enable *parametric code* — one function or struct that works for many types.
+
+Together, they let you write expressive abstractions without giving up compile-time guarantees or paying runtime costs.
+
+## Why Traits?
+
+In many languages you share behavior through inheritance. Rust takes a different approach: you define a **trait** (a set of method signatures), and any type can implement it independently. This is similar to interfaces in Java or Go, but with richer capabilities like default method bodies.
+
+```rust
+trait Greet {
+    fn hello(&self) -> String;
+}
+```
+
+Any struct that implements `Greet` must provide a `hello` method. The trait is a contract; the struct fulfills that contract.
+
+## Why Generics?
+
+Without generics you would need a separate `largest_i32`, `largest_f64`, and `largest_char` function — all with identical bodies but different types. Generics let you write this once using a type parameter (written inside angle brackets in code, like `fn largest<T: PartialOrd>(a: T, b: T) -> T`).
+
+The `T: PartialOrd` part is a **trait bound** — it tells the compiler "this function works for any type `T` that supports comparison." The compiler then generates a specialized copy for each concrete type you actually use (a process called *monomorphization*).
+
+## Module Roadmap
+
+| Lesson | What you will learn |
+|---|---|
+| **Traits** | Define shared behavior, default methods, calling trait methods |
+| **Generics** | Generic functions, generic structs, trait bounds, `where` clauses |
+| **Trait Objects** | `dyn Trait`, `Box<dyn Trait>`, static vs dynamic dispatch |
+| **Lifetimes** | Lifetime annotations, dangling references, elision rules |
+
+## Try It Now
+
+The snippet below shows a generic function with a trait bound, a custom trait, and a struct that implements it — all the ideas you will study in depth across this module.
+
+export const traitsGenericsIndexCode = `fn main() {
+    let x: i32 = 42;
+    println!("x = {}", x);
+
+    // Generic function: works for any PartialOrd type
+    fn largest<T: PartialOrd>(a: T, b: T) -> T {
+        if a > b { a } else { b }
+    }
+
+    println!("largest(3, 7) = {}", largest(3, 7));
+    println!("largest(3.14, 2.71) = {}", largest(3.14, 2.71));
+
+    // Trait usage
+    trait Greet {
+        fn hello(&self) -> String;
+    }
+
+    struct Person { name: String }
+
+    impl Greet for Person {
+        fn hello(&self) -> String {
+            format!("Hello, {}!", self.name)
+        }
+    }
+
+    let p = Person { name: String::from("Rust") };
+    println!("{}", p.hello());
+}`;
+
+<Playground client:visible code={traitsGenericsIndexCode} />
+
+export const quizTraitsGenericsIndex = [
+    {
+        q: "What is the primary purpose of a trait in Rust?",
+        options: [
+            "To allocate memory on the heap",
+            "To define shared behavior that multiple types can implement",
+            "To declare mutable global variables",
+            "To manage thread safety automatically",
+        ],
+        answer: 1,
+    },
+    {
+        q: "What does a generic type parameter allow you to do?",
+        options: [
+            "Run the function asynchronously",
+            "Restrict the function to integer types only",
+            "Write one function that works for many different concrete types",
+            "Skip the borrow checker for that parameter",
+        ],
+        answer: 2,
+    },
+    {
+        q: "Which keyword is used to implement a trait for a struct in Rust?",
+        options: [
+            "trait",
+            "extend",
+            "impl",
+            "derive",
+        ],
+        answer: 2,
+    },
+];
+
+<Quiz client:visible id="traits-generics/index" questions={quizTraitsGenericsIndex} />
+
+<ProgressTracker client:visible id="traits-generics/index" />

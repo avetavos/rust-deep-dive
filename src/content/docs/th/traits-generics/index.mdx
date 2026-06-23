@@ -1,0 +1,119 @@
+---
+title: 'Traits และ Generics'
+description: 'ภาพรวมของ traits และ generics ใน Rust: behavior ร่วมกันและ parametric code'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ยินดีต้อนรับสู่ Traits และ Generics
+
+สองฟีเจอร์ที่ทรงพลังที่สุดของ Rust ทำงานร่วมกันเพื่อให้คุณเขียน code ที่ทั้ง **ยืดหยุ่น** และ **ปลอดภัย**:
+
+- **Traits** กำหนด *behavior ร่วมกัน* — สัญญาที่ type ใดก็ได้สามารถปฏิบัติตามได้
+- **Generics** เปิดใช้งาน *parametric code* — function หรือ struct เดียวที่ทำงานกับหลาย type
+
+ทั้งสองอย่างช่วยให้คุณเขียน abstraction ที่ expressive โดยไม่สูญเสียการรับประกัน ณ compile time หรือต้องจ่าย runtime cost
+
+## ทำไมต้องใช้ Traits?
+
+ในหลายภาษา คุณแชร์ behavior ผ่าน inheritance แต่ Rust ใช้แนวทางที่แตกต่าง: คุณนิยาม **trait** (ชุดของ method signature) และ type ใดก็ได้สามารถ implement มันได้อย่างอิสระ แนวทางนี้คล้ายกับ interface ใน Java หรือ Go แต่มีความสามารถมากกว่า เช่น รองรับ default method body
+
+```rust
+trait Greet {
+    fn hello(&self) -> String;
+}
+```
+
+struct ใดก็ตามที่ implement `Greet` ต้องจัดหา method `hello` trait คือสัญญา และ struct คือผู้ปฏิบัติตามสัญญานั้น
+
+## ทำไมต้องใช้ Generics?
+
+หากไม่มี generics คุณจะต้องสร้าง function แยกกัน เช่น `largest_i32`, `largest_f64` และ `largest_char` ทั้งที่ body เหมือนกันทุกอย่างแต่ต่างกันแค่ type Generics ให้คุณเขียนครั้งเดียวโดยใช้ type parameter เช่น `fn largest<T: PartialOrd>(a: T, b: T) -> T`
+
+ส่วน `T: PartialOrd` คือ **trait bound** — มันบอก compiler ว่า "function นี้ทำงานกับ type `T` ใดก็ได้ที่รองรับการเปรียบเทียบ" จากนั้น compiler จะสร้าง copy เฉพาะสำหรับแต่ละ concrete type ที่คุณใช้จริง (กระบวนการนี้เรียกว่า *monomorphization*)
+
+## แผนการเรียนในโมดูลนี้
+
+| บทเรียน | สิ่งที่จะได้เรียนรู้ |
+|---|---|
+| **Traits** | นิยาม behavior ร่วมกัน, default methods, การเรียก trait method |
+| **Generics** | Generic function, generic struct, trait bound, `where` clause |
+| **Trait Objects** | `dyn Trait`, `Box<dyn Trait>`, static vs dynamic dispatch |
+| **Lifetimes** | Lifetime annotation, dangling reference, elision rules |
+
+## ลองเลย
+
+โค้ดด้านล่างแสดง generic function พร้อม trait bound, custom trait และ struct ที่ implement มัน — ทุกแนวคิดที่คุณจะศึกษาอย่างละเอียดในโมดูลนี้
+
+export const traitsGenericsIndexCode = `fn main() {
+    let x: i32 = 42;
+    println!("x = {}", x);
+
+    // Generic function: works for any PartialOrd type
+    fn largest<T: PartialOrd>(a: T, b: T) -> T {
+        if a > b { a } else { b }
+    }
+
+    println!("largest(3, 7) = {}", largest(3, 7));
+    println!("largest(3.14, 2.71) = {}", largest(3.14, 2.71));
+
+    // Trait usage
+    trait Greet {
+        fn hello(&self) -> String;
+    }
+
+    struct Person { name: String }
+
+    impl Greet for Person {
+        fn hello(&self) -> String {
+            format!("Hello, {}!", self.name)
+        }
+    }
+
+    let p = Person { name: String::from("Rust") };
+    println!("{}", p.hello());
+}`;
+
+<Playground client:visible code={traitsGenericsIndexCode} />
+
+export const quizTraitsGenericsIndex = [
+    {
+        q: "จุดประสงค์หลักของ trait ใน Rust คืออะไร?",
+        options: [
+            "จัดสรรหน่วยความจำบน heap",
+            "นิยาม behavior ร่วมกันที่หลาย type สามารถ implement ได้",
+            "ประกาศ global variable ที่เปลี่ยนแปลงได้",
+            "จัดการ thread safety โดยอัตโนมัติ",
+        ],
+        answer: 1,
+    },
+    {
+        q: "Generic type parameter ช่วยให้คุณทำอะไรได้?",
+        options: [
+            "รัน function แบบ asynchronous",
+            "จำกัด function ให้ใช้ได้แค่ integer type",
+            "เขียน function เดียวที่ทำงานกับ concrete type หลายแบบ",
+            "ข้าม borrow checker สำหรับ parameter นั้น",
+        ],
+        answer: 2,
+    },
+    {
+        q: "ใช้ keyword ใดในการ implement trait ให้กับ struct ใน Rust?",
+        options: [
+            "trait",
+            "extend",
+            "impl",
+            "derive",
+        ],
+        answer: 2,
+    },
+];
+
+<Quiz client:visible id="traits-generics/index" questions={quizTraitsGenericsIndex} />
+
+<ProgressTracker client:visible id="traits-generics/index" />

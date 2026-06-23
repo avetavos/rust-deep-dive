@@ -1,0 +1,167 @@
+---
+title: 'ตัวดำเนินการ ?'
+description: 'ตัวดำเนินการ ? ส่งต่อข้อผิดพลาดแบบ early: มันแกะ Ok หรือคืน Err ทันทีจากฟังก์ชันที่ครอบอยู่ ใช้ได้กับฟังก์ชันที่คืน Result หรือ Option'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## การส่งต่อแบบ Manual นั้นยุ่งยาก
+
+โดยไม่มีตัวดำเนินการ `?` การส่งต่อข้อผิดพลาดจากฟังก์ชันที่เรียกต้องใช้นิพจน์ match ทุกครั้ง:
+
+```rust
+fn parse_and_double(s: &str) -> Result<i32, std::num::ParseIntError> {
+    let n = match s.parse::<i32>() {
+        Ok(v)  => v,
+        Err(e) => return Err(e),
+    };
+    Ok(n * 2)
+}
+```
+
+รูปแบบนี้ — แกะ `Ok` หรือคืน `Err` แบบ early — เกิดขึ้นบ่อยมากจน Rust มีตัวดำเนินการเฉพาะสำหรับมัน
+
+## ตัวดำเนินการ `?`
+
+การวาง `?` หลังนิพจน์ `Result` ทำสิ่งเดียวกันกับ match ด้านบน:
+
+- ถ้าค่าเป็น `Ok(v)` มันจะประเมินเป็น `v`
+- ถ้าค่าเป็น `Err(e)` มันจะคืน `Err(e)` **ทันทีจากฟังก์ชันที่ครอบอยู่**
+
+ฟังก์ชัน**ต้อง**คืน `Result` (หรือ `Option`) เพื่อให้ `?` ทำงาน — คอมไพเลอร์บังคับใช้สิ่งนี้
+
+```rust
+use std::num::ParseIntError;
+
+fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
+    let n: i32 = s.parse()?;  // ? returns early on Err
+    Ok(n * 2)
+}
+```
+
+## การเชื่อมโยง `?`
+
+เพราะ `?` คืนค่า `Ok` โดยตรง คุณสามารถเรียกฟังก์ชันที่ล้มเหลวได้หลายตัวตามลำดับโดยไม่ต้องซ้อนกัน:
+
+```rust
+use std::num::ParseIntError;
+
+fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
+    let n: i32 = s.parse()?;
+    Ok(n * 2)
+}
+
+fn chain(a: &str, b: &str) -> Result<i32, ParseIntError> {
+    let x = parse_and_double(a)?;
+    let y = parse_and_double(b)?;
+    Ok(x + y)
+}
+```
+
+`?` แต่ละตัวจะแกะค่าสำเร็จหรือ short-circuit ฟังก์ชันทั้งหมด ไม่มีการ match ซ้อนกัน ไม่มีการ return แบบ manual
+
+## `main` ที่คืน `Result`
+
+`main` ยังสามารถคืน `Result<(), Box<dyn std::error::Error>>` ซึ่งให้คุณใช้ `?` ภายใน `main` ได้:
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let n: i32 = "42".parse()?;
+    println!("parsed: {}", n);
+    Ok(())
+}
+```
+
+`Box<dyn std::error::Error>` คือ trait object ที่สามารถเก็บประเภทข้อผิดพลาดใดก็ได้ ทำให้มีประโยชน์ใน `main` ที่คุณไม่ต้องการแก้ไขประเภทข้อผิดพลาดเดียวที่เป็น concrete
+
+## การแปลงประเภทข้อผิดพลาดด้วย `?`
+
+เมื่อประเภทข้อผิดพลาดที่คืนโดยฟังก์ชันที่เรียกแตกต่างจากประเภทข้อผิดพลาดของฟังก์ชันที่ครอบอยู่ `?` จะเรียก `From::from` โดยอัตโนมัติเพื่อแปลง นี่คือวิธีที่ฟังก์ชันที่คืน `MyError` สามารถใช้ `?` บนการเรียกที่คืน `ParseIntError` ได้ ตราบใดที่ `From<ParseIntError> for MyError` ถูก implement ไว้
+
+export const questionMarkCode = `use std::num::ParseIntError;
+
+fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
+    let n: i32 = s.parse()?;  // ? returns early on Err
+    Ok(n * 2)
+}
+
+fn chain(a: &str, b: &str) -> Result<i32, ParseIntError> {
+    let x = parse_and_double(a)?;
+    let y = parse_and_double(b)?;
+    Ok(x + y)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let doubled = parse_and_double("21")?;
+    println!("doubled: {}", doubled);
+
+    let sum = chain("10", "5")?;
+    println!("chain(10, 5): {}", sum);
+
+    // Demonstrate early return on error
+    match parse_and_double("abc") {
+        Ok(v)  => println!("ok: {}", v),
+        Err(e) => println!("early return caught: {}", e),
+    }
+
+    println!("main returned Ok(())");
+    Ok(())
+}`;
+
+<Playground client:visible code={questionMarkCode} />
+
+<Callout title="? คืน early หรือแกะค่า Ok">
+ตัวดำเนินการ `?` คือ syntactic sugar สำหรับรูปแบบ match-and-early-return มันทำงานในฟังก์ชันใดก็ตามที่ประเภทการคืนค่าเป็น `Result` หรือ `Option` เมื่อประเภทข้อผิดพลาดแตกต่างกัน `?` จะแปลงโดยอัตโนมัติผ่าน `From` การเชื่อมโยงการเรียก `?` ให้โค้ดการส่งต่อข้อผิดพลาดที่สะอาดและเป็นเส้นตรงโดยไม่ต้องซ้อน
+</Callout>
+
+export const quizQuestionMark = [
+    {
+        q: "? ทำอะไรเมื่อนำไปใช้กับค่า Err(e)?",
+        options: [
+            "มัน panic ด้วยข้อความข้อผิดพลาด",
+            "มันแปลงข้อผิดพลาดเป็น string และบันทึก",
+            "มันคืน Err(e) ทันทีจากฟังก์ชันที่ครอบอยู่",
+            "มันลองดำเนินการซ้ำสูงสุดสามครั้ง"
+        ],
+        answer: 2
+    },
+    {
+        q: "ฟังก์ชันที่ครอบอยู่ต้องตรงตามข้อจำกัดใดเพื่อให้ ? คอมไพล์ได้?",
+        options: [
+            "ฟังก์ชันต้องเป็น async",
+            "ฟังก์ชันต้องคืน Result หรือ Option",
+            "ฟังก์ชันต้องถูกทำเครื่องหมายว่า unsafe",
+            "ฟังก์ชันต้องเป็น method บน struct"
+        ],
+        answer: 1
+    },
+    {
+        q: "ประเภทใดที่มักใช้ใน main() -> Result<(), ...> เพื่อรับข้อผิดพลาดใดก็ได้?",
+        options: [
+            "Result<(), String>",
+            "Result<(), impl Error>",
+            "Result<(), Box<dyn std::error::Error>>",
+            "Result<(), &str>"
+        ],
+        answer: 2
+    },
+    {
+        q: "? จัดการกับประเภทข้อผิดพลาดที่ไม่ตรงกันระหว่าง caller และ callee อย่างไร?",
+        options: [
+            "มันห่อข้อผิดพลาดภายในใน Box โดยอัตโนมัติ",
+            "มันเรียก From::from เพื่อแปลงประเภทข้อผิดพลาด",
+            "มันต้องการให้โปรแกรมเมอร์เขียน match เพื่อแปลงด้วยตนเอง",
+            "มันทำงานได้เฉพาะเมื่อข้อผิดพลาดทั้งสองเป็นประเภทเดียวกัน"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="error-handling/question-mark" questions={quizQuestionMark} />
+
+<ProgressTracker client:visible id="error-handling/question-mark" />

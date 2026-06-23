@@ -1,0 +1,95 @@
+---
+title: 'Concurrency, Testing & Cargo'
+description: 'An overview of fearless concurrency with threads and channels, async programming with tokio, testing with cargo test, and the Cargo build system.'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Fearless Concurrency — What This Module Covers
+
+One of Rust's boldest claims is **fearless concurrency**: writing multi-threaded programs without the data races that plague C, C++, or even Java. The compiler enforces the same ownership rules at thread boundaries, turning an entire class of bugs into compile-time errors rather than hard-to-reproduce runtime failures.
+
+This module explores four pillars of production Rust:
+
+| Lesson | Topic | Runnable |
+|--------|-------|---------|
+| Threads | `std::thread`, `Arc<Mutex<T>>`, joining handles | Yes — browser Playground |
+| Channels | `std::sync::mpsc`, send/receive, ownership transfer | Yes — browser Playground |
+| Async Intro | `async`/`.await`, futures, tokio runtime | Cargo project only |
+| Cargo & Tests | `cargo new`, `#[test]`, `cargo test` | Cargo project only |
+
+### The Two Concurrency Models
+
+Rust standard library gives you **OS threads** via `std::thread`. Each thread is a real OS-level thread with its own stack. Shared state between threads is protected by `Arc<Mutex<T>>` — the compiler will not let you pass a non-`Send` type across a thread boundary.
+
+For **I/O-bound workloads** — network servers, file operations, many concurrent lightweight tasks — the `async`/`.await` model is more efficient. It uses a single-threaded or multi-threaded event loop (usually `tokio`) to schedule thousands of tasks without the overhead of an OS thread per task.
+
+### Why Rust Concurrency Is Different
+
+In most languages, data races are a runtime problem. You write the code, run it, and occasionally it crashes or returns wrong results under load. In Rust:
+
+- A type is `Send` if it is safe to move to another thread.
+- A type is `Sync` if it is safe to share a reference across threads.
+- The compiler rejects code that violates these contracts — no sanitizers, no runtime checks needed.
+
+### Quick Preview
+
+Here is the smallest meaningful concurrent Rust program — spawn a thread, wait for it, continue in main.
+
+export const indexCode = `use std::thread;
+
+fn main() {
+    let handle = thread::spawn(|| {
+        println!("Hello from a spawned thread!");
+    });
+    handle.join().unwrap();
+    println!("Main thread done.");
+}`;
+
+<Playground client:visible code={indexCode} />
+
+<Callout title="Ownership rules apply at thread boundaries">
+The `Send` and `Sync` marker traits are the mechanism behind fearless concurrency. `Send` means a value can be moved to another thread; `Sync` means a shared reference to the value can be sent. Types like `Rc<T>` and raw pointers are neither, so the compiler stops you from sharing them across threads.
+</Callout>
+
+export const quizIndex = [
+    {
+        q: "What does it mean for a type to be Send in Rust?",
+        options: [
+            "It can be serialized to JSON",
+            "It can be moved safely to another thread",
+            "It can be shared via a network socket",
+            "It can be copied without a clone"
+        ],
+        answer: 1
+    },
+    {
+        q: "Which standard library type is used to share mutable state safely between threads?",
+        options: [
+            "Rc<RefCell<T>>",
+            "Box<T>",
+            "Arc<Mutex<T>>",
+            "Cell<T>"
+        ],
+        answer: 2
+    },
+    {
+        q: "When should you prefer async/await over OS threads?",
+        options: [
+            "For CPU-intensive number crunching",
+            "For I/O-bound tasks with many concurrent lightweight operations",
+            "When you need more than 8 threads",
+            "Async/await is always slower than threads"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="concurrency-testing-cargo/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="concurrency-testing-cargo/index" />

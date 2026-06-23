@@ -1,0 +1,149 @@
+---
+title: Functions
+description: 'ฟังก์ชันใน Rust ประกาศด้วย fn parameter ต้องระบุ type annotation return type เขียนหลัง -> expression สุดท้ายในฟังก์ชันที่เขียนโดยไม่มี semicolon คือ return value'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## การประกาศฟังก์ชัน
+
+ใช้ `fn` ในการประกาศฟังก์ชัน ทุก parameter ต้องมี type annotation อย่างชัดเจน — คอมไพเลอร์ไม่อนุมาน type ของ parameter return type เขียนตามหลัง `->`
+
+```rust
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+```
+
+ฟังก์ชันสามารถประกาศก่อนหรือหลังที่มันถูกเรียกใช้ — Rust ไม่ต้องการ forward declaration
+
+### Statements vs Expressions
+
+นี่คือความแตกต่างที่สำคัญที่สุดใน function body ของ Rust:
+
+- **Statement** ทำการกระทำและ **ไม่** ผลิตค่า `let x = 5;` คือ statement ที่ลงท้ายด้วย semicolon
+- **Expression** ประเมินเป็นค่า `5 + 3` คือ expression block `{ ... }` ก็เป็น expression เช่นกัน
+
+```rust
+fn main() {
+    // นี่คือ statement — ไม่ผลิตค่า
+    let y = 6;
+
+    // นี่คือ expression block — ผลิตค่า 12
+    let z = {
+        let x = 3;
+        x * 4  // ไม่มี semicolon — นี่คือค่าของ block
+    };
+
+    println!("y={}, z={}", y, z);
+}
+```
+
+การเพิ่ม semicolon ที่บรรทัดสุดท้ายของ block จะ **แปลง expression เป็น statement** — block จะ return unit type `()` แทนที่จะเป็นค่าที่คำนวณได้
+
+### Trailing-Expression Return
+
+expression สุดท้ายใน function body ที่เขียน **โดยไม่มี** semicolon คือ return value คุณยังสามารถใช้ keyword `return` สำหรับ early return ได้ แต่ Rust ที่เป็น idiomatic นิยม trailing expression สำหรับ return path หลัก
+
+```rust
+fn square(n: i32) -> i32 {
+    n * n  // return เพราะไม่มี semicolon
+}
+
+fn max_of_two(a: i32, b: i32) -> i32 {
+    if a > b { a } else { b }  // if เป็น expression
+}
+```
+
+### Unit Type
+
+ฟังก์ชันที่ไม่ return ค่าที่มีความหมาย จะ return `()` (unit type) โดยอัตโนมัติ signature `fn foo()` เป็น shorthand ของ `fn foo() -> ()` unit type คล้าย `void` ในภาษาอื่น แต่เป็น type จริงๆ ที่มีค่าเดียว: `()`
+
+```rust
+fn greet(name: &str) {
+    // return () โดยอัตโนมัติ
+    println!("Hello, {}!", name);
+}
+```
+
+export const functionsCode = `fn add(a: i32, b: i32) -> i32 {
+    a + b   // trailing expression -- no semicolon -- is the return value
+}
+
+fn describe(n: i32) -> &'static str {
+    if n > 0 { "positive" } else if n < 0 { "negative" } else { "zero" }
+}
+
+fn unit_example() {
+    // Functions without -> return the unit type ()
+    println!("unit example");
+}
+
+fn main() {
+    let sum = add(3, 4);
+    println!("add(3, 4) = {}", sum);
+
+    println!("describe(10) = {}", describe(10));
+    println!("describe(-3) = {}", describe(-3));
+    println!("describe(0) = {}", describe(0));
+
+    unit_example();
+}`;
+
+<Playground client:visible code={functionsCode} />
+
+<Callout title="expression สุดท้าย (ไม่มี semicolon) คือ return value">
+การละ semicolon ที่บรรทัดสุดท้ายของ function body ทำให้ expression นั้นเป็น return value การใส่ semicolon จะเปลี่ยนมันเป็น statement ที่ return `()` นี่ไม่ใช่ gotcha แต่เป็นการออกแบบที่ตั้งใจทำให้ closure, block และ function ทำงานสอดคล้องกันในฐานะ expression
+</Callout>
+
+export const quizFunctions = [
+    {
+        q: "return value ของฟังก์ชันที่มีบรรทัดสุดท้ายเป็น n * 2 (ไม่มี semicolon) คืออะไร?",
+        options: [
+            "unit type ()",
+            "ไม่มี — ค่าถูกทิ้ง",
+            "ค่าของ n * 2",
+            "compile error เพราะไม่มี return"
+        ],
+        answer: 2
+    },
+    {
+        q: "เกิดอะไรขึ้นเมื่อเพิ่ม semicolon ที่ expression สุดท้ายใน function body?",
+        options: [
+            "ฟังก์ชัน return ค่าของ expression นั้นเหมือนเดิม",
+            "expression กลายเป็น statement และฟังก์ชัน return ()",
+            "คอมไพเลอร์แทรก keyword return โดยอัตโนมัติ",
+            "ต้องอัปเดต function signature เป็น -> ()"
+        ],
+        answer: 1
+    },
+    {
+        q: "ข้อใดเป็นความจริงเกี่ยวกับ parameter type ของฟังก์ชันใน Rust?",
+        options: [
+            "เป็นตัวเลือก — คอมไพเลอร์อนุมานจาก call site",
+            "จำเป็นต้องระบุ — คอมไพเลอร์ไม่อนุมาน parameter type",
+            "สามารถละไว้ได้ถ้าฟังก์ชัน private",
+            "จำเป็นเฉพาะสำหรับ generic function"
+        ],
+        answer: 1
+    },
+    {
+        q: "unit type () ใน Rust คืออะไร?",
+        options: [
+            "alias สำหรับ null หรือ None",
+            "type ที่ไม่มีค่า ใช้สำหรับฟังก์ชันที่ไม่เคย return",
+            "type จริงที่มีค่าเดียว return โดยฟังก์ชันที่ไม่มี output ที่มีความหมาย",
+            "zero-sized struct ที่ไม่สามารถใช้ใน expression ได้"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="basics/functions" questions={quizFunctions} />
+
+<ProgressTracker client:visible id="basics/functions" />

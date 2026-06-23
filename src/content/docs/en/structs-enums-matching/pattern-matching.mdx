@@ -1,0 +1,193 @@
+---
+title: 'Pattern Matching'
+description: 'The match expression is exhaustive and can destructure enum variants, bind their data, and apply guards.'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The `match` Expression
+
+`match` compares a value against a series of **patterns** and executes the arm whose pattern matches. Unlike a C `switch`, Rust's `match` is an expression — it produces a value — and it is checked exhaustively by the compiler.
+
+```rust
+let x: i32 = 3;
+let description = match x {
+    1 => "one",
+    2 => "two",
+    3 => "three",
+    _ => "something else",
+};
+println!("{}", description); // three
+```
+
+The `_` wildcard matches any value you have not listed explicitly. Without it (and without covering all cases), the code will not compile.
+
+## Matching Enum Variants and Binding Data
+
+The real power of `match` comes from destructuring enum variants and binding their data to local names:
+
+```rust
+enum Coin {
+    Penny,
+    Quarter(String),
+}
+
+match coin {
+    Coin::Penny           => println!("Penny"),
+    Coin::Quarter(state)  => println!("Quarter from {}", state),
+}
+```
+
+The identifier `state` in `Coin::Quarter(state)` is a binding — it receives the `String` value carried by that variant. You can use it freely inside the arm body.
+
+### Range Patterns
+
+Patterns can match integer ranges with `..=`:
+
+```rust
+match score {
+    90..=100 => "A",
+    80..=89  => "B",
+    _        => "C or below",
+}
+```
+
+## The `_` Wildcard
+
+`_` is a catch-all that matches anything without binding it. Place it last; any arm after `_` would be unreachable and the compiler warns you.
+
+## `if let` — Matching One Variant
+
+When you only care about one variant, `if let` is more concise than a full `match`:
+
+```rust
+let temperature = Some(22);
+if let Some(t) = temperature {
+    println!("Temperature: {}C", t);
+}
+```
+
+This binds `t` to the inner value if the pattern matches, and does nothing on `None`. You can attach an `else` branch for the non-matching case.
+
+## Match Guards
+
+A **guard** is an extra `if` condition on a match arm. It further narrows which values the arm accepts:
+
+```rust
+match number {
+    n if n < 0 => println!("negative: {}", n),
+    0          => println!("zero"),
+    n          => println!("positive: {}", n),
+}
+```
+
+Guards run after the structural pattern matches, so the binding (`n`) is available inside the guard condition.
+
+<Callout title="match must be exhaustive">
+Rust requires that a `match` expression covers every possible value of the type being matched. If you miss a case, the compiler emits a hard error — not a warning. The `_` wildcard is the standard way to cover all remaining cases. This guarantee means a `match` on an enum can never silently ignore a new variant added later.
+</Callout>
+
+export const patternMatchingCode = `#[derive(Debug)]
+enum Coin {
+    Penny,
+    Nickel,
+    Dime,
+    Quarter(String),
+}
+
+fn value_in_cents(coin: &Coin) -> u32 {
+    match coin {
+        Coin::Penny           => 1,
+        Coin::Nickel          => 5,
+        Coin::Dime            => 10,
+        Coin::Quarter(state)  => {
+            println!("Quarter from {}!", state);
+            25
+        }
+    }
+}
+
+fn describe_number(n: i32) -> &'static str {
+    match n {
+        0          => "zero",
+        1..=9      => "single digit",
+        10..=99    => "double digit",
+        _          => "large",
+    }
+}
+
+fn main() {
+    let coins = vec![
+        Coin::Penny,
+        Coin::Nickel,
+        Coin::Quarter(String::from("Alaska")),
+        Coin::Dime,
+    ];
+
+    for coin in &coins {
+        println!("{:?} = {} cents", coin, value_in_cents(coin));
+    }
+
+    for n in [0, 7, 42, 100] {
+        println!("{} is {}", n, describe_number(n));
+    }
+
+    let temperature = Some(22);
+    if let Some(t) = temperature {
+        println!("Temperature: {}C", t);
+    }
+}`;
+
+<Playground client:visible code={patternMatchingCode} />
+
+export const quizPatternMatching = [
+    {
+        q: 'What happens if a match expression does not cover all possible values of the matched type?',
+        options: [
+            'It compiles with a warning and skips unmatched cases at runtime.',
+            'The program panics at runtime on the unmatched value.',
+            'The compiler emits an error and refuses to compile.',
+            'The last arm is used as a fallback automatically.',
+        ],
+        answer: 2,
+    },
+    {
+        q: 'What does the _ pattern do in a match arm?',
+        options: [
+            'It matches only the None variant of Option.',
+            'It matches any value without binding it.',
+            'It breaks out of the match expression.',
+            'It is a syntax error.',
+        ],
+        answer: 1,
+    },
+    {
+        q: 'When should you prefer if let over a full match expression?',
+        options: [
+            'Always — if let is faster than match.',
+            'When you only care about one specific pattern and want to ignore the rest.',
+            'When the matched type has more than four variants.',
+            'When the matched value is a reference.',
+        ],
+        answer: 1,
+    },
+    {
+        q: 'What is a match guard?',
+        options: [
+            'A trait that must be implemented to use match.',
+            'An extra if condition on a match arm that further filters matching values.',
+            'The _ wildcard arm at the end of a match.',
+            'A compile-time check that the match is exhaustive.',
+        ],
+        answer: 1,
+    },
+];
+
+<Quiz client:visible id="structs-enums-matching/pattern-matching" questions={quizPatternMatching} />
+
+<ProgressTracker client:visible id="structs-enums-matching/pattern-matching" />

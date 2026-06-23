@@ -1,0 +1,184 @@
+---
+title: 'ประเภทข้อผิดพลาดแบบกำหนดเอง'
+description: 'กำหนด enum ข้อผิดพลาดของคุณเองและ implement Display และ Error สำหรับมัน การ implement From ช่วยให้แปลงอัตโนมัติด้วยตัวดำเนินการ ?'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## เหตุใดจึงต้องใช้ข้อผิดพลาดแบบกำหนดเอง?
+
+การใช้ `String` หรือ `Box<dyn std::error::Error>` เป็นประเภทข้อผิดพลาดของคุณใช้ได้ดีสำหรับสคริปต์ด่วน แต่ไลบรารีและแอปพลิเคชันจริงได้ประโยชน์จาก enum ข้อผิดพลาดที่เป็น concrete:
+
+- ผู้เรียกสามารถ pattern-match บน variant เฉพาะและจัดการแต่ละกรณีต่างกัน
+- ประเภทข้อผิดพลาดเป็นเอกสารทุก failure mode ของ API ของคุณ
+- คุณสามารถแนบข้อมูลที่มีโครงสร้าง (เช่น ค่าที่ไม่ถูกต้อง) ให้กับแต่ละ variant
+
+## การกำหนด enum ข้อผิดพลาด
+
+ประกาศ enum ที่มีหนึ่ง variant ต่อหนึ่ง failure mode derive `Debug` เพื่อให้ข้อผิดพลาดสามารถพิมพ์ด้วย `{:?}`:
+
+```rust
+#[derive(Debug)]
+enum AppError {
+    ParseError(std::num::ParseIntError),
+    NegativeNumber(i32),
+    TooBig(i32),
+}
+```
+
+## การ implement `Display`
+
+trait `std::fmt::Display` ควบคุมข้อความข้อผิดพลาดที่อ่านได้โดยมนุษย์ — สิ่งที่คุณเห็นเมื่อพิมพ์ด้วย `{}`:
+
+```rust
+use std::fmt;
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::ParseError(e)     => write!(f, "parse error: {}", e),
+            AppError::NegativeNumber(n) => write!(f, "number is negative: {}", n),
+            AppError::TooBig(n)         => write!(f, "number is too big: {} (max 100)", n),
+        }
+    }
+}
+```
+
+## การ implement `std::error::Error`
+
+เพื่อให้ใช้ได้ทุกที่ที่คาดหวัง `dyn Error` (เช่น ใน `Box<dyn Error>`) ประเภทของคุณต้อง implement `std::error::Error` trait นี้ไม่มีเมธอดที่ต้องการ — การ implement เริ่มต้นเพียงพอสำหรับกรณีส่วนใหญ่ เลือก implement `source()` เพื่อเปิดเผยสาเหตุที่อยู่เบื้องหลัง:
+
+```rust
+impl std::error::Error for AppError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            AppError::ParseError(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+```
+
+## การแปลงอัตโนมัติด้วย `From`
+
+การ implement `From<SomeOtherError> for AppError` ให้ตัวดำเนินการ `?` แปลงโดยอัตโนมัติเมื่อเรียกฟังก์ชันที่คืน `SomeOtherError`:
+
+```rust
+impl From<std::num::ParseIntError> for AppError {
+    fn from(e: std::num::ParseIntError) -> Self {
+        AppError::ParseError(e)
+    }
+}
+```
+
+ตอนนี้ `s.parse::<i32>()?` ในฟังก์ชันที่คืน `Result<_, AppError>` จะห่อ `ParseIntError` เป็น `AppError::ParseError` โดยอัตโนมัติ
+
+export const customErrorsCode = `use std::fmt;
+use std::num::ParseIntError;
+
+#[derive(Debug)]
+enum AppError {
+    ParseError(ParseIntError),
+    NegativeNumber(i32),
+    TooBig(i32),
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::ParseError(e)     => write!(f, "parse error: {}", e),
+            AppError::NegativeNumber(n) => write!(f, "number is negative: {}", n),
+            AppError::TooBig(n)         => write!(f, "number is too big: {} (max 100)", n),
+        }
+    }
+}
+
+impl std::error::Error for AppError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            AppError::ParseError(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<ParseIntError> for AppError {
+    fn from(e: ParseIntError) -> Self {
+        AppError::ParseError(e)
+    }
+}
+
+fn parse_bounded(s: &str) -> Result<i32, AppError> {
+    let n: i32 = s.parse()?;   // ParseIntError -> AppError via From
+    if n < 0   { return Err(AppError::NegativeNumber(n)); }
+    if n > 100 { return Err(AppError::TooBig(n)); }
+    Ok(n)
+}
+
+fn main() {
+    let cases = ["42", "-5", "200", "abc"];
+    for s in &cases {
+        match parse_bounded(s) {
+            Ok(n)  => println!("{} -> Ok({})", s, n),
+            Err(e) => println!("{} -> Err: {}", s, e),
+        }
+    }
+}`;
+
+<Playground client:visible code={customErrorsCode} />
+
+<Callout title="Implement Error + Display สำหรับประเภทข้อผิดพลาดแบบกำหนดเอง">
+enum ข้อผิดพลาดที่ออกแบบดีทำให้ทุก failure mode ชัดเจนใน API ของคุณ implement `std::fmt::Display` สำหรับข้อความที่ผู้ใช้เห็น `std::error::Error` สำหรับความเข้ากันได้กับ `Box<dyn Error>` และ `From<...>` สำหรับแต่ละประเภทข้อผิดพลาดระดับล่างที่คุณห่อ สามอย่างนี้ให้ตัวดำเนินการ `?` ทำงานแปลงทั้งหมดโดยอัตโนมัติ
+</Callout>
+
+export const quizCustomErrors = [
+    {
+        q: "trait ใดที่ให้ข้อความข้อผิดพลาดที่อ่านได้โดยมนุษย์ที่แสดงด้วย {}?",
+        options: [
+            "std::error::Error",
+            "std::fmt::Debug",
+            "std::fmt::Display",
+            "std::convert::From"
+        ],
+        answer: 2
+    },
+    {
+        q: "จุดประสงค์ของการ implement From<OtherError> for MyError คืออะไร?",
+        options: [
+            "มันช่วยให้ MyError พิมพ์ด้วย {:?}",
+            "มันให้ ? แปลง OtherError เป็น MyError โดยอัตโนมัติ",
+            "มันทำให้ MyError implement trait Error",
+            "มันช่วยให้ MyError ใช้เป็น argument ของฟังก์ชัน"
+        ],
+        answer: 1
+    },
+    {
+        q: "source() คืนอะไรใน std::error::Error?",
+        options: [
+            "ชื่อไฟล์และหมายเลขบรรทัดที่ข้อผิดพลาดถูกสร้าง",
+            "ข้อผิดพลาดระดับล่างที่ทำให้เกิดข้อผิดพลาดนี้ ถ้ามี",
+            "ข้อความ Display ของข้อผิดพลาด",
+            "ชื่อ variant เป็น string"
+        ],
+        answer: 1
+    },
+    {
+        q: "เหตุใด enum ข้อผิดพลาดที่เป็น concrete จึงดีกว่า Box<dyn Error> สำหรับ API ของไลบรารี?",
+        options: [
+            "Box<dyn Error> ไม่ implement Display",
+            "ผู้เรียกสามารถ pattern-match บน variant concrete เพื่อจัดการแต่ละความล้มเหลวต่างกัน",
+            "Box<dyn Error> ไม่สามารถใช้กับตัวดำเนินการ ?",
+            "enum ที่เป็น concrete หลีกเลี่ยงการจัดสรร heap ทั้งหมด"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="error-handling/custom-errors" questions={quizCustomErrors} />
+
+<ProgressTracker client:visible id="error-handling/custom-errors" />

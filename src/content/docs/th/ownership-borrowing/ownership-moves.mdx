@@ -1,0 +1,157 @@
+---
+title: 'Ownership และ Moves'
+description: 'แต่ละค่ามีเจ้าของหนึ่งเดียว การ assign หรือส่งค่าที่ไม่ใช่ Copy จะ move มัน ค่า Copy จะถูกทำซ้ำ ใช้ .clone() เพื่อทำ deep copy แบบชัดเจน'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## เจ้าของได้ทีละหนึ่ง
+
+ทุกค่าใน Rust มีเจ้าของเพียงหนึ่งเดียว เมื่อคุณ assign ค่าให้ตัวแปรอีกตัว หรือส่งมันเข้าไปในฟังก์ชัน **สิ่งที่เกิดขึ้นขึ้นอยู่กับว่า type นั้น implement `Copy` หรือไม่**
+
+### Type ที่ไม่ใช่ `Copy` จะ Move
+
+Type ที่เป็นเจ้าของหน่วยความจำบน heap — อย่างเช่น `String`, `Vec<i32>` หรือ `Box<i32>` — จะ **ไม่** implement `Copy` เมื่อคุณ assign ตัวหนึ่งไปยังอีกตัวแปรหนึ่ง ค่านั้นจะถูก **moved**: binding เดิมจะใช้งานไม่ได้
+
+```rust
+fn main() {
+    let s1 = String::from("hello");
+    let s2 = s1; // s1 is moved into s2
+
+    // println!("{}", s1); // ERROR: s1 was moved
+    println!("{}", s2);   // fine
+}
+```
+
+กฎเดียวกันนี้ใช้เมื่อคุณส่งค่าเข้าไปในฟังก์ชัน:
+
+```rust
+fn consume(s: String) {
+    println!("{}", s);
+} // s is dropped here
+
+fn main() {
+    let name = String::from("Rust");
+    consume(name); // name is moved
+    // name is no longer valid here
+}
+```
+
+### Type ที่เป็น `Copy` จะถูกทำซ้ำ
+
+Type แบบ scalar ง่าย ๆ ที่เก็บอยู่บน stack ทั้งหมด — จำนวนเต็ม, `bool`, `char`, ตัวเลขทศนิยม และ tuple ของสิ่งเหล่านี้ — จะ implement `Copy` การ assign หรือส่งต่อมันจะทำ **copy แบบ bitwise**; ตัวเดิมยังใช้งานได้
+
+```rust
+fn main() {
+    let x: i32 = 42;
+    let y = x; // x is COPIED, not moved
+    println!("x={} y={}", x, y); // both valid
+}
+```
+
+Type ที่เป็น `Copy` ที่พบบ่อย: `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `f32`, `f64`, `bool`, `char`
+
+### Deep Copy แบบชัดเจนด้วย `.clone()`
+
+เมื่อคุณต้องการ copy แบบอิสระเต็มรูปแบบของค่าที่เป็นเจ้าของหน่วยความจำบน heap ให้เรียก `.clone()` นี่คือการเลือกทำ (opt-in) อย่างชัดเจนต่อการดำเนินการที่อาจมีค่าใช้จ่ายสูง
+
+```rust
+fn main() {
+    let original = String::from("keep me");
+    let copy = original.clone(); // deep copy
+    println!("original={} copy={}", original, copy);
+}
+```
+
+### การคืน Ownership
+
+ฟังก์ชันสามารถคืน ownership กลับไปให้ผู้เรียกได้ด้วยการ return ค่านั้นออกมา:
+
+```rust
+fn take_and_give_back(s: String) -> String {
+    s // ownership moves out of the function
+}
+
+fn main() {
+    let s1 = String::from("hello");
+    let s2 = take_and_give_back(s1);
+    println!("{}", s2);
+}
+```
+
+วิธีนี้ใช้ได้แต่ยืดยาว ในทางปฏิบัติคุณจะเลือกใช้ **borrowing** (บทเรียนถัดไป) แทนการ move-แล้ว-return เกือบทุกครั้ง
+
+export const ownershipMovesCode = `fn take_ownership(s: String) -> String {
+    println!("inside take_ownership: {}", s);
+    s // return ownership to caller
+}
+
+fn main() {
+    // String is NOT Copy — it moves
+    let s1 = String::from("hello");
+    let s2 = take_ownership(s1); // s1 is moved
+    println!("s2 now owns: {}", s2);
+
+    // i32 IS Copy — it is copied
+    let x = 42;
+    let y = x;
+    println!("x={} y={}", x, y);
+
+    // .clone() makes an explicit deep copy
+    let original = String::from("keep me");
+    let cloned = original.clone();
+    println!("original={} cloned={}", original, cloned);
+}`;
+
+<Playground client:visible code={ownershipMovesCode} />
+
+<Callout title="การใช้ค่าที่ถูก move ไปแล้วคือ compile error">
+เมื่อค่าที่ไม่ใช่ `Copy` ถูก move ไปแล้ว คอมไพเลอร์จะทำให้ binding เดิมใช้งานไม่ได้อย่างถาวร ความพยายามใด ๆ ที่จะใช้มันหลังจากนั้นจะเป็น **compile-time error** — `error[E0382]: borrow of moved value` คุณจะไม่สามารถเผลอเข้าถึงหน่วยความจำที่ถูกคืนไปแล้วได้
+</Callout>
+
+export const quizOwnershipMoves = [
+    {
+        q: "เกิดอะไรขึ้นเมื่อคุณ assign String ให้ตัวแปรใหม่ใน Rust?",
+        options: [
+            "ตัวแปรทั้งสองชี้ไปยัง heap allocation เดียวกัน",
+            "ทำ deep copy ให้อัตโนมัติ",
+            "ค่าถูก move และ binding เดิมใช้งานไม่ได้",
+            "คอมไพเลอร์โยน runtime panic ออกมา"
+        ],
+        answer: 2
+    },
+    {
+        q: "type ใดต่อไปนี้ implement Copy?",
+        options: ["String", "Vec<i32>", "i32", "Box<i32>"],
+        answer: 2
+    },
+    {
+        q: "คุณจะได้ copy แบบอิสระอย่างชัดเจนของ String ได้อย่างไร?",
+        options: [
+            "let b = a;",
+            "let b = a.copy();",
+            "let b = a.clone();",
+            "let b = &a;"
+        ],
+        answer: 2
+    },
+    {
+        q: "หลังจากส่ง String เข้าไปในฟังก์ชันที่เอา ownership ไป ผู้เรียกยังใช้มันได้อีกไหม?",
+        options: [
+            "ได้ เพราะฟังก์ชันได้รับ copy",
+            "ไม่ได้ เพราะค่าถูก move เข้าไปในฟังก์ชันแล้ว",
+            "ได้ แต่เฉพาะถ้าฟังก์ชัน return มันกลับมา",
+            "ได้เฉพาะถ้า String ถูกประกาศเป็น mut"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="ownership-borrowing/ownership-moves" questions={quizOwnershipMoves} />
+
+<ProgressTracker client:visible id="ownership-borrowing/ownership-moves" />

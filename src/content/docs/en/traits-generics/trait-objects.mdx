@@ -1,0 +1,152 @@
+---
+title: 'Trait Objects'
+description: 'Use dyn Trait for runtime polymorphism when types are not known at compile time.'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Static vs Dynamic Dispatch
+
+Rust gives you two ways to use trait polymorphism:
+
+- **Static dispatch** (via generics): the compiler knows the exact type at compile time and generates specialized code for each one. Zero runtime overhead.
+- **Dynamic dispatch** (via `dyn Trait`): the concrete type is not known until runtime. The compiler stores a *vtable* — a table of function pointers — alongside the value so the right method can be found at runtime.
+
+## The `dyn Trait` Syntax
+
+When you write `dyn Animal`, you are asking Rust to use dynamic dispatch. Because the size of the concrete type is unknown at compile time, you must put a `dyn Trait` behind a pointer. The two most common forms are:
+
+- `&dyn Trait` — a borrowed trait object (no heap allocation)
+- `Box<dyn Trait>` — an owned trait object stored on the heap
+
+```rust
+fn make_sound(animal: &dyn Animal) {
+    println!("{} says: {}", animal.name(), animal.sound());
+}
+```
+
+This function accepts *any* type that implements `Animal` — you do not need to know the concrete type at compile time.
+
+## Storing Mixed Types in a Collection
+
+The most powerful use case for trait objects is storing values of different concrete types together in a `Vec` or other collection. With generics alone this is impossible — a `Vec<T>` can only hold one concrete type at a time.
+
+```rust
+let animals: Vec<Box<dyn Animal>> = vec![
+    Box::new(Dog),
+    Box::new(Cat),
+    Box::new(Dog),
+];
+```
+
+Each element is a `Box<dyn Animal>` — an owned pointer to some type that implements `Animal`. The vtable stored alongside each value ensures the right `sound()` and `name()` implementations are called.
+
+## Trait Objects and Object Safety
+
+Not every trait can be used as a `dyn Trait`. A trait is *object-safe* if:
+
+1. It has no methods that return `Self`.
+2. It has no generic type parameters on its methods.
+
+The standard library traits `Display`, `Debug`, and `Iterator` are object-safe. Traits like `Clone` (which returns `Self`) are not.
+
+## When to Use Each
+
+| Approach | Type known at compile time? | Runtime cost | Heterogeneous collection? |
+|---|---|---|---|
+| Generic (`impl Trait` or `T: Trait`) | Yes | Zero | No |
+| Trait object (`dyn Trait`) | No | Small vtable indirection | Yes |
+
+Use generics when you know the types at compile time and want maximum performance. Use trait objects when you need to work with a collection of mixed concrete types or when the type is determined by user input or configuration at runtime.
+
+export const traitObjectsCode = `trait Animal {
+    fn sound(&self) -> &str;
+    fn name(&self) -> &str;
+}
+
+struct Dog;
+struct Cat;
+
+impl Animal for Dog {
+    fn sound(&self) -> &str { "Woof" }
+    fn name(&self) -> &str { "Dog" }
+}
+
+impl Animal for Cat {
+    fn sound(&self) -> &str { "Meow" }
+    fn name(&self) -> &str { "Cat" }
+}
+
+fn make_sound(animal: &dyn Animal) {
+    println!("{} says: {}", animal.name(), animal.sound());
+}
+
+fn main() {
+    let animals: Vec<Box<dyn Animal>> = vec![
+        Box::new(Dog),
+        Box::new(Cat),
+        Box::new(Dog),
+    ];
+
+    for animal in &animals {
+        make_sound(animal.as_ref());
+    }
+}`;
+
+<Playground client:visible code={traitObjectsCode} />
+
+<Callout title="Trait objects enable runtime polymorphism via a vtable">
+When you use `dyn Trait`, Rust stores a fat pointer: a pointer to the data and a pointer to a vtable (a table of function pointers for that type's trait implementation). This enables different concrete types to be stored together in collections. The cost is a small indirection per method call — usually negligible, but worth knowing about.
+</Callout>
+
+export const quizTraitObjects = [
+    {
+        q: "What does `dyn Trait` mean in Rust?",
+        options: [
+            "A generic type parameter constrained by a trait bound",
+            "A compile-time zero-cost abstraction over trait implementations",
+            "A trait object that uses dynamic dispatch — the concrete type is resolved at runtime via a vtable",
+            "A trait that can only be implemented by exactly one type",
+        ],
+        answer: 2,
+    },
+    {
+        q: "What is a vtable?",
+        options: [
+            "A table of function pointers stored alongside a trait object so the correct method implementations can be found at runtime",
+            "A compile-time lookup table generated during monomorphization",
+            "A hash map of trait method names to their addresses in memory",
+            "A special Rust keyword for virtual method dispatch",
+        ],
+        answer: 0,
+    },
+    {
+        q: "Why must `dyn Trait` be placed behind a pointer such as `Box<dyn Trait>` or `&dyn Trait`?",
+        options: [
+            "Because trait objects are always mutable",
+            "Because Rust requires heap allocation for all polymorphic types",
+            "Because the size of the concrete type is unknown at compile time, so Rust cannot allocate it on the stack directly",
+            "Because `dyn Trait` values do not implement the `Sized` marker trait, and pointers have a known size",
+        ],
+        answer: 3,
+    },
+    {
+        q: "Which approach allows storing values of different concrete types together in a `Vec`?",
+        options: [
+            "Generic type parameters — `Vec<T>` where `T: Animal`",
+            "Trait objects — `Vec<Box<dyn Animal>>`",
+            "Enum variants — only if each variant holds the same data",
+            "Both generics and trait objects work identically for this purpose",
+        ],
+        answer: 1,
+    },
+];
+
+<Quiz client:visible id="traits-generics/trait-objects" questions={quizTraitObjects} />
+
+<ProgressTracker client:visible id="traits-generics/trait-objects" />

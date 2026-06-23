@@ -1,0 +1,164 @@
+---
+title: 'Vec และ String'
+description: 'Vec<T> คือ Array บน Heap ที่ขยายได้; String คือข้อความ UTF-8 ที่เป็นเจ้าของและขยายได้ เรียนรู้ push, pop, การ Index, การ Iterate และความสัมพันธ์ระหว่าง String กับ &str'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## `Vec<T>` — Array บน Heap ที่ขยายได้
+
+`Vec<T>` คือ Collection ลำดับที่ใช้งานหลักใน Rust มันจัดเก็บ Element ของประเภท `T` อย่าง Contiguous บน Heap และปรับขนาดโดยอัตโนมัติเมื่อคุณ Push เกิน Capacity ปัจจุบัน
+
+```rust
+let mut v: Vec<i32> = Vec::new();     // Vec ว่างเปล่า
+let w = vec![1, 2, 3];               // Macro vec! แบบย่อ
+```
+
+### Push, Pop และ Index
+
+```rust
+let mut v = vec![10, 20, 30];
+
+v.push(40);                       // เพิ่ม Element ท้ายสุด
+let last = v.pop();               // ลบและคืน Element ท้ายสุด → Some(40)
+let first = v[0];                 // Index — Panic ถ้าเกิน Bounds
+let safe = v.get(100);            // คืน Option<&T> — None ถ้าเกิน Bounds
+```
+
+ควรใช้ `.get(i)` เมื่อ Index อาจเกิน Range เพื่อจัดการกรณี `None` แทนที่จะ Panic
+
+### การ Iterate ผ่าน Vec
+
+```rust
+let nums = vec![1, 2, 3];
+
+for n in &nums {                  // ยืม Element แต่ละตัวเป็น &i32
+    println!("{}", n);
+}
+
+// nums ยังใช้ได้หลัง Loop เพราะเราแค่ยืมมัน
+```
+
+การใช้ `&nums` ยืม Vector; การใช้ `nums` จะย้าย (Move) และทำให้ใช้ไม่ได้หลัง Loop
+
+## `String` — ข้อความที่เป็นเจ้าของและขยายได้
+
+`String` คือประเภทข้อความบน Heap ที่ Mutable ของ Rust มันเป็นเจ้าของ Byte ของตัวเองและจัดการการ Deallocation
+
+```rust
+let mut s = String::from("hello");
+s.push(' ');                          // Push ตัวอักษรเดียว
+s.push_str("world");                  // ต่อท้าย String Slice
+let combined = s + " again";          // + ย้าย s และต่อท้าย
+```
+
+### `String` เทียบกับ `&str`
+
+| | `String` | `&str` |
+|---|---|---|
+| Ownership | เป็นเจ้าของ | Borrowed Slice |
+| ตำแหน่ง | Heap | Stack / Static / ภายใน String |
+| Mutable | ได้ (ด้วย `mut`) | ไม่ได้ |
+| การใช้งานทั่วไป | สร้าง/แก้ไขข้อความ | อ่านข้อความ |
+
+`&String` จะถูก Coerce เป็น `&str` โดยอัตโนมัติ ดังนั้นควรใช้ `&str` ใน Parameter ของ Function เพื่อความยืดหยุ่นสูงสุด
+
+```rust
+fn shout(s: &str) -> String {
+    s.to_uppercase()
+}
+
+let owned = String::from("hello");
+shout(&owned);          // &String ถูก Coerce เป็น &str
+shout("world");         // String Literal เป็น &str อยู่แล้ว
+```
+
+export const vecStringCode = `fn main() {
+    // Vec<i32> basics
+    let mut nums: Vec<i32> = Vec::new();
+    nums.push(10);
+    nums.push(20);
+    nums.push(30);
+    println!("len={}, first={}", nums.len(), nums[0]);
+
+    // pop returns Option<T>
+    let last = nums.pop();
+    println!("popped: {:?}, remaining: {:?}", last, nums);
+
+    // safe get returns Option<&T>
+    println!("get(5) = {:?}", nums.get(5));
+
+    // iterate by reference — nums still valid after
+    for n in &nums {
+        println!("item: {}", n);
+    }
+    println!("nums still valid: {:?}", nums);
+
+    // String vs &str
+    let literal: &str = "hello";
+    let mut owned: String = String::from(literal);
+    owned.push_str(" world");
+    println!("{}", owned);
+
+    // slice into a String
+    let slice: &str = &owned[0..5];
+    println!("slice: {}", slice);
+}`;
+
+<Playground client:visible code={vecStringCode} />
+
+<Callout title="Vec<T> เป็นเจ้าของ Array บน Heap ที่ขยายได้">
+`Vec<T>` จัดสรร Element บน Heap เมื่อ `Vec<T>` ถูก Drop Element ทั้งหมดจะถูก Drop ด้วย การ Iterate ด้วย `&v` ยืม Element; การ Iterate ด้วย `v` จะ Consume (Move) Vector ควรใช้ `&v` เมื่อยังต้องการใช้ Vector หลัง Loop
+</Callout>
+
+export const quizVecString = [
+    {
+        q: "Vec::pop() คืนค่าอะไรเมื่อ Vec ว่างเปล่า?",
+        options: [
+            "มัน Panic พร้อมข้อความ index out of bounds",
+            "มันคืน None",
+            "มันคืน 0",
+            "มันคืน Vec ว่างเปล่า"
+        ],
+        answer: 1
+    },
+    {
+        q: "ความแตกต่างระหว่างการ Iterate ด้วย &nums กับ nums คืออะไร?",
+        options: [
+            "ไม่มีความแตกต่าง — ทั้งคู่ยืม Vec",
+            "&nums ยืม Vec (ยังใช้ได้); nums ย้ายมัน (ใช้ไม่ได้หลังจากนั้น)",
+            "nums ยืม Vec; &nums ย้ายมัน",
+            "ทั้งคู่ Consume Vec และคืนหน่วยความจำ"
+        ],
+        answer: 1
+    },
+    {
+        q: "ทำไม Parameter ของ Function ควรใช้ &str แทน &String?",
+        options: [
+            "&str เร็วกว่าณ Runtime เพราะหลีกเลี่ยง Heap Allocation",
+            "&String เลิกใช้แล้วใน Rust 2021",
+            "&str รับทั้ง Reference ของ String ที่เป็นเจ้าของและ String Literal ผ่าน Coerce อัตโนมัติ",
+            "String ไม่ Implement Trait Display"
+        ],
+        answer: 2
+    },
+    {
+        q: "ควรใช้ Method ใดแทน v[i] เมื่อ Index อาจเกิน Bounds?",
+        options: [
+            "v.at(i)",
+            "v.get(i) — คืน Option<&T>",
+            "v.safe_index(i)",
+            "v.try_get(i)"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="collections-iterators/vec-string" questions={quizVecString} />
+
+<ProgressTracker client:visible id="collections-iterators/vec-string" />

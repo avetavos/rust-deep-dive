@@ -1,0 +1,146 @@
+---
+title: 'Variables & Mutability'
+description: 'In Rust, variables are immutable by default. Use mut to opt into mutation, const for compile-time constants, and shadowing to rebind a name with a new value.'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Variables Are Immutable by Default
+
+When you declare a variable with `let`, it is **immutable** — you cannot assign to it a second time. This is not a limitation; it is a feature. Immutability by default means the compiler can catch unintended mutations and reason about your code more precisely.
+
+```rust
+fn main() {
+    let x = 5;
+    // x = 6; // error[E0384]: cannot assign twice to immutable variable `x`
+    println!("x = {}", x);
+}
+```
+
+To allow mutation, add `mut` after `let`:
+
+```rust
+fn main() {
+    let mut y = 10;
+    y = 20;  // allowed because y is mut
+    println!("y = {}", y);
+}
+```
+
+### Shadowing
+
+Shadowing is different from mutation. You **re-declare** a variable with the same name using a new `let` binding. The new binding **shadows** the old one for the rest of the scope. You can even change the type when you shadow.
+
+```rust
+fn main() {
+    let z = 3;
+    let z = z * 2;   // shadows the previous z
+    let z = z + 1;   // shadows again
+    println!("z = {}", z); // 7
+
+    // Shadowing can change the type
+    let word = "hello";
+    let word = word.len(); // shadow with a usize
+    println!("len = {}", word);
+}
+```
+
+Shadowing is not the same as `mut`. With `mut`, you re-assign to the same variable. With shadowing, you create a new variable that happens to have the same name. After the scope ends, the outer binding comes back into view.
+
+### Constants
+
+`const` declares a **compile-time constant**. Unlike `let`, constants:
+
+- **require** an explicit type annotation
+- must be set to a constant expression (not a runtime value)
+- are valid for the entire duration of the program in their scope
+- use `SCREAMING_SNAKE_CASE` by convention
+
+```rust
+const MAX_POINTS: u32 = 100_000;
+const GRAVITY: f64 = 9.81;
+
+fn main() {
+    println!("MAX_POINTS = {}", MAX_POINTS);
+    println!("GRAVITY = {}", GRAVITY);
+}
+```
+
+The underscore in `100_000` is a **numeric separator** — it is purely cosmetic and ignored by the compiler. It makes large numbers easier to read.
+
+export const variablesMutabilityCode = `fn main() {
+    let x = 5;
+    // x = 6; // error: cannot assign twice to immutable variable
+
+    let mut y = 10;
+    y = 20;
+    println!("y = {}", y);
+
+    // Shadowing: re-bind the same name
+    let z = 3;
+    let z = z * 2;
+    let z = z + 1;
+    println!("z = {}", z);
+
+    // Constants are always immutable and require a type annotation
+    const MAX_POINTS: u32 = 100_000;
+    println!("MAX_POINTS = {}", MAX_POINTS);
+}`;
+
+<Playground client:visible code={variablesMutabilityCode} />
+
+<Callout title="Variables are immutable by default — opt into mutation with mut">
+Making immutability the default forces you to be explicit about which data changes. When you see `mut`, you know that variable is expected to be modified. When you do not see `mut`, the compiler guarantees it is never mutated — no defensive copies needed.
+</Callout>
+
+export const quizVariablesMutability = [
+    {
+        q: "What does the mut keyword do?",
+        options: [
+            "It makes the variable public",
+            "It allows the variable to be assigned a new value after its initial binding",
+            "It prevents the variable from being shadowed",
+            "It allocates the variable on the heap"
+        ],
+        answer: 1
+    },
+    {
+        q: "What is the key difference between shadowing and mut?",
+        options: [
+            "There is no difference — they are two syntaxes for the same thing",
+            "mut allows type changes; shadowing does not",
+            "Shadowing creates a new binding (can change type); mut re-assigns the same binding",
+            "Shadowing is only allowed inside loops"
+        ],
+        answer: 2
+    },
+    {
+        q: "Which of the following is required for a const declaration?",
+        options: [
+            "The mut keyword",
+            "An explicit type annotation",
+            "A heap allocation with Box",
+            "A lifetime parameter"
+        ],
+        answer: 1
+    },
+    {
+        q: "What does the underscore in 100_000 mean to the Rust compiler?",
+        options: [
+            "It separates two distinct integer values",
+            "It is a wildcard that matches any digit",
+            "It is ignored — it is a visual separator only",
+            "It signals an unsigned integer type"
+        ],
+        answer: 2
+    }
+];
+
+<Quiz client:visible id="basics/variables-mutability" questions={quizVariablesMutability} />
+
+<ProgressTracker client:visible id="basics/variables-mutability" />

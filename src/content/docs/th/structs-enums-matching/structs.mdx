@@ -1,0 +1,163 @@
+---
+title: 'Structs'
+description: 'กำหนดชนิดข้อมูลที่มีชื่อด้วย struct เพิ่ม method ด้วย impl และใช้ tuple struct สำหรับ wrapper ที่เบาลง'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## การกำหนด Struct
+
+**Struct** รวม field ที่เกี่ยวข้องกันไว้ภายใต้ประเภทชื่อเดียว คุณประกาศด้วยคีย์เวิร์ด `struct` ตามด้วยชื่อประเภทและรายการ field ที่มีชื่อพร้อมประเภทของแต่ละ field
+
+```rust
+struct Rectangle {
+    width: f64,
+    height: f64,
+}
+```
+
+คุณสร้าง instance โดยระบุค่าสำหรับทุก field:
+
+```rust
+let rect = Rectangle { width: 5.0, height: 3.0 };
+println!("{}", rect.width); // เข้าถึง field ด้วย dot notation
+```
+
+### การ Derive Debug
+
+เพิ่ม `#[derive(Debug)]` เหนือ struct เพื่อเปิดใช้งานการฟอร์แมต `{:?}` อัตโนมัติ ซึ่งจำเป็นสำหรับการแสดงผล struct ในระหว่างการพัฒนา
+
+```rust
+#[derive(Debug)]
+struct Point { x: i32, y: i32 }
+
+let p = Point { x: 1, y: 2 };
+println!("{:?}", p);  // Point { x: 1, y: 2 }
+```
+
+### Struct Update Syntax
+
+เมื่อต้องการ instance ใหม่ที่แชร์ field ส่วนใหญ่กับ instance ที่มีอยู่ ใช้ `..existing` เพื่อเติม field ที่เหลือ:
+
+```rust
+let p1 = Point { x: 1, y: 2 };
+let p2 = Point { x: 10, ..p1 }; // y คัดลอกมาจาก p1
+```
+
+## การเพิ่ม Method ด้วย `impl`
+
+บล็อก `impl` ใช้แนบฟังก์ชันเข้ากับ struct Method ที่ทำงานกับ instance จะรับ `self` เป็น parameter แรก
+
+```rust
+impl Rectangle {
+    fn area(&self) -> f64 {
+        self.width * self.height
+    }
+}
+```
+
+รูปแบบของ `self` ทั้งสาม:
+
+- `self` — รับความเป็นเจ้าของ (consume ค่านั้น)
+- `&self` — ยืมแบบ immutable (อ่านอย่างเดียว พบบ่อยที่สุด)
+- `&mut self` — ยืมแบบ mutable (อนุญาตให้แก้ไข)
+
+### Associated Functions (รูปแบบ `Self::new`)
+
+ฟังก์ชันในบล็อก `impl` ที่**ไม่**รับ `self` เรียกว่า *associated functions* เรียกใช้ด้วย syntax `::` รูปแบบ `new` เป็น constructor ที่ใช้กันตามแบบแผนใน Rust:
+
+```rust
+impl Rectangle {
+    fn new(width: f64, height: f64) -> Self {
+        Rectangle { width, height }
+    }
+}
+
+let r = Rectangle::new(5.0, 3.0);
+```
+
+`Self` เป็น alias ของประเภทที่กำลัง implement (`Rectangle` ในที่นี้)
+
+## Tuple Structs
+
+**Tuple struct** มี field ที่ไม่มีชื่อ เป็นตำแหน่ง มีประโยชน์เป็น type-safe wrapper รอบ primitive:
+
+```rust
+struct Color(u8, u8, u8);   // RGB
+
+let red = Color(255, 0, 0);
+println!("{}", red.0); // เข้าถึงด้วย index
+```
+
+export const structsCode = `#[derive(Debug)]
+struct Rectangle {
+    width: f64,
+    height: f64,
+}
+
+impl Rectangle {
+    fn new(width: f64, height: f64) -> Self {
+        Rectangle { width, height }
+    }
+
+    fn area(&self) -> f64 {
+        self.width * self.height
+    }
+
+    fn perimeter(&self) -> f64 {
+        2.0 * (self.width + self.height)
+    }
+
+    fn is_square(&self) -> bool {
+        self.width == self.height
+    }
+}
+
+struct Color(u8, u8, u8);
+
+fn main() {
+    let rect = Rectangle::new(5.0, 3.0);
+    println!("Rectangle: {:?}", rect);
+    println!("Area: {}", rect.area());
+    println!("Perimeter: {}", rect.perimeter());
+    println!("Is square: {}", rect.is_square());
+
+    let square = Rectangle::new(4.0, 4.0);
+    println!("Is square: {}", square.is_square());
+
+    let red = Color(255, 0, 0);
+    println!("Red: ({}, {}, {})", red.0, red.1, red.2);
+}`;
+
+<Playground client:visible code={structsCode} />
+
+<Callout title="Methods รับ self, &self หรือ &mut self">
+การเลือก receiver ที่ถูกต้องมีความสำคัญ ใช้ `&self` เมื่อ method ต้องการแค่อ่าน field ใช้ `&mut self` เมื่อต้องการแก้ไข ใช้ `self` (owned) เฉพาะเมื่อ method ควร consume instance นั้น — พบได้น้อยแต่เป็น idiomatic สำหรับ builder pattern
+</Callout>
+
+export const structsQuiz = [
+    {
+        q: 'ควรใช้ receiver type ใดสำหรับ method ที่ต้องการแค่อ่าน field ของ struct?',
+        options: ['self', '&self', '&mut self', 'Self'],
+        answer: 1,
+    },
+    {
+        q: 'ชื่อตามแบบแผนของ associated function ที่สร้าง instance ใหม่ของ struct คืออะไร?',
+        options: ['create', 'build', 'new', 'init'],
+        answer: 2,
+    },
+    {
+        q: 'ควรใช้รูปแบบ self ใดสำหรับ method ที่ต้องการแค่อ่าน field ของ struct?',
+        options: ['self', '&mut self', '&self', 'Self'],
+        answer: 2,
+    },
+];
+
+<Quiz client:visible id="structs-enums-matching/structs" questions={structsQuiz} />
+
+<ProgressTracker client:visible id="structs-enums-matching/structs" />

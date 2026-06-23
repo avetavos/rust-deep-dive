@@ -1,0 +1,172 @@
+---
+title: 'Enums'
+description: "Rust enums can carry data per variant, making them far more powerful than C-style enums."
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Basic Enums
+
+An enum defines a type that can be one of several named variants. In its simplest form it looks like a C enum:
+
+```rust
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+let heading = Direction::North;
+```
+
+Each variant is accessed with `::` syntax. Derive `Debug` to print an enum with `{:?}`.
+
+## Data-Carrying Variants
+
+<Callout title="Enums are algebraic data types">
+Unlike C enums, each Rust enum variant can hold its own data, and different variants can hold different types and amounts of data. This makes Rust enums *sum types* — the type is one of several possible shapes. You can think of each variant as its own anonymous struct or tuple, all bundled under a single type name.
+</Callout>
+
+```rust
+enum Shape {
+    Circle(f64),               // radius
+    Rectangle(f64, f64),       // width, height
+    Triangle(f64, f64, f64),   // three sides
+}
+```
+
+You construct a variant by calling it like a function:
+
+```rust
+let c = Shape::Circle(3.0);
+let r = Shape::Rectangle(4.0, 5.0);
+```
+
+Variants can also hold named fields, just like a struct:
+
+```rust
+enum Message {
+    Move { x: i32, y: i32 },
+    Write(String),
+    Quit,
+}
+```
+
+## `impl` on Enums
+
+You can add methods to enums the same way you add them to structs — with an `impl` block and a `match` inside:
+
+```rust
+impl Shape {
+    fn name(&self) -> &str {
+        match self {
+            Shape::Circle(_)         => "Circle",
+            Shape::Rectangle(_, _)   => "Rectangle",
+            Shape::Triangle(_, _, _) => "Triangle",
+        }
+    }
+}
+```
+
+## `Option<T>` — a Built-in Enum
+
+Rust has no `null`. Instead, the standard library provides `Option<T>`:
+
+```rust
+enum Option<T> {
+    Some(T),
+    None,
+}
+```
+
+`Some(value)` wraps a present value; `None` represents the absence of a value. The compiler forces you to handle both cases before you can use the inner value, eliminating null-pointer bugs at compile time.
+
+export const enumsCode = `#[derive(Debug)]
+enum Shape {
+    Circle(f64),
+    Rectangle(f64, f64),
+    Triangle(f64, f64, f64),
+}
+
+impl Shape {
+    fn area(&self) -> f64 {
+        match self {
+            Shape::Circle(r) => std::f64::consts::PI * r * r,
+            Shape::Rectangle(w, h) => w * h,
+            Shape::Triangle(a, b, c) => {
+                let s = (a + b + c) / 2.0;
+                (s * (s - a) * (s - b) * (s - c)).sqrt()
+            }
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Shape::Circle(_) => "Circle",
+            Shape::Rectangle(_, _) => "Rectangle",
+            Shape::Triangle(_, _, _) => "Triangle",
+        }
+    }
+}
+
+fn main() {
+    let shapes: Vec<Shape> = vec![
+        Shape::Circle(3.0),
+        Shape::Rectangle(4.0, 5.0),
+        Shape::Triangle(3.0, 4.0, 5.0),
+    ];
+
+    for shape in &shapes {
+        println!("{}: area = {:.2}", shape.name(), shape.area());
+    }
+
+    let maybe: Option<i32> = Some(42);
+    println!("Option: {:?}", maybe);
+    let none: Option<i32> = None;
+    println!("None: {:?}", none);
+}`;
+
+<Playground client:visible code={enumsCode} />
+
+export const enumsQuiz = [
+    {
+        q: 'Which of these is a valid way to construct a data-carrying enum variant?',
+        options: [
+            'Shape.Circle(3.0)',
+            'new Shape::Circle(3.0)',
+            'Shape::Circle(3.0)',
+            'Shape { Circle: 3.0 }',
+        ],
+        answer: 2,
+    },
+    {
+        q: "What does Rust's Option<T> replace compared to other languages?",
+        options: [
+            'Exception handling',
+            'Null or nil references',
+            'Unsigned integers',
+            'Dynamic dispatch',
+        ],
+        answer: 1,
+    },
+    {
+        q: 'Can you define methods on an enum in Rust?',
+        options: [
+            'No, methods are only allowed on structs.',
+            'Yes, using an impl block just like for structs.',
+            'Yes, but only associated functions, not instance methods.',
+            'Only if the enum derives Default.',
+        ],
+        answer: 1,
+    },
+];
+
+<Quiz client:visible id="structs-enums-matching/enums" questions={enumsQuiz} />
+
+<ProgressTracker client:visible id="structs-enums-matching/enums" />

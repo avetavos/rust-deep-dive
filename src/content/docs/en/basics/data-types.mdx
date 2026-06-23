@@ -1,0 +1,170 @@
+---
+title: 'Data Types'
+description: 'Rust is statically typed: every value has a type the compiler knows at compile time. Scalar types cover integers, floats, booleans, and chars. Compound types — tuples and arrays — group multiple values.'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Scalar Types
+
+A **scalar** type represents a single value. Rust has four primary scalar types.
+
+### Integers
+
+Integer types encode their signedness and bit-width in the name.
+
+| Signed | Unsigned | Width |
+|---|---|---|
+| `i8` | `u8` | 8-bit |
+| `i16` | `u16` | 16-bit |
+| `i32` | `u32` | 32-bit (default) |
+| `i64` | `u64` | 64-bit |
+| `i128` | `u128` | 128-bit |
+| `isize` | `usize` | pointer-width |
+
+The default integer type is `i32`. Use `usize` for indexing into arrays and slices.
+
+### Floating-Point Numbers
+
+Rust has `f32` (single precision) and `f64` (double precision, default). Always prefer `f64` unless you have a specific memory or precision reason to use `f32`.
+
+### Booleans and Characters
+
+`bool` is either `true` or `false`. `char` represents a single Unicode scalar value and is **four bytes** wide — it can hold emoji, CJK characters, and any other Unicode point.
+
+```rust
+fn main() {
+    let flag: bool = true;
+    let letter: char = 'R';
+    let emoji: char = '\u{1F980}'; // crab emoji
+    println!("flag={}, letter={}, emoji={}", flag, letter, emoji);
+}
+```
+
+## Compound Types
+
+### Tuples
+
+A **tuple** groups values of potentially different types into one compound value. It has a fixed length. Access individual elements with dot notation and the zero-based index.
+
+```rust
+fn main() {
+    let point: (i32, f64, bool) = (1, 2.5, false);
+    println!("{} {} {}", point.0, point.1, point.2);
+
+    // Destructuring a tuple
+    let (a, b, c) = point;
+    println!("a={}, b={}, c={}", a, b, c);
+}
+```
+
+### Arrays
+
+An **array** holds a fixed number of values of the **same type**. The type annotation is `[T; N]` where `T` is the element type and `N` is the length — both known at compile time. Use slices (`&[T]`) when you need a dynamically-sized view.
+
+```rust
+fn main() {
+    let arr: [i32; 4] = [10, 20, 30, 40];
+    println!("first={}, last={}, len={}", arr[0], arr[3], arr.len());
+
+    // Repeat initializer: [value; count]
+    let zeros = [0_i32; 5];
+    println!("zeros len = {}", zeros.len());
+}
+```
+
+## Type Inference
+
+Rust's type system is **static** — every value has a type known at compile time — but you rarely need to write it out. The compiler infers types from context. You only need an annotation when the inference is ambiguous.
+
+```rust
+fn main() {
+    let n = 42;         // inferred as i32
+    let f = 1.5;        // inferred as f64
+    let s = "hello";    // inferred as &str
+
+    // Suffix syntax forces a specific numeric type
+    let byte = 255_u8;
+    println!("{} {} {} {}", n, f, s, byte);
+}
+```
+
+export const dataTypesCode = `fn main() {
+    // Scalar types
+    let n: i32 = -42;
+    let f: f64 = 3.14;
+    let b: bool = true;
+    let c: char = 'R';
+
+    println!("i32: {}, f64: {}, bool: {}, char: {}", n, f, b, c);
+
+    // Tuple: fixed-length, mixed types
+    let tup: (i32, f64, bool) = (1, 2.5, false);
+    println!("tuple.0 = {}, tuple.1 = {}, tuple.2 = {}", tup.0, tup.1, tup.2);
+
+    // Array: fixed-length, same type
+    let arr: [i32; 4] = [10, 20, 30, 40];
+    println!("arr[0] = {}, arr[3] = {}, len = {}", arr[0], arr[3], arr.len());
+
+    // Type inference
+    let inferred = 99_u8;
+    println!("inferred u8: {}", inferred);
+}`;
+
+<Playground client:visible code={dataTypesCode} />
+
+<Callout title="Rust is statically typed but infers most types">
+You get the safety of a fully typed language without the verbosity of annotating every variable. The compiler infers the type from context. Add an annotation only when inference is ambiguous — or to make the intent explicit for future readers.
+</Callout>
+
+export const quizDataTypes = [
+    {
+        q: "What is the default integer type when you write let x = 42?",
+        options: [
+            "u32",
+            "i64",
+            "i32",
+            "usize"
+        ],
+        answer: 2
+    },
+    {
+        q: "How wide is a char value in Rust?",
+        options: [
+            "1 byte (ASCII only)",
+            "2 bytes (UTF-16)",
+            "4 bytes (Unicode scalar value)",
+            "Variable width depending on the character"
+        ],
+        answer: 2
+    },
+    {
+        q: "Which type annotation describes an array of five i32 values?",
+        options: [
+            "[i32]",
+            "Vec[i32; 5]",
+            "[i32; 5]",
+            "(i32, i32, i32, i32, i32)"
+        ],
+        answer: 2
+    },
+    {
+        q: "What does the suffix in 255_u8 communicate to the compiler?",
+        options: [
+            "The value should be stored on the heap",
+            "The integer literal should be treated as an unsigned 8-bit integer",
+            "The value is a floating-point number",
+            "The variable is mutable"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="basics/data-types" questions={quizDataTypes} />
+
+<ProgressTracker client:visible id="basics/data-types" />

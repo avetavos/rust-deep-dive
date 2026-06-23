@@ -1,0 +1,170 @@
+---
+title: 'Threads'
+description: 'Spawn OS threads with std::thread::spawn, collect results with JoinHandle, and share mutable state safely using Arc<Mutex<T>>.'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Spawning Threads with `std::thread`
+
+Rust's standard library provides OS threads through `std::thread::spawn`. You pass a closure, and the function returns a `JoinHandle<T>` — a handle you can use to wait for the thread to finish and retrieve its return value.
+
+```rust
+use std::thread;
+
+fn main() {
+    let handle = thread::spawn(|| {
+        // This runs on a new OS thread
+        42
+    });
+
+    let result = handle.join().unwrap(); // block until the thread finishes
+    println!("Thread returned: {}", result);
+}
+```
+
+The closure is `move || { ... }` when it needs to capture variables from the enclosing scope — otherwise the compiler cannot guarantee the captured data lives long enough.
+
+### Moving Data Into a Thread
+
+Because a thread may outlive the scope where it was spawned, any data the thread captures must be owned by the thread. The `move` keyword transfers ownership of captured variables into the closure.
+
+```rust
+use std::thread;
+
+fn main() {
+    let message = String::from("hello from the main thread");
+
+    let handle = thread::spawn(move || {
+        // message is moved here — the thread now owns it
+        println!("{}", message);
+    });
+
+    handle.join().unwrap();
+    // println!("{}", message); // would not compile — moved above
+}
+```
+
+### Sharing State with `Arc<Mutex<T>>`
+
+To share mutable data between multiple threads, wrap it in `Arc<Mutex<T>>`:
+
+- `Mutex<T>` provides mutual exclusion — only one thread can lock it at a time.
+- `Arc<T>` (Atomically Reference Counted) allows multiple threads to hold a reference-counted pointer to the same allocation.
+
+You clone the `Arc` before moving it into each thread. The underlying `Mutex` is shared, not cloned.
+
+```rust
+use std::thread;
+use std::sync::{Arc, Mutex};
+
+fn main() {
+    let counter = Arc::new(Mutex::new(0_i32));
+    let mut handles = Vec::new();
+
+    for _ in 0..4 {
+        let counter = Arc::clone(&counter); // cheap ref-count increment
+        let h = thread::spawn(move || {
+            let mut n = counter.lock().unwrap(); // acquire lock
+            *n += 1;
+        }); // lock released when n drops
+        handles.push(h);
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    println!("Final count: {}", *counter.lock().unwrap());
+}
+```
+
+### Collecting Results from Multiple Threads
+
+A common pattern is to have each thread compute a value and push it into a shared `Vec`. After all threads complete, you sort the results so the output is deterministic regardless of scheduling order.
+
+export const threadsCode = `use std::thread;
+use std::sync::{Arc, Mutex};
+
+fn main() {
+    let results = Arc::new(Mutex::new(Vec::new()));
+    let mut handles = Vec::new();
+
+    for i in 0..5 {
+        let results = Arc::clone(&results);
+        let handle = thread::spawn(move || {
+            let square = i * i;
+            let mut v = results.lock().unwrap();
+            v.push(square);
+        });
+        handles.push(handle);
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let mut final_results = results.lock().unwrap().clone();
+    final_results.sort();
+    println!("Squares: {:?}", final_results);
+    let sum: i32 = final_results.iter().sum();
+    println!("Sum: {}", sum);
+}`;
+
+<Playground client:visible code={threadsCode} />
+
+<Callout title="Send and Sync make data races a compile error">
+Rust's type system enforces thread safety through the `Send` and `Sync` marker traits. `Arc<Mutex<T>>` is `Send` (you can move it to another thread) and `Sync` (you can share a reference to it across threads). If you try to share a `Rc<T>` or `RefCell<T>` across threads, the compiler rejects the code with a clear error — no sanitizers needed, no runtime panics from data races.
+</Callout>
+
+export const quizThreads = [
+    {
+        q: "What does JoinHandle::join() do?",
+        options: [
+            "Merges two threads into one",
+            "Blocks the calling thread until the spawned thread finishes and returns its result",
+            "Kills the spawned thread immediately",
+            "Detaches the thread so it runs independently"
+        ],
+        answer: 1
+    },
+    {
+        q: "Why do thread closures typically use the move keyword?",
+        options: [
+            "Because closures without move cannot use println!",
+            "Because the thread may outlive the scope where variables were defined, so they must be owned by the thread",
+            "Because move makes the closure run faster",
+            "Because move is required by std::thread::spawn for all closures"
+        ],
+        answer: 1
+    },
+    {
+        q: "What is the role of Arc in Arc<Mutex<T>>?",
+        options: [
+            "Arc provides the lock that prevents concurrent access",
+            "Arc ensures the value is dropped when the last reference disappears, and is safe to clone across threads",
+            "Arc is a deprecated alias for Box",
+            "Arc converts the inner type to Send automatically"
+        ],
+        answer: 1
+    },
+    {
+        q: "Why do we sort results after joining all threads?",
+        options: [
+            "Rust requires sorted data before printing",
+            "Thread scheduling is non-deterministic, so insertion order into a shared Vec varies between runs",
+            "sort() is the only way to unlock a Mutex",
+            "Unsorted results would cause a panic"
+        ],
+        answer: 1
+    }
+];
+
+<Quiz client:visible id="concurrency-testing-cargo/threads" questions={quizThreads} />
+
+<ProgressTracker client:visible id="concurrency-testing-cargo/threads" />

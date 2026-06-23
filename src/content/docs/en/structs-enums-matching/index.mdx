@@ -1,0 +1,75 @@
+---
+title: 'Structs, Enums & Pattern Matching'
+description: 'An overview of Rust custom types — structs, enums, and the match expression.'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Module Overview
+
+This module introduces three of Rust's most important building blocks for modeling data and control flow.
+
+**Structs** are named collections of fields. They let you group related values under a single type, attach methods via `impl` blocks, and derive useful traits like `Debug` and `Clone`.
+
+**Enums** model choices. Each variant can optionally carry different data, making them far more expressive than the C-style enums you may know from other languages. Rust's `Option<T>` and `Result<T, E>` are both built-in enums.
+
+**`match`** is Rust's pattern-matching expression. It branches on the shape of a value, binds data from enum variants, and is checked exhaustively by the compiler — every possible case must be handled.
+
+Together, these three features let you define precise, self-documenting data models and write control flow that the compiler verifies for you.
+
+export const indexCode = `#[derive(Debug)]
+struct Point { x: f64, y: f64 }
+
+#[derive(Debug)]
+enum Direction { North, South, East, West }
+
+fn main() {
+    let p = Point { x: 3.0, y: 4.0 };
+    println!("Point: ({}, {})", p.x, p.y);
+    println!("Debug: {:?}", p);
+
+    let directions = [
+        Direction::North,
+        Direction::South,
+        Direction::East,
+        Direction::West,
+    ];
+
+    for dir in &directions {
+        let label = match dir {
+            Direction::North => "North",
+            Direction::South => "South",
+            Direction::East  => "East",
+            Direction::West  => "West",
+        };
+        println!("Heading {}", label);
+    }
+}`;
+
+<Playground client:visible code={indexCode} />
+
+export const quizIndex = [
+    {
+        q: 'Which keyword introduces a named struct in Rust?',
+        options: ['type', 'struct', 'class', 'record'],
+        answer: 1,
+    },
+    {
+        q: 'What property does a Rust match expression have that many other languages lack?',
+        options: [
+            'It can only match integer values.',
+            'The compiler requires every possible case to be handled.',
+            'It always returns unit ().',
+            'It compiles to a jump table.',
+        ],
+        answer: 1,
+    },
+];
+
+<Quiz client:visible id="structs-enums-matching/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="structs-enums-matching/index" />
