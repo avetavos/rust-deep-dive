@@ -1,6 +1,60 @@
 ---
 title: Rust Deep Dive
-description: Master the Rust language from the ground up.
+description: เชี่ยวชาญภาษา Rust ตั้งแต่พื้นฐาน — ownership, trait, generic, error handling และ fearless concurrency
 template: splash
+hero:
+  tagline: คอร์สเจาะลึกตัวภาษา Rust แบบ standalone ตัวอย่าง compile และรันสดในเบราว์เซอร์ผ่าน Rust Playground อย่างเป็นทางการ — แก้แล้วรันใหม่ได้ สร้างความเชี่ยวชาญเรื่อง ownership และ type system ให้แน่นก่อนไปเฟรมเวิร์กใด ๆ
+  actions:
+    - text: เริ่มที่นี่
+      link: /rust-deep-dive/th/basics/
+      icon: right-arrow
+      variant: primary
+    - text: ข้ามไปที่ Ownership & Borrowing
+      link: /rust-deep-dive/th/ownership-borrowing/
+      icon: rocket
 ---
-Coming soon.
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## สิ่งที่คุณจะได้เรียน
+
+<CardGrid>
+  <Card title="Basics & Syntax" icon="seti:rust">
+    ตัวแปร &amp; mutability, data type, ฟังก์ชัน, control flow [เริ่ม →](/rust-deep-dive/th/basics/)
+  </Card>
+  <Card title="Ownership & Borrowing" icon="rocket">
+    ownership, move, reference, mutable borrow, slice [เจาะลึก →](/rust-deep-dive/th/ownership-borrowing/)
+  </Card>
+  <Card title="Structs, Enums & Matching" icon="puzzle">
+    struct, enum, pattern matching แบบครบทุกกรณี, Option [สร้างโมเดล →](/rust-deep-dive/th/structs-enums-matching/)
+  </Card>
+  <Card title="Traits & Generics" icon="setting">
+    trait, generic, trait object, lifetime [เรียน →](/rust-deep-dive/th/traits-generics/)
+  </Card>
+  <Card title="Error Handling" icon="warning">
+    panic, Result, operator question-mark, custom error [จัดการ →](/rust-deep-dive/th/error-handling/)
+  </Card>
+  <Card title="Collections & Iterators" icon="list-format">
+    vector &amp; string, hash map, iterator, closure [วนซ้ำ →](/rust-deep-dive/th/collections-iterators/)
+  </Card>
+  <Card title="Concurrency, Testing & Cargo" icon="approve-check">
+    thread, channel, แนะนำ async, Cargo &amp; test [ส่งงานจริง →](/rust-deep-dive/th/concurrency-testing-cargo/)
+  </Card>
+</CardGrid>
+
+## คอร์สนี้ทำงานยังไง
+
+<CardGrid>
+  <Card title="รันในเบราว์เซอร์" icon="rocket">
+    ตัวอย่าง Rust compile และรันสดผ่าน Rust Playground อย่างเป็นทางการ — แก้และรันใหม่ได้ ไม่ต้องติดตั้ง toolchain
+  </Card>
+  <Card title="เน้นตัวภาษา" icon="seti:rust">
+    เจาะลึกตัวภาษาและ type system — ownership, trait, generic — เป็นพื้นฐานก่อนไปเฟรมเวิร์กใด ๆ
+  </Card>
+  <Card title="แบบทดสอบ & ความคืบหน้า" icon="bars">
+    ทบทวนความเข้าใจหลังแต่ละบท ความคืบหน้าถูกบันทึกไว้ในเครื่อง
+  </Card>
+  <Card title="สองภาษา" icon="translate">
+    มีทั้งภาษาอังกฤษและไทย — สลับได้ตลอดจากแถบด้านบน
+  </Card>
+</CardGrid>
