@@ -13,6 +13,9 @@ export default defineConfig({
   output: 'static',
   integrations: [starlight({
       title: 'Rust Deep Dive',
+      head: [
+        { tag: 'script', attrs: { type: 'module', src: '/rust-deep-dive/enhance.js' } },
+      ],
       defaultLocale: 'en',
       locales: {
         en: { label: 'English', lang: 'en' },

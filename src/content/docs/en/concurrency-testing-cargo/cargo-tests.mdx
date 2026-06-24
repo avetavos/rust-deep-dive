@@ -8,6 +8,26 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+export const projectStructureDiagram = `
+flowchart TD
+  root["my_project/"]
+  toml["Cargo.toml — manifest: name, version, dependencies"]
+  lock["Cargo.lock — exact dependency versions (commit for binaries)"]
+  src["src/"]
+  main["main.rs — entry point for binary crates"]
+  lib["lib.rs — entry point for library crates"]
+  tests["tests/"]
+  itest["integration_test.rs — integration tests (optional)"]
+  root --> toml
+  root --> lock
+  root --> src
+  root --> tests
+  src --> main
+  src --> lib
+  tests --> itest
+`;
 
 ## Cargo: The Rust Build System and Package Manager
 
@@ -53,16 +73,7 @@ cargo clippy
 
 ### Project Structure
 
-```
-my_project/
-  Cargo.toml      ← manifest: name, version, dependencies
-  Cargo.lock      ← exact dependency versions (commit this for binaries)
-  src/
-    main.rs       ← entry point for binary crates
-    lib.rs        ← entry point for library crates
-  tests/
-    integration_test.rs  ← integration tests (optional)
-```
+<Mermaid code={projectStructureDiagram} title="Cargo project structure" />
 
 ### `Cargo.toml` Anatomy
 
