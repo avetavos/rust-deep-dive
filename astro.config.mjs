@@ -15,6 +15,15 @@ export default defineConfig({
       title: 'Rust Deep Dive',
       head: [
         { tag: 'script', attrs: { type: 'module', src: '/rust-deep-dive/enhance.js' } },
+        { tag: 'link', attrs: { rel: 'manifest', href: '/rust-deep-dive/manifest.webmanifest' } },
+        { tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/rust-deep-dive/apple-touch-icon.png' } },
+        { tag: 'link', attrs: { rel: 'icon', type: 'image/png', sizes: '192x192', href: '/rust-deep-dive/icon-192.png' } },
+        { tag: 'meta', attrs: { name: 'theme-color', content: '#CE422B' } },
+        { tag: 'meta', attrs: { name: 'mobile-web-app-capable', content: 'yes' } },
+        { tag: 'meta', attrs: { name: 'apple-mobile-web-app-capable', content: 'yes' } },
+        { tag: 'meta', attrs: { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' } },
+        { tag: 'meta', attrs: { name: 'apple-mobile-web-app-title', content: "Rust Deep Dive" } },
+        { tag: 'script', content: "if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('/rust-deep-dive/sw.js',{scope:'/rust-deep-dive/'}).catch(function(){})})}" },
       ],
       defaultLocale: 'en',
       locales: {
