@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -132,7 +132,7 @@ fn main() {
     println!("big: {:?}", big);
 }`;
 
-<Playground client:visible code={closuresCode} />
+<Playground code={closuresCode} />
 
 <Callout title="Closure จับ Environment ของมัน; move โอน Ownership เข้า Closure">
 โดยค่าเริ่มต้น Closure ยืมตัวแปรที่จับในระดับขั้นต่ำที่จำเป็น (`Fn` หรือ `FnMut`) Keyword `move` บังคับการโอน Ownership — จำเป็นเมื่อ Closure ต้องมีอายุยาวกว่า Scope ที่กำหนด เช่น เมื่อส่งไปยัง Thread ใหม่หรือ Return จาก Function

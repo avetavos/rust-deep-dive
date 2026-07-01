@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -103,7 +103,7 @@ fn main() {
     println!("Bob present: {}", scores.contains_key("Bob"));
 }`;
 
-<Playground client:visible code={hashmapCode} />
+<Playground code={hashmapCode} />
 
 <Callout title="Order การ Iterate ของ HashMap ไม่ถูกกำหนด — Sort Key เมื่อ Order มีความสำคัญ">
 `HashMap` ของ Rust ใช้ Hash Seed แบบ Random (SipHash) โดยค่าเริ่มต้น ดังนั้น Order การ Iterate อาจต่างกันระหว่างการรันโปรแกรม เมื่อต้องการผลลัพธ์ที่คงที่ — ใน Tests, Playground, หรือ Log — ให้เก็บ Key ลงใน `Vec` เรียก `.sort()` แล้ว Iterate

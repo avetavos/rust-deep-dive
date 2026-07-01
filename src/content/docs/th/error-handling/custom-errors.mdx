@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -130,7 +130,7 @@ fn main() {
     }
 }`;
 
-<Playground client:visible code={customErrorsCode} />
+<Playground code={customErrorsCode} />
 
 <Callout title="Implement Error + Display สำหรับประเภทข้อผิดพลาดแบบกำหนดเอง">
 enum ข้อผิดพลาดที่ออกแบบดีทำให้ทุก failure mode ชัดเจนใน API ของคุณ implement `std::fmt::Display` สำหรับข้อความที่ผู้ใช้เห็น `std::error::Error` สำหรับความเข้ากันได้กับ `Box<dyn Error>` และ `From<...>` สำหรับแต่ละประเภทข้อผิดพลาดระดับล่างที่คุณห่อ สามอย่างนี้ให้ตัวดำเนินการ `?` ทำงานแปลงทั้งหมดโดยอัตโนมัติ

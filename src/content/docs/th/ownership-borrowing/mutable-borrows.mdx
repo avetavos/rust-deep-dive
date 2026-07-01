@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -105,7 +105,7 @@ fn main() {
     println!("shared:  {}", r2);
 }`;
 
-<Playground client:visible code={mutableBorrowsCode} />
+<Playground code={mutableBorrowsCode} />
 
 <Callout title="mutable borrow หนึ่งตัว หรือ shared borrow หลายตัว — แต่ไม่มีทั้งสองอย่าง">
 กฎการเข้าถึงแบบ exclusive คือข้อจำกัดที่สำคัญที่สุดของ borrow checker มันหมายความว่าฟังก์ชันใดก็ตามที่ถือ `&mut T` อยู่จะมี **การเข้าถึงแบบ exclusive ที่รับประกันได้** ต่อค่านั้น — ไม่มีโค้ดอื่นใดสามารถอ่านหรือเขียนมันได้จนกว่า mutable borrow จะสิ้นสุดลง สิ่งนี้กำจัด data race และบั๊ก iterator-invalidation ตอน compile time

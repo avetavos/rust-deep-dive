@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -136,7 +136,7 @@ fn main() {
     println!("slice: {}", &greeting[..4]);
 }`;
 
-<Playground client:visible code={slicesCode} />
+<Playground code={slicesCode} />
 
 <Callout title="slice คือ view ที่ borrow มา — มันไม่ได้เป็นเจ้าของข้อมูล">
 slice เป็น **reference** เสมอ — มัน borrow ส่วนที่ต่อเนื่องกันของ collection เพราะ borrow checker ติดตามความสัมพันธ์นี้ คอมไพเลอร์จะปฏิเสธโค้ดใด ๆ ที่พยายามแก้ไขหรือ drop ข้อมูลที่อยู่ข้างใต้ในขณะที่ยังมี slice เข้าไปในมันมีชีวิตอยู่ สิ่งนี้ป้องกันบั๊กคลาสสิกอย่าง "iterator invalidation" และ "dangling pointer" ตอน compile time

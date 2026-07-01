@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -92,7 +92,7 @@ export const variablesMutabilityCode = `fn main() {
     println!("MAX_POINTS = {}", MAX_POINTS);
 }`;
 
-<Playground client:visible code={variablesMutabilityCode} />
+<Playground code={variablesMutabilityCode} />
 
 <Callout title="Variables are immutable by default — opt into mutation with mut">
 Making immutability the default forces you to be explicit about which data changes. When you see `mut`, you know that variable is expected to be modified. When you do not see `mut`, the compiler guarantees it is never mutated — no defensive copies needed.

@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -155,7 +155,7 @@ fn main() {
     }
 }`;
 
-<Playground client:visible code={channelsCode} />
+<Playground code={channelsCode} />
 
 <Callout title="Channels ย้าย Ownership ระหว่าง Thread">
 เมื่อคุณเรียก `tx.send(value)` ownership ของ `value` จะถูกย้ายเข้าไปใน channel thread ผู้ส่งไม่สามารถเข้าถึงมันได้อีกต่อไป thread ผู้รับจะเป็นเจ้าของค่านั้นหลัง `rx.recv()` การย้าย ownership นี้คือเหตุผลที่ channel ปลอดจาก data race โดยโครงสร้าง — มีเพียง thread เดียวที่เป็นเจ้าของค่าในแต่ละจุดของเวลา

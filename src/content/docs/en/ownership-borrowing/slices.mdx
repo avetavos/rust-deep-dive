@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -136,7 +136,7 @@ fn main() {
     println!("slice: {}", &greeting[..4]);
 }`;
 
-<Playground client:visible code={slicesCode} />
+<Playground code={slicesCode} />
 
 <Callout title="A slice is a borrowed view — it does not own the data">
 A slice is always a **reference** — it borrows a contiguous portion of a collection. Because the borrow checker tracks this relationship, the compiler will reject any code that tries to modify or drop the underlying data while a slice into it is still live. This prevents the classic "iterator invalidation" and "dangling pointer" bugs at compile time.

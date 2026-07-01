@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -116,7 +116,7 @@ fn main() {
     println!("Sum: {}", sum);
 }`;
 
-<Playground client:visible code={threadsCode} />
+<Playground code={threadsCode} />
 
 <Callout title="Send และ Sync ทำให้ Data Race เป็น Compile Error">
 ระบบประเภทของ Rust บังคับใช้ thread safety ผ่าน marker trait `Send` และ `Sync` `Arc<Mutex<T>>` เป็น `Send` (คุณสามารถย้ายมันไปยัง thread อื่น) และ `Sync` (คุณสามารถแชร์ reference ไปยังมันข้าม thread) ถ้าคุณพยายามแชร์ `Rc<T>` หรือ `RefCell<T>` ข้าม thread คอมไพเลอร์จะปฏิเสธโค้ดด้วย error ที่ชัดเจน — ไม่ต้องการ sanitizer ไม่มี panic จาก data race เวลา runtime

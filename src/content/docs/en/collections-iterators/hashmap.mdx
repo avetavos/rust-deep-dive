@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -103,7 +103,7 @@ fn main() {
     println!("Bob present: {}", scores.contains_key("Bob"));
 }`;
 
-<Playground client:visible code={hashmapCode} />
+<Playground code={hashmapCode} />
 
 <Callout title="HashMap iteration order is unspecified — sort keys when output order matters">
 Rust's `HashMap` uses a randomized hash seed (SipHash) by default, so iteration order can differ between program runs. Whenever you need stable output — in tests, playgrounds, or log output — collect the keys into a `Vec`, call `.sort()`, then iterate.

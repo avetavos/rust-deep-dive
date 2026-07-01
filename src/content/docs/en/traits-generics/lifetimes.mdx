@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -98,7 +98,7 @@ fn main() {
     println!("excerpt: {}", excerpt.announce());
 }`;
 
-<Playground client:visible code={lifetimesCode} />
+<Playground code={lifetimesCode} />
 
 <Callout title="Lifetimes are compile-time only — they describe reference validity">
 Lifetime annotations do not change how long values live in memory. They are purely a compile-time mechanism that tells the borrow checker how the lifetimes of multiple references relate to each other. At runtime there is no lifetime information — it is all erased after the compiler finishes checking.

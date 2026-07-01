@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -73,7 +73,7 @@ export const ownershipIntroCode = `fn main() {
     // 'owner' is no longer valid here
 }`;
 
-<Playground client:visible code={ownershipIntroCode} />
+<Playground code={ownershipIntroCode} />
 
 <Callout title="คอมไพเลอร์คือตาข่ายนิรภัยของคุณ">
 การละเมิดกฎ ownership จะถูกจับได้ตอน **compile time** ไม่ใช่ตอน runtime ถ้าโปรแกรมของคุณคอมไพล์ผ่าน การรับประกันของโมเดลหน่วยความจำก็จะเป็นจริงเสมอ — ไม่มี buffer overflow ไม่มี dangling pointer ไม่มี data race จากการเข้าถึงที่ไม่ได้ซิงค์กัน

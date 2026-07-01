@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -57,7 +57,7 @@ export const basicsIndexCode = `fn main() {
     println!("x = {}, name = {}", x, name);
 }`;
 
-<Playground client:visible code={basicsIndexCode} />
+<Playground code={basicsIndexCode} />
 
 <Callout title="Safety + Performance, without a GC">
 Rust enforces memory safety through compile-time ownership rules — not a garbage collector. The result is programs that are as fast as C, as safe as high-level managed languages, and predictably low-latency because there is no GC pause.

@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -162,7 +162,7 @@ This is shorthand for a generic function with a trait bound, which you'll learn 
 
 The playground below defines a `Shape` trait with a required `area` method and a default `describe` method. Both `Circle` and `Rectangle` implement `area`, and they inherit `describe` for free.
 
-<Playground client:visible code={traitsCode} />
+<Playground code={traitsCode} />
 
 <Quiz client:visible id="traits-generics/traits" questions={quizTraits} />
 

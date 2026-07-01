@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -116,7 +116,7 @@ export const dataTypesCode = `fn main() {
     println!("inferred u8: {}", inferred);
 }`;
 
-<Playground client:visible code={dataTypesCode} />
+<Playground code={dataTypesCode} />
 
 <Callout title="Rust เป็น statically typed แต่อนุมาน type ส่วนใหญ่ได้เอง">
 คุณได้รับความปลอดภัยของภาษาที่ typed อย่างสมบูรณ์โดยไม่ต้องเขียน annotation ทุกตัวแปร คอมไพเลอร์อนุมาน type จาก context ใส่ annotation เมื่อการอนุมานมีความคลุมเครือ หรือเพื่อทำให้ intent ชัดเจนสำหรับผู้อ่านในอนาคต

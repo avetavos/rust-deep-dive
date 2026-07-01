@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -54,7 +54,7 @@ fn main() {
     println!("Program continues normally after handling errors.");
 }`;
 
-<Playground client:visible code={errorHandlingIndexCode} />
+<Playground code={errorHandlingIndexCode} />
 
 <Callout title="Errors are values in Rust">
 Unlike exceptions in many languages, a `Result<T, E>` is just a regular enum value. The compiler forces you to handle it — you cannot silently ignore a `Result` without an explicit decision. This makes error paths visible and auditable at the type level.

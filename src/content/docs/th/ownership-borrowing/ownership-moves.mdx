@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -108,7 +108,7 @@ fn main() {
     println!("original={} cloned={}", original, cloned);
 }`;
 
-<Playground client:visible code={ownershipMovesCode} />
+<Playground code={ownershipMovesCode} />
 
 <Callout title="การใช้ค่าที่ถูก move ไปแล้วคือ compile error">
 เมื่อค่าที่ไม่ใช่ `Copy` ถูก move ไปแล้ว คอมไพเลอร์จะทำให้ binding เดิมใช้งานไม่ได้อย่างถาวร ความพยายามใด ๆ ที่จะใช้มันหลังจากนั้นจะเป็น **compile-time error** — `error[E0382]: borrow of moved value` คุณจะไม่สามารถเผลอเข้าถึงหน่วยความจำที่ถูกคืนไปแล้วได้

@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -104,7 +104,7 @@ fn main() {
     println!("owned is still: {}", owned);
 }`;
 
-<Playground client:visible code={referencesBorrowingCode} />
+<Playground code={referencesBorrowingCode} />
 
 <Callout title="reference borrow โดยไม่เอา ownership ไป">
 `&T` คือ **shared reference** — มันให้คุณอ่านค่าได้โดยไม่ต้องเป็นเจ้าของ เจ้าของเดิมยังคงเก็บค่าของมันไว้ครบถ้วน คุณสามารถมี shared reference ได้มากเท่าที่ต้องการพร้อม ๆ กัน เพราะมันเป็นแบบ read-only ทั้งหมดและไม่ขัดแย้งกันเอง

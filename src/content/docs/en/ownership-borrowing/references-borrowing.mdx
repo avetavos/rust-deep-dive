@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -104,7 +104,7 @@ fn main() {
     println!("owned is still: {}", owned);
 }`;
 
-<Playground client:visible code={referencesBorrowingCode} />
+<Playground code={referencesBorrowingCode} />
 
 <Callout title="A reference borrows without taking ownership">
 `&T` is a **shared reference** — it lets you read the value without owning it. The original owner keeps its value intact. You can have as many shared references as you like simultaneously, because they are all read-only and cannot conflict with each other.

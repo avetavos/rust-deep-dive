@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -51,7 +51,7 @@ fn main() {
     println!("Main thread done.");
 }`;
 
-<Playground client:visible code={indexCode} />
+<Playground code={indexCode} />
 
 <Callout title="กฎ Ownership ใช้บังคับที่ขอบเขตของ Thread">
 trait ของ `Send` และ `Sync` เป็นกลไกเบื้องหลัง fearless concurrency `Send` หมายความว่าค่าสามารถย้ายไปยัง thread อื่นได้ `Sync` หมายความว่า shared reference ไปยังค่าสามารถส่งได้ ประเภทอย่าง `Rc<T>` และ raw pointer ไม่ใช่ทั้งคู่ ดังนั้นคอมไพเลอร์จะหยุดคุณไม่ให้แชร์พวกมันข้าม thread

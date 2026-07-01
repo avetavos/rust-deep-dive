@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -78,7 +78,7 @@ fn main() {
     println!("Set: {:?}", items);
 }`;
 
-<Playground client:visible code={collectionsOverviewCode} />
+<Playground code={collectionsOverviewCode} />
 
 <Callout title="Collections อยู่บน Heap; Iterators ไม่มีต้นทุน">
 Collections ทุกตัวในไลบรารีมาตรฐานจัดสรรหน่วยความจำบน Heap และจัดการหน่วยความจำของตัวเอง Iterator Adaptor เช่น `map` และ `filter` จะถูก Compile ลงเป็น Machine Code เดียวกับ Loop ที่เขียนด้วยมือ — ไม่มี Overhead ณ Runtime จากการ Chain

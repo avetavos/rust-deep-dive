@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -140,7 +140,7 @@ export const controlFlowCode = `fn main() {
     println!();
 }`;
 
-<Playground client:visible code={controlFlowCode} />
+<Playground code={controlFlowCode} />
 
 <Callout title="if และ loop เป็น expression และ return ค่าได้">
 ใน Rust `if` และ `loop` เป็น expression — มันผลิตค่า การกำหนด `let x = if cond { a } else { b }` หรือ `let result = loop { break value }` เป็น Rust ที่ idiomatic ทั้งสอง arm ของ `if` expression และค่าที่ส่งให้ `break` ใน `loop` ต้องมี type เดียวกัน

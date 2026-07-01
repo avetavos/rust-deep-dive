@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -96,7 +96,7 @@ fn main() {
     println!("parse_age(\\"xx\\") is_err: {}", parse_age("xx").is_err());
 }`;
 
-<Playground client:visible code={resultCode} />
+<Playground code={resultCode} />
 
 <Callout title="Recoverable errors are values you must handle">
 Because `Result` is a plain enum, the compiler emits a warning if you let a `Result` value go unused. Every error path is visible in the type signature of the function that returns it, and callers must explicitly decide what to do — ignore, propagate, recover, or panic. This is stronger than exception handling, where error paths are invisible.

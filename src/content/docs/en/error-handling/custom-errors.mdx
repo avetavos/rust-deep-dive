@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -130,7 +130,7 @@ fn main() {
     }
 }`;
 
-<Playground client:visible code={customErrorsCode} />
+<Playground code={customErrorsCode} />
 
 <Callout title="Implement Error + Display for custom error types">
 A well-designed custom error enum makes every failure mode explicit in your API. Implement `std::fmt::Display` for user-facing messages, `std::error::Error` for compatibility with `Box<dyn Error>`, and `From<...>` for each lower-level error type you wrap. This trio lets the `?` operator do all the conversion work automatically.

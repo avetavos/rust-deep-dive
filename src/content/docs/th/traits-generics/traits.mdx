@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -162,7 +162,7 @@ fn print_area(shape: &impl Shape) {
 
 Playground ด้านล่างนิยาม trait `Shape` พร้อม method `area` ที่ต้อง implement และ method `describe` แบบ default ทั้ง `Circle` และ `Rectangle` implement `area` และรับ `describe` มาฟรี
 
-<Playground client:visible code={traitsCode} />
+<Playground code={traitsCode} />
 
 <Quiz client:visible id="traits-generics/traits" questions={quizTraits} />
 

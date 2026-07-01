@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -95,7 +95,7 @@ fn main() {
     unit_example();
 }`;
 
-<Playground client:visible code={functionsCode} />
+<Playground code={functionsCode} />
 
 <Callout title="expression สุดท้าย (ไม่มี semicolon) คือ return value">
 การละ semicolon ที่บรรทัดสุดท้ายของ function body ทำให้ expression นั้นเป็น return value การใส่ semicolon จะเปลี่ยนมันเป็น statement ที่ return `()` นี่ไม่ใช่ gotcha แต่เป็นการออกแบบที่ตั้งใจทำให้ closure, block และ function ทำงานสอดคล้องกันในฐานะ expression

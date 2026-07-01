@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -110,7 +110,7 @@ export const vecStringCode = `fn main() {
     println!("slice: {}", slice);
 }`;
 
-<Playground client:visible code={vecStringCode} />
+<Playground code={vecStringCode} />
 
 <Callout title="Vec<T> เป็นเจ้าของ Array บน Heap ที่ขยายได้">
 `Vec<T>` จัดสรร Element บน Heap เมื่อ `Vec<T>` ถูก Drop Element ทั้งหมดจะถูก Drop ด้วย การ Iterate ด้วย `&v` ยืม Element; การ Iterate ด้วย `v` จะ Consume (Move) Vector ควรใช้ `&v` เมื่อยังต้องการใช้ Vector หลัง Loop

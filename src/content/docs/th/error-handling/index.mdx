@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -54,7 +54,7 @@ fn main() {
     println!("Program continues normally after handling errors.");
 }`;
 
-<Playground client:visible code={errorHandlingIndexCode} />
+<Playground code={errorHandlingIndexCode} />
 
 <Callout title="ข้อผิดพลาดคือค่าใน Rust">
 ต่างจากข้อยกเว้นในหลายภาษา `Result<T, E>` เป็นแค่ค่า enum ธรรมดา คอมไพเลอร์บังคับให้คุณจัดการมัน — คุณไม่สามารถละเลยค่า `Result` โดยเงียบๆ โดยไม่ตัดสินใจอย่างชัดเจน ทำให้เส้นทางข้อผิดพลาดมองเห็นได้และตรวจสอบได้ในระดับประเภท

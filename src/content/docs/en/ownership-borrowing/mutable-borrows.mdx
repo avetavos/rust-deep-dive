@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -105,7 +105,7 @@ fn main() {
     println!("shared:  {}", r2);
 }`;
 
-<Playground client:visible code={mutableBorrowsCode} />
+<Playground code={mutableBorrowsCode} />
 
 <Callout title="One mutable borrow OR many shared borrows — never both">
 The exclusive-access rule is the borrow checker's most important constraint. It means any function holding a `&mut T` has **guaranteed exclusive access** to that value — no other code can read or write it until the mutable borrow ends. This eliminates data races and iterator-invalidation bugs at compile time.

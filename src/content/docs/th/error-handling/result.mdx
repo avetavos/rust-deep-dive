@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -96,7 +96,7 @@ fn main() {
     println!("parse_age(\\"xx\\") is_err: {}", parse_age("xx").is_err());
 }`;
 
-<Playground client:visible code={resultCode} />
+<Playground code={resultCode} />
 
 <Callout title="ข้อผิดพลาดที่กู้คืนได้คือค่าที่คุณต้องจัดการ">
 เพราะ `Result` เป็น enum ธรรมดา คอมไพเลอร์จะเตือนหากคุณปล่อยให้ค่า `Result` ไม่ได้ใช้ เส้นทางข้อผิดพลาดทุกเส้นทางมองเห็นได้ใน type signature ของฟังก์ชันที่คืนมัน และผู้เรียกต้องตัดสินใจอย่างชัดเจนว่าจะทำอะไร — ละเลย ส่งต่อ กู้คืน หรือ panic นี้แข็งแกร่งกว่าการจัดการข้อยกเว้น ซึ่งเส้นทางข้อผิดพลาดมองไม่เห็น

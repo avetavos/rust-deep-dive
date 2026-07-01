@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -101,7 +101,7 @@ fn main() {
     println!("result = {}", result);
 }`;
 
-<Playground client:visible code={panicCode} />
+<Playground code={panicCode} />
 
 <Callout title="สงวน panic ไว้สำหรับบั๊กที่ไม่สามารถกู้คืนได้">
 ใช้ `.unwrap()` และ `.expect()` เฉพาะเมื่อ `None` หรือ `Err` จะหมายความว่าโค้ดของคุณมีบั๊ก ไม่ใช่เมื่อความล้มเหลวเป็นส่วนปกติของการทำงานของโปรแกรม สำหรับความล้มเหลวใดๆ ที่มาจากอินพุตผู้ใช้หรือสถานะภายนอก ให้คืนค่า `Result` และปล่อยให้ผู้เรียกตัดสินใจว่าจะทำอะไร

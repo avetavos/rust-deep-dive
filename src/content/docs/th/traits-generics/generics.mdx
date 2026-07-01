@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -155,7 +155,7 @@ where
 
 Playground ด้านล่างแสดง `largest` function แบบ generic, struct `Pair<T>` และ method ที่มี compound trait bound
 
-<Playground client:visible code={genericsCode} />
+<Playground code={genericsCode} />
 
 <Quiz client:visible id="traits-generics/generics" questions={quizGenerics} />
 

@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -155,7 +155,7 @@ fn main() {
     }
 }`;
 
-<Playground client:visible code={channelsCode} />
+<Playground code={channelsCode} />
 
 <Callout title="Channels transfer ownership between threads">
 When you call `tx.send(value)`, ownership of `value` is moved into the channel. The sending thread can no longer access it. The receiving thread then owns the value after `rx.recv()`. This ownership transfer is the reason channels are data-race-free by construction — only one thread owns the value at any point in time.

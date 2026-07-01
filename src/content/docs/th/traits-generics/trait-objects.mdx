@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -131,7 +131,7 @@ fn notify(item: &dyn Animal) { ... }
 
 Playground ด้านล่างแสดง trait `Animal` กับหลาย implementor และ `Vec<Box<dyn Animal>>` สังเกตว่า `Dog` และ `Cat` อยู่ใน Vec เดียวกันได้อย่างไร
 
-<Playground client:visible code={traitObjectsCode} />
+<Playground code={traitObjectsCode} />
 
 <Quiz client:visible id="traits-generics/trait-objects" questions={quizTraitObjects} />
 

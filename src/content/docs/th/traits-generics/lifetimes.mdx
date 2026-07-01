@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -147,7 +147,7 @@ String literal ทุกอันมี `'static` lifetime เพราะถู
 
 Playground ด้านล่างแสดง function `longest` พร้อม lifetime annotation และ struct `Excerpt` ที่เก็บ reference — ลองดูว่า borrow checker รับประกันความถูกต้องของ reference อย่างไร
 
-<Playground client:visible code={lifetimesCode} />
+<Playground code={lifetimesCode} />
 
 <Quiz client:visible id="traits-generics/lifetimes" questions={quizLifetimes} />
 

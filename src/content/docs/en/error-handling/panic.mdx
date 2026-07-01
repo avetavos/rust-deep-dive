@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -101,7 +101,7 @@ fn main() {
     println!("result = {}", result);
 }`;
 
-<Playground client:visible code={panicCode} />
+<Playground code={panicCode} />
 
 <Callout title="Reserve panic for unrecoverable bugs">
 Use `.unwrap()` and `.expect()` only when a `None` or `Err` would mean your code has a bug, not when the failure is a normal part of program operation. For any failure that comes from user input or external state, return a `Result` and let the caller decide what to do.

@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -92,7 +92,7 @@ export const variablesMutabilityCode = `fn main() {
     println!("MAX_POINTS = {}", MAX_POINTS);
 }`;
 
-<Playground client:visible code={variablesMutabilityCode} />
+<Playground code={variablesMutabilityCode} />
 
 <Callout title="ตัวแปร immutable โดยค่าเริ่มต้น — เปิดใช้การเปลี่ยนค่าด้วย mut">
 การทำให้ immutable เป็นค่าเริ่มต้นบังคับให้คุณต้องระบุชัดเจนว่าข้อมูลใดเปลี่ยนแปลงได้ เมื่อเห็น `mut` คุณรู้ว่าตัวแปรนั้นถูกออกแบบมาเพื่อเปลี่ยนค่า เมื่อไม่เห็น `mut` คอมไพเลอร์รับประกันว่าไม่มีการเปลี่ยนค่าเกิดขึ้น

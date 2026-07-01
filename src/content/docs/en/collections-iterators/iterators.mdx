@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -117,7 +117,7 @@ export const iteratorsCode = `fn main() {
     println!("sum={} product={}", total, product);
 }`;
 
-<Playground client:visible code={iteratorsCode} />
+<Playground code={iteratorsCode} />
 
 <Callout title="Iterator adaptors are lazy — nothing happens until a consumer runs">
 Calling `.map(...)` or `.filter(...)` does not execute any code immediately. It builds a description of the transformation. Only when a consumer — `collect`, `sum`, `fold`, a `for` loop — pulls values through the chain does any computation occur. This makes long adaptor chains just as efficient as a single hand-written loop.

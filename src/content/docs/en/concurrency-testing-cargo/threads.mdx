@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -116,7 +116,7 @@ fn main() {
     println!("Sum: {}", sum);
 }`;
 
-<Playground client:visible code={threadsCode} />
+<Playground code={threadsCode} />
 
 <Callout title="Send and Sync make data races a compile error">
 Rust's type system enforces thread safety through the `Send` and `Sync` marker traits. `Arc<Mutex<T>>` is `Send` (you can move it to another thread) and `Sync` (you can share a reference to it across threads). If you try to share a `Rc<T>` or `RefCell<T>` across threads, the compiler rejects the code with a clear error — no sanitizers needed, no runtime panics from data races.

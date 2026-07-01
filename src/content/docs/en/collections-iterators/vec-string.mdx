@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -110,7 +110,7 @@ export const vecStringCode = `fn main() {
     println!("slice: {}", slice);
 }`;
 
-<Playground client:visible code={vecStringCode} />
+<Playground code={vecStringCode} />
 
 <Callout title="Vec<T> owns a growable heap array">
 `Vec<T>` allocates its elements on the heap. When a `Vec<T>` is dropped, all its elements are dropped too. Iterating with `&v` borrows the elements; iterating with `v` consumes (moves) the vector. Prefer `&v` when you still need the vector after the loop.

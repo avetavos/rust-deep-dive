@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -140,7 +140,7 @@ export const controlFlowCode = `fn main() {
     println!();
 }`;
 
-<Playground client:visible code={controlFlowCode} />
+<Playground code={controlFlowCode} />
 
 <Callout title="if and loop are expressions and can return values">
 In Rust, `if` and `loop` are expressions — they produce a value. Assigning `let x = if cond { a } else { b }` or `let result = loop { break value }` is idiomatic Rust. Both arms of an `if` expression and the `break` value in a `loop` must be the same type.

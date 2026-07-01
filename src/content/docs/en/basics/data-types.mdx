@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -116,7 +116,7 @@ export const dataTypesCode = `fn main() {
     println!("inferred u8: {}", inferred);
 }`;
 
-<Playground client:visible code={dataTypesCode} />
+<Playground code={dataTypesCode} />
 
 <Callout title="Rust is statically typed but infers most types">
 You get the safety of a fully typed language without the verbosity of annotating every variable. The compiler infers the type from context. Add an annotation only when inference is ambiguous — or to make the intent explicit for future readers.

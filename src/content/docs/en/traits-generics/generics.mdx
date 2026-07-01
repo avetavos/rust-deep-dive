@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -177,7 +177,7 @@ fn zip_display<A: std::fmt::Display, B: std::fmt::Display>(a: A, b: B) {
 
 The playground demonstrates a generic `largest` function working on both integers and characters, plus a generic `Pair<T>` struct with a method constrained to comparable, displayable types.
 
-<Playground client:visible code={genericsCode} />
+<Playground code={genericsCode} />
 
 <Quiz client:visible id="traits-generics/generics" questions={quizGenerics} />
 

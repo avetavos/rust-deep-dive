@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -98,7 +98,7 @@ fn main() {
     }
 }`;
 
-<Playground client:visible code={traitObjectsCode} />
+<Playground code={traitObjectsCode} />
 
 <Callout title="Trait objects enable runtime polymorphism via a vtable">
 When you use `dyn Trait`, Rust stores a fat pointer: a pointer to the data and a pointer to a vtable (a table of function pointers for that type's trait implementation). This enables different concrete types to be stored together in collections. The cost is a small indirection per method call — usually negligible, but worth knowing about.

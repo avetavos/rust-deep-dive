@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -95,7 +95,7 @@ fn main() {
     unit_example();
 }`;
 
-<Playground client:visible code={functionsCode} />
+<Playground code={functionsCode} />
 
 <Callout title="The last expression (no semicolon) is the return value">
 Omitting the semicolon on the last line of a function body makes that expression the return value. Adding a semicolon turns it into a statement that returns `()`. This is not a gotcha — it is a deliberate design that makes closures, blocks, and functions all behave consistently as expressions.

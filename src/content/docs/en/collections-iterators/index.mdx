@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -78,7 +78,7 @@ fn main() {
     println!("Set: {:?}", items);
 }`;
 
-<Playground client:visible code={collectionsOverviewCode} />
+<Playground code={collectionsOverviewCode} />
 
 <Callout title="Collections live on the heap; iterators are free">
 All standard collections allocate on the heap and manage their own memory. Iterator adaptors like `map` and `filter` compile down to the same machine code as hand-written loops — there is no runtime overhead for chaining them.

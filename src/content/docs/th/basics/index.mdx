@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -57,7 +57,7 @@ export const basicsIndexCode = `fn main() {
     println!("x = {}, name = {}", x, name);
 }`;
 
-<Playground client:visible code={basicsIndexCode} />
+<Playground code={basicsIndexCode} />
 
 <Callout title="ความปลอดภัย + ประสิทธิภาพ โดยไม่มี GC">
 Rust บังคับใช้ memory safety ผ่านกฎ ownership ที่ compile time ไม่ใช่ garbage collector ผลลัพธ์คือโปรแกรมที่เร็วเทียบเท่า C ปลอดภัยเท่าภาษาระดับสูง และมี latency ที่คาดเดาได้เพราะไม่มี GC pause

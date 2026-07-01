@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -73,7 +73,7 @@ export const ownershipIntroCode = `fn main() {
     // 'owner' is no longer valid here
 }`;
 
-<Playground client:visible code={ownershipIntroCode} />
+<Playground code={ownershipIntroCode} />
 
 <Callout title="The compiler is your safety net">
 Ownership violations are caught at **compile time**, not at runtime. If your program compiles, the memory model guarantees are upheld — no buffer overflows, no dangling pointers, no data races from unsynchronized access.

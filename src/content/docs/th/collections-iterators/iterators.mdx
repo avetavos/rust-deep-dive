@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -117,7 +117,7 @@ export const iteratorsCode = `fn main() {
     println!("sum={} product={}", total, product);
 }`;
 
-<Playground client:visible code={iteratorsCode} />
+<Playground code={iteratorsCode} />
 
 <Callout title="Iterator Adaptor เป็น Lazy — ไม่มีอะไรเกิดขึ้นจนกว่า Consumer จะทำงาน">
 การเรียก `.map(...)` หรือ `.filter(...)` ไม่ได้รันโค้ดใดๆ ทันที มันแค่สร้างคำอธิบายของการแปลง เฉพาะเมื่อ Consumer — `collect`, `sum`, `fold`, Loop `for` — ดึงค่าผ่าน Chain จึงจะเกิดการคำนวณ ทำให้ Chain ของ Adaptor ยาวๆ มีประสิทธิภาพเท่ากับ Loop ที่เขียนด้วยมือ

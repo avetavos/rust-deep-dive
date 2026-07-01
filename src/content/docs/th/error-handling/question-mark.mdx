@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -113,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }`;
 
-<Playground client:visible code={questionMarkCode} />
+<Playground code={questionMarkCode} />
 
 <Callout title="? คืน early หรือแกะค่า Ok">
 ตัวดำเนินการ `?` คือ syntactic sugar สำหรับรูปแบบ match-and-early-return มันทำงานในฟังก์ชันใดก็ตามที่ประเภทการคืนค่าเป็น `Result` หรือ `Option` เมื่อประเภทข้อผิดพลาดแตกต่างกัน `?` จะแปลงโดยอัตโนมัติผ่าน `From` การเชื่อมโยงการเรียก `?` ให้โค้ดการส่งต่อข้อผิดพลาดที่สะอาดและเป็นเส้นตรงโดยไม่ต้องซ้อน

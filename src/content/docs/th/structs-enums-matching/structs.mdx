@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -134,7 +134,7 @@ fn main() {
     println!("Red: ({}, {}, {})", red.0, red.1, red.2);
 }`;
 
-<Playground client:visible code={structsCode} />
+<Playground code={structsCode} />
 
 <Callout title="Methods รับ self, &self หรือ &mut self">
 การเลือก receiver ที่ถูกต้องมีความสำคัญ ใช้ `&self` เมื่อ method ต้องการแค่อ่าน field ใช้ `&mut self` เมื่อต้องการแก้ไข ใช้ `self` (owned) เฉพาะเมื่อ method ควร consume instance นั้น — พบได้น้อยแต่เป็น idiomatic สำหรับ builder pattern

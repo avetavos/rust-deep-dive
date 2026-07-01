@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -132,7 +132,7 @@ fn main() {
     println!("big: {:?}", big);
 }`;
 
-<Playground client:visible code={closuresCode} />
+<Playground code={closuresCode} />
 
 <Callout title="Closures capture their environment; move transfers ownership into the closure">
 By default, closures borrow captured variables at the minimum level needed (`Fn` or `FnMut`). The `move` keyword forces ownership transfer — essential when the closure must outlive its defining scope, such as when passing it to a new thread or returning it from a function.

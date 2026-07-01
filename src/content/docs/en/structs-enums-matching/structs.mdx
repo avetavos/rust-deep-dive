@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -130,7 +130,7 @@ fn main() {
     println!("Red: ({}, {}, {})", red.0, red.1, red.2);
 }`;
 
-<Playground client:visible code={structsCode} />
+<Playground code={structsCode} />
 
 export const structsQuiz = [
     {

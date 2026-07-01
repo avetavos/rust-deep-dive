@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -113,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }`;
 
-<Playground client:visible code={questionMarkCode} />
+<Playground code={questionMarkCode} />
 
 <Callout title="? returns the error early or unwraps the Ok value">
 The `?` operator is syntactic sugar for the match-and-early-return pattern. It works in any function whose return type is `Result` or `Option`. When error types differ, `?` automatically converts via `From`. Chaining `?` calls produces clean, linear error-propagation code without any nesting.
