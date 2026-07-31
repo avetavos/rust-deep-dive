@@ -1,6 +1,6 @@
 ---
 title: 'ประเภทข้อผิดพลาดแบบกำหนดเอง'
-description: 'กำหนด enum ข้อผิดพลาดของคุณเองและ implement Display และ Error สำหรับมัน การ implement From ช่วยให้แปลงอัตโนมัติด้วยตัวดำเนินการ ?'
+description: 'กำหนด enum ข้อผิดพลาดของคุณเองและ implement Display และ Error ให้ enum นั้น การ implement From ช่วยให้แปลงอัตโนมัติด้วยตัวดำเนินการ ?'
 sidebar:
   order: 5
 ---
@@ -150,10 +150,10 @@ export const quizCustomErrors = [
     {
         q: "จุดประสงค์ของการ implement From<OtherError> for MyError คืออะไร?",
         options: [
-            "มันช่วยให้ MyError พิมพ์ด้วย {:?}",
-            "มันให้ ? แปลง OtherError เป็น MyError โดยอัตโนมัติ",
-            "มันทำให้ MyError implement trait Error",
-            "มันช่วยให้ MyError ใช้เป็น argument ของฟังก์ชัน"
+            "ช่วยให้ MyError พิมพ์ด้วย {:?}",
+            "ให้ ? แปลง OtherError เป็น MyError โดยอัตโนมัติ",
+            "ทำให้ MyError implement trait Error",
+            "ช่วยให้ MyError ใช้เป็น argument ของฟังก์ชัน"
         ],
         answer: 1
     },

@@ -18,8 +18,8 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 | บทเรียน | หัวข้อ | รันได้ |
 |--------|-------|---------|
-| Threads | `std::thread`, `Arc<Mutex<T>>`, การ join handle | ได้ — Playground ในเบราว์เซอร์ |
-| Channels | `std::sync::mpsc`, send/receive, การส่งต่อ ownership | ได้ — Playground ในเบราว์เซอร์ |
+| Threads | `std::thread`, `Arc<Mutex<T>>`, การ join handle | ได้ — Playground ใน browser |
+| Channels | `std::sync::mpsc`, send/receive, การส่งต่อ ownership | ได้ — Playground ใน browser |
 | Async Intro | `async`/`.await`, futures, tokio runtime | เฉพาะ Cargo project เท่านั้น |
 | Cargo & Tests | `cargo new`, `#[test]`, `cargo test` | เฉพาะ Cargo project เท่านั้น |
 
@@ -31,7 +31,7 @@ standard library ของ Rust มี **OS threads** ผ่าน `std::thread`
 
 ### ทำไม Concurrency ใน Rust จึงแตกต่าง
 
-ในภาษาส่วนใหญ่ data race คือปัญหา runtime คุณเขียนโค้ด รันมัน และบางครั้งมันก็ crash หรือส่งคืนผลลัพธ์ที่ผิดเมื่อมีการโหลดสูง ใน Rust:
+ในภาษาส่วนใหญ่ data race คือปัญหา runtime คุณเขียนโค้ด รันขึ้นมา และบางครั้งโปรแกรมก็ crash หรือส่งคืนผลลัพธ์ที่ผิดเมื่อมีการโหลดสูง ใน Rust:
 
 - ประเภทที่เป็น `Send` หมายความว่าปลอดภัยที่จะย้ายไปยัง thread อื่น
 - ประเภทที่เป็น `Sync` หมายความว่าปลอดภัยที่จะแชร์ reference ข้าม thread
@@ -54,17 +54,17 @@ fn main() {
 <Playground code={indexCode} />
 
 <Callout title="กฎ Ownership ใช้บังคับที่ขอบเขตของ Thread">
-trait ของ `Send` และ `Sync` เป็นกลไกเบื้องหลัง fearless concurrency `Send` หมายความว่าค่าสามารถย้ายไปยัง thread อื่นได้ `Sync` หมายความว่า shared reference ไปยังค่าสามารถส่งได้ ประเภทอย่าง `Rc<T>` และ raw pointer ไม่ใช่ทั้งคู่ ดังนั้นคอมไพเลอร์จะหยุดคุณไม่ให้แชร์พวกมันข้าม thread
+trait ของ `Send` และ `Sync` เป็นกลไกเบื้องหลัง fearless concurrency `Send` หมายความว่าค่าสามารถย้ายไปยัง thread อื่นได้ `Sync` หมายความว่า shared reference ไปยังค่าสามารถส่งได้ ประเภทอย่าง `Rc<T>` และ raw pointer ไม่ใช่ทั้งคู่ ดังนั้นคอมไพเลอร์จะหยุดคุณไม่ให้แชร์ type เหล่านี้ข้าม thread
 </Callout>
 
 export const quizIndex = [
     {
         q: "การที่ประเภทหนึ่งเป็น Send ใน Rust หมายความว่าอะไร?",
         options: [
-            "มันสามารถ serialize เป็น JSON ได้",
-            "มันสามารถย้ายไปยัง thread อื่นได้อย่างปลอดภัย",
-            "มันสามารถแชร์ผ่าน network socket ได้",
-            "มันสามารถ copy ได้โดยไม่ต้อง clone"
+            "สามารถ serialize เป็น JSON ได้",
+            "สามารถย้ายไปยัง thread อื่นได้อย่างปลอดภัย",
+            "สามารถแชร์ผ่าน network socket ได้",
+            "สามารถ copy ได้โดยไม่ต้อง clone"
         ],
         answer: 1
     },

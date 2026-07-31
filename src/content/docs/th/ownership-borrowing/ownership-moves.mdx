@@ -1,6 +1,6 @@
 ---
 title: 'Ownership และ Moves'
-description: 'แต่ละค่ามีเจ้าของหนึ่งเดียว การ assign หรือส่งค่าที่ไม่ใช่ Copy จะ move มัน ค่า Copy จะถูกทำซ้ำ ใช้ .clone() เพื่อทำ deep copy แบบชัดเจน'
+description: 'แต่ละค่ามีเจ้าของหนึ่งเดียว การ assign หรือส่งค่าที่ไม่ใช่ Copy จะ move ค่านั้น ค่า Copy จะถูกทำซ้ำ ใช้ .clone() เพื่อทำ deep copy แบบชัดเจน'
 sidebar:
   order: 2
 ---
@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## เจ้าของได้ทีละหนึ่ง
 
-ทุกค่าใน Rust มีเจ้าของเพียงหนึ่งเดียว เมื่อคุณ assign ค่าให้ตัวแปรอีกตัว หรือส่งมันเข้าไปในฟังก์ชัน **สิ่งที่เกิดขึ้นขึ้นอยู่กับว่า type นั้น implement `Copy` หรือไม่**
+ทุกค่าใน Rust มีเจ้าของเพียงหนึ่งเดียว เมื่อคุณ assign ค่าให้ตัวแปรอีกตัว หรือส่งค่านั้นเข้าไปในฟังก์ชัน **สิ่งที่เกิดขึ้นขึ้นอยู่กับว่า type นั้น implement `Copy` หรือไม่**
 
 ### Type ที่ไม่ใช่ `Copy` จะ Move
 
@@ -44,7 +44,7 @@ fn main() {
 
 ### Type ที่เป็น `Copy` จะถูกทำซ้ำ
 
-Type แบบ scalar ง่าย ๆ ที่เก็บอยู่บน stack ทั้งหมด — จำนวนเต็ม, `bool`, `char`, ตัวเลขทศนิยม และ tuple ของสิ่งเหล่านี้ — จะ implement `Copy` การ assign หรือส่งต่อมันจะทำ **copy แบบ bitwise**; ตัวเดิมยังใช้งานได้
+Type แบบ scalar ง่าย ๆ ที่เก็บอยู่บน stack ทั้งหมด — จำนวนเต็ม, `bool`, `char`, ตัวเลขทศนิยม และ tuple ของสิ่งเหล่านี้ — จะ implement `Copy` การ assign หรือส่งต่อค่าเหล่านี้จะทำ **copy แบบ bitwise**; ตัวเดิมยังใช้งานได้
 
 ```rust
 fn main() {
@@ -111,7 +111,7 @@ fn main() {
 <Playground code={ownershipMovesCode} />
 
 <Callout title="การใช้ค่าที่ถูก move ไปแล้วคือ compile error">
-เมื่อค่าที่ไม่ใช่ `Copy` ถูก move ไปแล้ว คอมไพเลอร์จะทำให้ binding เดิมใช้งานไม่ได้อย่างถาวร ความพยายามใด ๆ ที่จะใช้มันหลังจากนั้นจะเป็น **compile-time error** — `error[E0382]: borrow of moved value` คุณจะไม่สามารถเผลอเข้าถึงหน่วยความจำที่ถูกคืนไปแล้วได้
+เมื่อค่าที่ไม่ใช่ `Copy` ถูก move ไปแล้ว คอมไพเลอร์จะทำให้ binding เดิมใช้งานไม่ได้อย่างถาวร ถ้าคุณพยายามใช้ binding นั้นหลังจากนั้นจะได้ **compile-time error** — `error[E0382]: borrow of moved value` คุณจะไม่สามารถเผลอเข้าถึงหน่วยความจำที่ถูกคืนไปแล้วได้
 </Callout>
 
 export const quizOwnershipMoves = [
@@ -141,11 +141,11 @@ export const quizOwnershipMoves = [
         answer: 2
     },
     {
-        q: "หลังจากส่ง String เข้าไปในฟังก์ชันที่เอา ownership ไป ผู้เรียกยังใช้มันได้อีกไหม?",
+        q: "หลังจากส่ง String เข้าไปในฟังก์ชันที่เอา ownership ไป ผู้เรียกยังใช้ String ตัวนั้นได้อีกไหม?",
         options: [
             "ได้ เพราะฟังก์ชันได้รับ copy",
             "ไม่ได้ เพราะค่าถูก move เข้าไปในฟังก์ชันแล้ว",
-            "ได้ แต่เฉพาะถ้าฟังก์ชัน return มันกลับมา",
+            "ได้ แต่เฉพาะถ้าฟังก์ชัน return ค่านั้นกลับมา",
             "ได้เฉพาะถ้า String ถูกประกาศเป็น mut"
         ],
         answer: 1

@@ -96,7 +96,7 @@ export const quizTraitObjects = [
 
 ## Trait Objects คืออะไร
 
-**Trait object** คือ `&dyn Trait` หรือ `Box<dyn Trait>` — มันเก็บ pointer สองอัน: หนึ่งชี้ไปยังข้อมูล และอีกหนึ่งชี้ไปยัง vtable ซึ่งเป็นตารางของ function pointer สำหรับ method ของ trait นั้น
+**Trait object** คือ `&dyn Trait` หรือ `Box<dyn Trait>` — ข้างในเก็บ pointer สองอัน: หนึ่งชี้ไปยังข้อมูล และอีกหนึ่งชี้ไปยัง vtable ที่เป็นตารางของ function pointer สำหรับ method ของ trait นั้น
 
 <Callout title="Trait objects รองรับ runtime polymorphism ผ่าน vtable">
 เมื่อคุณเรียก method บน `&dyn Animal` Rust จะค้นหา vtable เพื่อหา function pointer ที่ถูกต้อง ณ runtime ซึ่งหมายความว่าคุณสามารถเก็บ `Dog`, `Cat` และ type อื่นๆ ที่ implement `Animal` ใน collection เดียวกันได้ — แม้ว่าจะมีขนาดต่างกัน
@@ -104,7 +104,7 @@ export const quizTraitObjects = [
 
 ## เมื่อใดที่ใช้ `Box<dyn Trait>`
 
-`dyn Trait` โดยตัวมันเองมีขนาดที่ไม่แน่นอน ณ compile time (เนื่องจาก type จริงอาจมีขนาดต่างกัน) ดังนั้นคุณมักจะต้องวางไว้ใน `Box` ซึ่ง allocate บน heap:
+`dyn Trait` โดยตัวเองมีขนาดที่ไม่แน่นอน ณ compile time (เนื่องจาก type จริงอาจมีขนาดต่างกัน) ดังนั้นคุณมักจะต้องวางไว้ใน `Box` ซึ่ง allocate บน heap:
 
 ```rust
 let animals: Vec<Box<dyn Animal>> = vec![

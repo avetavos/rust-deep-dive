@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## `Vec<T>` — Array บน Heap ที่ขยายได้
 
-`Vec<T>` คือ Collection ลำดับที่ใช้งานหลักใน Rust มันจัดเก็บ Element ของประเภท `T` อย่าง Contiguous บน Heap และปรับขนาดโดยอัตโนมัติเมื่อคุณ Push เกิน Capacity ปัจจุบัน
+`Vec<T>` คือ Collection ลำดับที่ใช้งานหลักใน Rust เก็บ Element ของประเภท `T` อย่าง Contiguous บน Heap และปรับขนาดโดยอัตโนมัติเมื่อคุณ Push เกิน Capacity ปัจจุบัน
 
 ```rust
 let mut v: Vec<i32> = Vec::new();     // Vec ว่างเปล่า
@@ -48,7 +48,7 @@ for n in &nums {                  // ยืม Element แต่ละตัว�
 
 ## `String` — ข้อความที่เป็นเจ้าของและขยายได้
 
-`String` คือประเภทข้อความบน Heap ที่ Mutable ของ Rust มันเป็นเจ้าของ Byte ของตัวเองและจัดการการ Deallocation
+`String` คือประเภทข้อความบน Heap ที่ Mutable ของ Rust เป็นเจ้าของ Byte ของตัวเองและจัดการการ Deallocation
 
 ```rust
 let mut s = String::from("hello");
@@ -120,10 +120,10 @@ export const quizVecString = [
     {
         q: "Vec::pop() คืนค่าอะไรเมื่อ Vec ว่างเปล่า?",
         options: [
-            "มัน Panic พร้อมข้อความ index out of bounds",
-            "มันคืน None",
-            "มันคืน 0",
-            "มันคืน Vec ว่างเปล่า"
+            "Panic พร้อมข้อความ index out of bounds",
+            "คืน None",
+            "คืน 0",
+            "คืน Vec ว่างเปล่า"
         ],
         answer: 1
     },
@@ -131,8 +131,8 @@ export const quizVecString = [
         q: "ความแตกต่างระหว่างการ Iterate ด้วย &nums กับ nums คืออะไร?",
         options: [
             "ไม่มีความแตกต่าง — ทั้งคู่ยืม Vec",
-            "&nums ยืม Vec (ยังใช้ได้); nums ย้ายมัน (ใช้ไม่ได้หลังจากนั้น)",
-            "nums ยืม Vec; &nums ย้ายมัน",
+            "&nums ยืม Vec (ยังใช้ได้); nums ย้าย Vec ออกไป (ใช้ไม่ได้หลังจากนั้น)",
+            "nums ยืม Vec; &nums ย้าย Vec ออกไป",
             "ทั้งคู่ Consume Vec และคืนหน่วยความจำ"
         ],
         answer: 1

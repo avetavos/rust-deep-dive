@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## `HashMap<K, V>`
 
-`HashMap<K, V>` Map Key ของประเภท `K` ไปยัง Value ของประเภท `V` มันใช้ Hash Function ภายในเพื่อให้ได้ O(1) เฉลี่ยสำหรับการ Insert และค้นหา
+`HashMap<K, V>` Map Key ของประเภท `K` ไปยัง Value ของประเภท `V` โดยใช้ Hash Function ภายในเพื่อให้ได้ O(1) เฉลี่ยสำหรับการ Insert และค้นหา
 
 ```rust
 use std::collections::HashMap;
@@ -113,27 +113,27 @@ export const quizHashmap = [
     {
         q: "scores.get(\"Alice\") คืนค่าอะไรเมื่อ Alice ไม่อยู่ใน Map?",
         options: [
-            "มัน Panic พร้อมข้อผิดพลาด key-not-found",
-            "มันคืน 0",
-            "มันคืน None",
-            "มันคืน String ว่างเปล่า"
+            "Panic พร้อมข้อผิดพลาด key-not-found",
+            "คืน 0",
+            "คืน None",
+            "คืน String ว่างเปล่า"
         ],
         answer: 2
     },
     {
         q: "entry(key).or_insert(v) ทำอะไรเมื่อ Key มีอยู่แล้ว?",
         options: [
-            "มันเขียนทับค่าที่มีอยู่ด้วย v",
-            "มันไม่ทำอะไรและคืน Mutable Reference ไปยังค่าที่มีอยู่",
-            "มันลบ Key แล้ว Insert ใหม่ด้วย v",
-            "มัน Panic เพราะ Key ซ้ำ"
+            "เขียนทับค่าที่มีอยู่ด้วย v",
+            "ไม่ทำอะไรและคืน Mutable Reference ไปยังค่าที่มีอยู่",
+            "ลบ Key แล้ว Insert ใหม่ด้วย v",
+            "Panic เพราะ Key ซ้ำ"
         ],
         answer: 1
     },
     {
         q: "ทำไม Order การ Iterate ของ HashMap ใน Rust จึงไม่ Deterministic?",
         options: [
-            "มันเป็น Bug ที่จะถูกแก้ในเวอร์ชันอนาคต",
+            "เป็น Bug ที่จะถูกแก้ในเวอร์ชันอนาคต",
             "HashMap Sort Key ตามตัวอักษรโดยค่าเริ่มต้น",
             "HashMap ของ Rust ใช้ Hash Seed แบบ Random (SipHash) เพื่อต้านทาน Hash-Flooding Attacks",
             "ต้องใช้ BTreeMap สำหรับผลลัพธ์ที่มี Order"

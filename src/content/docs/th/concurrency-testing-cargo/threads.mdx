@@ -41,7 +41,7 @@ fn main() {
     let message = String::from("hello from the main thread");
 
     let handle = thread::spawn(move || {
-        // message ถูกย้ายมาที่นี่ — thread เป็นเจ้าของมันแล้ว
+        // message ถูกย้ายมาที่นี่ — thread เป็นเจ้าของตัวเองแล้ว
         println!("{}", message);
     });
 
@@ -52,12 +52,12 @@ fn main() {
 
 ### การแชร์ State ด้วย `Arc<Mutex<T>>`
 
-เพื่อแชร์ข้อมูลที่ mutable ระหว่างหลาย thread ให้ห่อมันด้วย `Arc<Mutex<T>>`:
+เพื่อแชร์ข้อมูลที่ mutable ระหว่างหลาย thread ให้ห่อข้อมูลด้วย `Arc<Mutex<T>>`:
 
 - `Mutex<T>` ให้ mutual exclusion — มีแค่ thread เดียวที่สามารถล็อคได้ในแต่ละครั้ง
 - `Arc<T>` (Atomically Reference Counted) ให้หลาย thread ถือ pointer ที่นับ reference ไปยัง allocation เดียวกัน
 
-คุณ clone `Arc` ก่อนที่จะย้ายมันเข้าไปในแต่ละ thread `Mutex` ที่อยู่ข้างในถูกแชร์ ไม่ใช่ clone
+คุณ clone `Arc` ก่อนย้าย clone นั้นเข้าไปในแต่ละ thread `Mutex` ที่อยู่ข้างในถูกแชร์ ไม่ใช่ clone
 
 ```rust
 use std::thread;
@@ -119,7 +119,7 @@ fn main() {
 <Playground code={threadsCode} />
 
 <Callout title="Send และ Sync ทำให้ Data Race เป็น Compile Error">
-ระบบประเภทของ Rust บังคับใช้ thread safety ผ่าน marker trait `Send` และ `Sync` `Arc<Mutex<T>>` เป็น `Send` (คุณสามารถย้ายมันไปยัง thread อื่น) และ `Sync` (คุณสามารถแชร์ reference ไปยังมันข้าม thread) ถ้าคุณพยายามแชร์ `Rc<T>` หรือ `RefCell<T>` ข้าม thread คอมไพเลอร์จะปฏิเสธโค้ดด้วย error ที่ชัดเจน — ไม่ต้องการ sanitizer ไม่มี panic จาก data race เวลา runtime
+ระบบประเภทของ Rust บังคับใช้ thread safety ผ่าน marker trait `Send` และ `Sync` `Arc<Mutex<T>>` เป็น `Send` (คุณย้ายไปยัง thread อื่นได้) และ `Sync` (คุณแชร์ reference ข้าม thread ได้) ถ้าคุณพยายามแชร์ `Rc<T>` หรือ `RefCell<T>` ข้าม thread คอมไพเลอร์จะปฏิเสธโค้ดด้วย error ที่ชัดเจน — ไม่ต้องการ sanitizer ไม่มี panic จาก data race เวลา runtime
 </Callout>
 
 export const quizThreads = [
@@ -137,7 +137,7 @@ export const quizThreads = [
         q: "ทำไม thread closure จึงมักใช้คำสั่ง move?",
         options: [
             "เพราะ closure ที่ไม่มี move ไม่สามารถใช้ println! ได้",
-            "เพราะ thread อาจมีอายุยาวกว่า scope ที่ตัวแปรถูกกำหนด ดังนั้นมันจะต้องเป็นเจ้าของโดย thread",
+            "เพราะ thread อาจมีอายุยาวกว่า scope ที่ตัวแปรถูกกำหนด ดังนั้น thread จึงต้องเป็นเจ้าของค่านั้นเอง",
             "เพราะ move ทำให้ closure รันเร็วขึ้น",
             "เพราะ move เป็นสิ่งที่ std::thread::spawn ต้องการสำหรับ closure ทั้งหมด"
         ],

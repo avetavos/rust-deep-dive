@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## Borrow แทนที่จะ Move
 
-การ move ค่าเข้าไปในฟังก์ชันมักไม่จำเป็น — คุณแค่อยากให้ฟังก์ชันอ่านค่า ไม่ได้อยากให้มันเป็นเจ้าของ Rust แก้ปัญหานี้ด้วย **references** reference ช่วยให้คุณส่งค่าเข้าไปในฟังก์ชันได้โดยไม่ต้องสละ ownership
+การ move ค่าเข้าไปในฟังก์ชันมักไม่จำเป็น — คุณแค่อยากให้ฟังก์ชันอ่านค่า ไม่ได้อยากยกความเป็นเจ้าของให้ Rust แก้ปัญหานี้ด้วย **references** reference ช่วยให้คุณส่งค่าเข้าไปในฟังก์ชันได้โดยไม่ต้องสละ ownership
 
 syntax `&T` หมายถึง "shared reference ไปยังค่าของ type `T`" การสร้าง reference เรียกว่า **borrowing**
 
@@ -32,7 +32,7 @@ syntax `&s` สร้าง reference ไปยัง `s` ส่วน signature
 
 ### References ไม่ได้เป็นเจ้าของ
 
-เพราะ reference ไม่ได้เป็นเจ้าของค่าที่มันชี้ไป ค่านั้นจึง **ไม่ถูก dropped** เมื่อ reference ออกจาก scope ownership ยังคงอยู่กับตัวแปรเดิม
+เพราะ reference ไม่ได้เป็นเจ้าของค่าที่ชี้ไป ค่านั้นจึง **ไม่ถูก dropped** เมื่อ reference ออกจาก scope ownership ยังคงอยู่กับตัวแปรเดิม
 
 ```rust
 fn print_greeting(name: &String) {
@@ -63,7 +63,7 @@ fn main() {
 
 ### References กับ Signature ของฟังก์ชัน
 
-เมื่อพารามิเตอร์ของฟังก์ชันเป็น `&String` ผู้เรียกจะส่ง `&my_string` เข้าไป เมื่อพารามิเตอร์เป็น `&str` (string slice) ฟังก์ชันจะยืดหยุ่นกว่า — มันรับได้ทั้ง `&String` และ string literal โดยทั่วไปควรเลือกใช้ `&str` แทน `&String` สำหรับพารามิเตอร์ของฟังก์ชัน
+เมื่อพารามิเตอร์ของฟังก์ชันเป็น `&String` ผู้เรียกจะส่ง `&my_string` เข้าไป เมื่อพารามิเตอร์เป็น `&str` (string slice) ฟังก์ชันจะยืดหยุ่นกว่า — รับได้ทั้ง `&String` และ string literal โดยทั่วไปควรเลือกใช้ `&str` แทน `&String` สำหรับพารามิเตอร์ของฟังก์ชัน
 
 ```rust
 fn greet(name: &str) {
@@ -107,17 +107,17 @@ fn main() {
 <Playground code={referencesBorrowingCode} />
 
 <Callout title="reference borrow โดยไม่เอา ownership ไป">
-`&T` คือ **shared reference** — มันให้คุณอ่านค่าได้โดยไม่ต้องเป็นเจ้าของ เจ้าของเดิมยังคงเก็บค่าของมันไว้ครบถ้วน คุณสามารถมี shared reference ได้มากเท่าที่ต้องการพร้อม ๆ กัน เพราะมันเป็นแบบ read-only ทั้งหมดและไม่ขัดแย้งกันเอง
+`&T` คือ **shared reference** — ให้คุณอ่านค่าได้โดยไม่ต้องเป็นเจ้าของ เจ้าของเดิมยังถือค่านั้นไว้ครบถ้วน คุณสามารถมี shared reference ได้มากเท่าที่ต้องการพร้อม ๆ กัน เพราะเป็นแบบ read-only ทั้งหมดและไม่ขัดแย้งกันเอง
 </Callout>
 
 export const quizReferencesBorrowing = [
     {
         q: "สัญลักษณ์ & ทำอะไรเมื่อวางไว้หน้า type ในพารามิเตอร์ของฟังก์ชัน?",
         options: [
-            "มัน copy ค่าเข้าไปในฟังก์ชัน",
-            "มัน move ค่าเข้าไปในฟังก์ชัน",
-            "มันสร้าง shared reference — ฟังก์ชัน borrow ค่าโดยไม่เอา ownership ไป",
-            "มันประกาศค่าให้เป็น mutable"
+            "copy ค่าเข้าไปในฟังก์ชัน",
+            "move ค่าเข้าไปในฟังก์ชัน",
+            "สร้าง shared reference — ฟังก์ชัน borrow ค่าโดยไม่เอา ownership ไป",
+            "ประกาศค่าให้เป็น mutable"
         ],
         answer: 2
     },
@@ -125,7 +125,7 @@ export const quizReferencesBorrowing = [
         q: "เกิดอะไรขึ้นกับ String เมื่อฟังก์ชันที่รับ &String return ออกมา?",
         options: [
             "String ถูกคืนเพราะ reference ออกจาก scope",
-            "String ยังใช้งานได้ — ฟังก์ชันแค่ borrow มันไป",
+            "String ยังใช้งานได้ — ฟังก์ชันแค่ borrow ไปเฉย ๆ",
             "String ถูก move กลับไปให้ผู้เรียกโดยอัตโนมัติ",
             "String ใช้งานไม่ได้จนกว่าจะใช้ครั้งถัดไป"
         ],
@@ -136,7 +136,7 @@ export const quizReferencesBorrowing = [
         options: [
             "ไม่เกินหนึ่ง",
             "ไม่เกินสอง",
-            "ศูนย์ตัวพอดีในขณะที่มี mutable reference อยู่",
+            "ศูนย์ตัวพอดีขณะที่มี mutable reference อยู่",
             "จำนวนเท่าไรก็ได้ — shared reference เป็น read-only ทั้งหมด"
         ],
         answer: 3

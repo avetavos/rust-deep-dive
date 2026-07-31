@@ -1,6 +1,6 @@
 ---
 title: 'ประเภท Option'
-description: 'Rust ไม่มี null — การขาดหายของค่าถูกจำลองด้วย Option<T> ซึ่งเป็น Some(value) หรือ None'
+description: 'Rust ไม่มี null — การขาดหายของค่าถูกจำลองด้วย Option<T> ที่เป็น Some(value) หรือ None'
 sidebar:
   order: 5
 ---
@@ -65,11 +65,11 @@ let maybe: Option<i32> = None;
 let value = maybe.unwrap_or(0); // 0
 ```
 
-นี่คือรูปแบบที่ปลอดภัยที่สุดของ "ให้ค่าหรือ fallback" หลีกเลี่ยง `.unwrap()` แบบธรรมดาใน production code เพราะมัน panic กับ `None`
+นี่คือรูปแบบที่ปลอดภัยที่สุดของ "ให้ค่าหรือ fallback" หลีกเลี่ยง `.unwrap()` แบบธรรมดาใน production code เพราะ panic กับ `None`
 
 ## `map` — แปลงค่าภายใน
 
-`map` ใช้ closure กับค่า `Some` และคืน `Option<T>` ใหม่ หากค่าเดิมเป็น `None` มันส่ง `None` ผ่านไปโดยไม่เปลี่ยนแปลง:
+`map` ใช้ closure กับค่า `Some` และคืน `Option<T>` ใหม่ หากค่าเดิมเป็น `None` `map` จะส่ง `None` ผ่านไปโดยไม่เปลี่ยนแปลง:
 
 ```rust
 let doubled = Some(5).map(|x| x * 2); // Some(10)
@@ -135,20 +135,20 @@ export const quizOption = [
     {
         q: 'unwrap_or(default) ทำอะไรเมื่อเรียกกับ None?',
         options: [
-            'มัน panic พร้อมข้อความ',
-            'มันคืนค่าภายใน Some',
-            'มันคืนค่า default ที่กำหนด',
-            'มันแปลง None เป็น empty string',
+            'panic พร้อมข้อความ',
+            'คืนค่าภายใน Some',
+            'คืนค่า default ที่กำหนด',
+            'แปลง None เป็น empty string',
         ],
         answer: 2,
     },
     {
         q: 'map ทำอะไรเมื่อเรียกกับค่า None?',
         options: [
-            'มัน panic',
-            'มันเรียก closure ด้วยค่า default',
-            'มันคืน None โดยไม่เรียก closure',
-            'มันแปลง None เป็น Some(())',
+            'panic',
+            'เรียก closure ด้วยค่า default',
+            'คืน None โดยไม่เรียก closure',
+            'แปลง None เป็น Some(())',
         ],
         answer: 2,
     },

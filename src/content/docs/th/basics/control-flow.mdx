@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## `if` แบบ Expression
 
-ใน Rust `if` คือ **expression** — มันประเมินเป็นค่า ซึ่งหมายความว่าคุณสามารถใช้มันทางขวามือของ `let` binding ได้ ทุก branch ต้องผลิตค่าที่มี type เดียวกัน
+ใน Rust `if` คือ **expression** — ประเมินออกมาเป็นค่า คุณจึงใช้ `if` ทางขวามือของ `let` binding ได้ ทุก branch ต้องผลิตค่าที่มี type เดียวกัน
 
 ```rust
 fn main() {
@@ -43,7 +43,7 @@ fn main() {
 
 ### `loop` — วนซ้ำไม่รู้จบ
 
-`loop` รัน body ของมันไม่หยุดจนกว่าจะพบ `break` อย่างชัดเจน ต่างจากภาษาอื่น `loop` ของ Rust สามารถ **return ค่า** ผ่าน `break` ได้
+`loop` รัน body ของตัวเองไม่หยุดจนกว่าจะพบ `break` อย่างชัดเจน ต่างจากภาษาอื่น `loop` ของ Rust สามารถ **return ค่า** ผ่าน `break` ได้
 
 ```rust
 fn main() {
@@ -75,7 +75,7 @@ fn main() {
 
 ### `for` — วนผ่าน Collection และ Range
 
-`for` คือ loop ที่ใช้บ่อยที่สุดใน Rust มันวนผ่าน type ใดก็ได้ที่ implement `Iterator` trait รวมถึง range และ array
+`for` คือ loop ที่ใช้บ่อยที่สุดใน Rust และวนผ่าน type ใดก็ได้ที่ implement `Iterator` trait รวมถึง range และ array
 
 ```rust
 fn main() {
@@ -143,7 +143,7 @@ export const controlFlowCode = `fn main() {
 <Playground code={controlFlowCode} />
 
 <Callout title="if และ loop เป็น expression และ return ค่าได้">
-ใน Rust `if` และ `loop` เป็น expression — มันผลิตค่า การกำหนด `let x = if cond { a } else { b }` หรือ `let result = loop { break value }` เป็น Rust ที่ idiomatic ทั้งสอง arm ของ `if` expression และค่าที่ส่งให้ `break` ใน `loop` ต้องมี type เดียวกัน
+ใน Rust `if` และ `loop` เป็น expression — ทั้งคู่ผลิตค่า การกำหนด `let x = if cond { a } else { b }` หรือ `let result = loop { break value }` เป็น Rust ที่ idiomatic ทั้งสอง arm ของ `if` expression และค่าที่ส่งให้ `break` ใน `loop` ต้องมี type เดียวกัน
 </Callout>
 
 export const quizControlFlow = [

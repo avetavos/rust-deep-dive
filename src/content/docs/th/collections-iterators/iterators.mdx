@@ -29,7 +29,7 @@ for x in v.into_iter() { }   // v ถูก Move — ใช้ v ไม่ได
 
 ## Adaptor — การแปลงแบบ Lazy
 
-Adaptor แปลง Iterator หนึ่งเป็น Iterator อื่น มัน **ไม่ทำงานจริง** จนกว่า Consumer จะขับเคลื่อน
+Adaptor แปลง Iterator หนึ่งเป็น Iterator อื่น และ **ไม่ทำงานจริง** จนกว่า Consumer จะขับเคลื่อน
 
 ### `map`
 
@@ -120,7 +120,7 @@ export const iteratorsCode = `fn main() {
 <Playground code={iteratorsCode} />
 
 <Callout title="Iterator Adaptor เป็น Lazy — ไม่มีอะไรเกิดขึ้นจนกว่า Consumer จะทำงาน">
-การเรียก `.map(...)` หรือ `.filter(...)` ไม่ได้รันโค้ดใดๆ ทันที มันแค่สร้างคำอธิบายของการแปลง เฉพาะเมื่อ Consumer — `collect`, `sum`, `fold`, Loop `for` — ดึงค่าผ่าน Chain จึงจะเกิดการคำนวณ ทำให้ Chain ของ Adaptor ยาวๆ มีประสิทธิภาพเท่ากับ Loop ที่เขียนด้วยมือ
+การเรียก `.map(...)` หรือ `.filter(...)` ไม่ได้รันโค้ดใดๆ ทันที แค่สร้างคำอธิบายของการแปลงเอาไว้ เฉพาะเมื่อ Consumer — `collect`, `sum`, `fold`, Loop `for` — ดึงค่าผ่าน Chain จึงจะเกิดการคำนวณ ทำให้ Chain ของ Adaptor ยาวๆ มีประสิทธิภาพเท่ากับ Loop ที่เขียนด้วยมือ
 </Callout>
 
 export const quizIterators = [
@@ -128,14 +128,14 @@ export const quizIterators = [
         q: "ความแตกต่างสำคัญระหว่าง .iter() กับ .into_iter() บน Vec คืออะไร?",
         options: [
             ".iter() เร็วกว่า; .into_iter() ปลอดภัยกว่า",
-            ".iter() ยืม Vec (ยังใช้ได้); .into_iter() Consume (Move) มัน",
-            ".into_iter() ยืม Vec; .iter() Consume มัน",
+            ".iter() ยืม Vec (ยังใช้ได้); .into_iter() Consume (Move) Vec ไป",
+            ".into_iter() ยืม Vec; .iter() Consume Vec ไป",
             "ไม่มีความแตกต่างในทางปฏิบัติ"
         ],
         answer: 1
     },
     {
-        q: "Adaptor .map() รัน Closure ของมันจริงเมื่อใด?",
+        q: "Adaptor .map() รัน Closure ของตัวเองจริงเมื่อใด?",
         options: [
             "ทันทีที่เรียก .map()",
             "เมื่อ Adaptor ถัดไปใน Chain ถูกแนบ",
@@ -157,7 +157,7 @@ export const quizIterators = [
     {
         q: "ทำไม Closure ของ filter บน .iter() ของ Vec<i32> จึงรับ &&i32?",
         options: [
-            "มันเป็น Bug ของ Rust Compiler",
+            "เป็น Bug ของ Rust Compiler",
             ".iter() ให้ &i32 และ filter ห่อ Element แต่ละตัวด้วย Reference อีกชั้น ทำให้ได้ &&i32",
             "filter เพิ่ม Reference สองชั้นเสมอไม่ว่าจะเป็นประเภท Iterator ใด",
             "Vec<i32> จัดเก็บ i32 เป็น Double Pointer ภายใน"

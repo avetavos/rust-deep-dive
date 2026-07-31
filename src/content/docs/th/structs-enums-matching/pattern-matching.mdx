@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## `match` Expression
 
-`match` เปรียบเทียบค่ากับชุด **pattern** และ execute arm ที่ pattern ตรงกัน ต่างจาก `switch` ใน C, `match` ของ Rust เป็น expression — มันสร้างค่า — และคอมไพเลอร์ตรวจสอบความครบถ้วน
+`match` เปรียบเทียบค่ากับชุด **pattern** และ execute arm ที่ pattern ตรงกัน ต่างจาก `switch` ใน C, `match` ของ Rust เป็น expression — สร้างค่าออกมา — และคอมไพเลอร์ตรวจสอบความครบถ้วน
 
 ```rust
 let x: i32 = 3;
@@ -29,7 +29,7 @@ Pattern `_` จับคู่กับค่าใดก็ตามที่�
 
 ## การจับคู่ Enum Variant และการ Bind ข้อมูล
 
-พลังที่แท้จริงของ `match` มาจากการ destructure enum variant และ bind ข้อมูลของมันกับชื่อ local:
+พลังที่แท้จริงของ `match` มาจากการ destructure enum variant และ bind ข้อมูลของตัวเองกับชื่อ local:
 
 ```rust
 enum Coin {
@@ -43,7 +43,7 @@ match coin {
 }
 ```
 
-ตัวระบุ `state` ใน `Coin::Quarter(state)` คือ binding — มันรับค่า `String` ที่ variant นั้นพกมา คุณสามารถใช้มันได้อย่างอิสระในส่วนของ arm
+ตัวระบุ `state` ใน `Coin::Quarter(state)` คือ binding — รับค่า `String` ที่ variant นั้นพกมา แล้วคุณใช้ค่านั้นได้อย่างอิสระในส่วนของ arm
 
 ### Range Patterns
 
@@ -160,7 +160,7 @@ export const quizPatternMatching = [
         q: 'pattern _ ใน match arm ทำอะไร?',
         options: [
             'จับคู่เฉพาะ variant None ของ Option เท่านั้น',
-            'จับคู่กับค่าใดก็ได้โดยไม่ bind มัน',
+            'จับคู่กับค่าใดก็ได้โดยไม่ bind ค่านั้น',
             'break ออกจาก match expression',
             'เป็น syntax error',
         ],

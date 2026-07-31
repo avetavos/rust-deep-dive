@@ -92,7 +92,7 @@ export const quizLifetimes = [
 จุดประสงค์หลักคือการป้องกัน *dangling reference* — situation ที่ reference ชี้ไปยังหน่วยความจำที่ถูก free ไปแล้ว
 
 <Callout title="Lifetimes มีผลเฉพาะ compile time — อธิบายความถูกต้องของ reference">
-Lifetime annotation ไม่ได้เปลี่ยนระยะเวลาที่ value มีชีวิตอยู่ มันเป็นเพียงข้อมูลสำหรับ borrow checker เพื่อตรวจสอบว่า reference ทั้งหมดถูกต้อง ณ compile time ไม่มีผลใดๆ ต่อ runtime performance หรือ memory layout
+Lifetime annotation ไม่ได้เปลี่ยนระยะเวลาที่ value มีชีวิตอยู่ เป็นเพียงข้อมูลสำหรับ borrow checker เพื่อตรวจสอบว่า reference ทั้งหมดถูกต้อง ณ compile time ไม่มีผลใดๆ ต่อ runtime performance หรือ memory layout
 </Callout>
 
 ## Lifetime Annotation Syntax
@@ -117,7 +117,7 @@ struct Excerpt<'a> {
 }
 ```
 
-นี่บอก compiler ว่า instance ของ `Excerpt` ต้องมีชีวิตอยู่ไม่นานกว่า `text` ที่มันชี้ไป
+นี่บอก compiler ว่า instance ของ `Excerpt` ต้องมีชีวิตอยู่ไม่นานกว่า `text` ที่ชี้ไป
 
 ## Lifetime Elision
 

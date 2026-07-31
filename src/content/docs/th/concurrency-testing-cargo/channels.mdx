@@ -14,7 +14,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 standard library ของ Rust มี channel แบบ **multi-producer, single-consumer** (mpsc) สำหรับส่งค่าระหว่าง thread channel มีสองปลาย:
 
-- `tx` — **transmitter** (ผู้ส่ง) คุณสามารถ clone มันเพื่อสร้าง producer หลายตัว
+- `tx` — **transmitter** (ผู้ส่ง) คุณ clone ตัวนี้เพื่อสร้าง producer หลายตัวได้
 - `rx` — **receiver** (ผู้รับ) มี receiver เพียงตัวเดียวต่อ channel
 
 ```rust
@@ -34,7 +34,7 @@ fn main() {
 
 ### การส่งค่าข้าม Thread
 
-transmitter เป็น `Send` ดังนั้นคุณสามารถย้ายมันเข้าไปใน thread closure เมื่อ `tx.send(value)` ถูกเรียก ค่านั้นจะถูก **ย้าย** เข้าไปใน channel — thread ผู้ส่งไม่ได้เป็นเจ้าของมันอีกต่อไป
+transmitter เป็น `Send` ดังนั้นคุณย้ายเข้าไปใน thread closure ได้ เมื่อ `tx.send(value)` ถูกเรียก ค่านั้นจะถูก **ย้าย** เข้าไปใน channel — thread ผู้ส่งไม่ได้เป็นเจ้าของค่านั้นอีกต่อไป
 
 ```rust
 use std::thread;
@@ -158,7 +158,7 @@ fn main() {
 <Playground code={channelsCode} />
 
 <Callout title="Channels ย้าย Ownership ระหว่าง Thread">
-เมื่อคุณเรียก `tx.send(value)` ownership ของ `value` จะถูกย้ายเข้าไปใน channel thread ผู้ส่งไม่สามารถเข้าถึงมันได้อีกต่อไป thread ผู้รับจะเป็นเจ้าของค่านั้นหลัง `rx.recv()` การย้าย ownership นี้คือเหตุผลที่ channel ปลอดจาก data race โดยโครงสร้าง — มีเพียง thread เดียวที่เป็นเจ้าของค่าในแต่ละจุดของเวลา
+เมื่อคุณเรียก `tx.send(value)` ownership ของ `value` จะถูกย้ายเข้าไปใน channel thread ผู้ส่งเข้าถึงค่านั้นไม่ได้อีกต่อไป thread ผู้รับจะเป็นเจ้าของค่านั้นหลัง `rx.recv()` การย้าย ownership นี้คือเหตุผลที่ channel ปลอดจาก data race โดยโครงสร้าง — มีเพียง thread เดียวที่เป็นเจ้าของค่าในแต่ละจุดของเวลา
 </Callout>
 
 export const quizChannels = [
@@ -176,7 +176,7 @@ export const quizChannels = [
         q: "อะไรเกิดขึ้นกับค่าหลังจาก tx.send(value) ถูกเรียก?",
         options: [
             "ค่าถูก copy เข้า channel ผู้ส่งยังคง copy ของตัวเองไว้",
-            "ค่าถูกย้ายเข้า channel ผู้ส่งไม่สามารถใช้มันได้อีกต่อไป",
+            "ค่าถูกย้ายเข้า channel ผู้ส่งใช้ค่านั้นไม่ได้อีกต่อไป",
             "ค่าถูก serialize เป็น bytes ก่อนส่ง",
             "ค่าถูก clone อัตโนมัติหากไม่ implement Copy"
         ],

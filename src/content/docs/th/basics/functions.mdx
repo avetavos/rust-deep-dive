@@ -20,13 +20,13 @@ fn add(a: i32, b: i32) -> i32 {
 }
 ```
 
-ฟังก์ชันสามารถประกาศก่อนหรือหลังที่มันถูกเรียกใช้ — Rust ไม่ต้องการ forward declaration
+ฟังก์ชันสามารถประกาศก่อนหรือหลังที่ถูกเรียกใช้ — Rust ไม่ต้องการ forward declaration
 
 ### Statements vs Expressions
 
 นี่คือความแตกต่างที่สำคัญที่สุดใน function body ของ Rust:
 
-- **Statement** ทำการกระทำและ **ไม่** ผลิตค่า `let x = 5;` คือ statement ที่ลงท้ายด้วย semicolon
+- **Statement** ทำและ **ไม่** ผลิตค่า `let x = 5;` คือ statement ที่ลงท้ายด้วย semicolon
 - **Expression** ประเมินเป็นค่า `5 + 3` คือ expression block `{ ... }` ก็เป็น expression เช่นกัน
 
 ```rust
@@ -98,7 +98,7 @@ fn main() {
 <Playground code={functionsCode} />
 
 <Callout title="expression สุดท้าย (ไม่มี semicolon) คือ return value">
-การละ semicolon ที่บรรทัดสุดท้ายของ function body ทำให้ expression นั้นเป็น return value การใส่ semicolon จะเปลี่ยนมันเป็น statement ที่ return `()` นี่ไม่ใช่ gotcha แต่เป็นการออกแบบที่ตั้งใจทำให้ closure, block และ function ทำงานสอดคล้องกันในฐานะ expression
+การละ semicolon ที่บรรทัดสุดท้ายของ function body ทำให้ expression นั้นเป็น return value การใส่ semicolon จะเปลี่ยน expression นั้นเป็น statement ที่ return `()` นี่ไม่ใช่ gotcha แต่เป็นการออกแบบที่ตั้งใจทำให้ closure, block และ function ทำงานสอดคล้องกันในฐานะ expression
 </Callout>
 
 export const quizFunctions = [
