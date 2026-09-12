@@ -1,6 +1,6 @@
 ---
 title: 'Traits'
-description: 'Define shared behavior with traits — similar to interfaces in other languages.'
+description: 'Define shared behavior with traits — similar to interfaces in other languages — including returning impl Trait.'
 sidebar:
   order: 2
 ---
@@ -157,6 +157,35 @@ fn print_area(shape: &impl Shape) {
 ```
 
 This is shorthand for a generic function with a trait bound, which you'll learn more about in the Generics lesson.
+
+export const rpitCode = `// Rust 2024: \`impl Trait\` captures every in-scope lifetime, so this just works.
+fn evens(nums: &[i32]) -> impl Iterator<Item = i32> {
+    nums.iter().copied().filter(|n| n % 2 == 0)
+}
+
+fn main() {
+    let nums = vec![1, 2, 3, 4, 5, 6];
+    let out: Vec<i32> = evens(&nums).collect();
+    println!("{out:?}");
+}
+`;
+
+## Returning `impl Trait`
+
+`impl Trait` works in return position too: the function promises *some* type that implements the trait, without naming it. That is how you return an iterator or a closure.
+
+<Playground code={rpitCode} />
+
+In the Rust 2024 edition a returned `impl Trait` automatically captures every lifetime in scope, so borrowing from `nums` needs no extra annotation. The same function on `edition = "2021"` is rejected with `error[E0700]: hidden type for impl Iterator<Item = i32> captures lifetime that does not appear in bounds`, and you had to add `+ '_` yourself.
+
+When you want the opposite — a return type that deliberately captures *nothing* — say so with an empty `use<>` bound:
+
+```rust
+fn make_counter(start: u32) -> impl FnMut() -> u32 + use<> {
+    let mut n = start;
+    move || { n += 1; n }
+}
+```
 
 ## Try It
 

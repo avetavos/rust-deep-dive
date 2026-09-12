@@ -1,6 +1,6 @@
 ---
 title: 'Traits'
-description: 'กำหนด behavior ร่วมกันด้วย traits ซึ่งคล้ายกับ interface ในภาษาอื่น'
+description: 'กำหนด behavior ร่วมกันด้วย traits ซึ่งคล้ายกับ interface ในภาษาอื่น รวมถึงการ return impl Trait'
 sidebar:
   order: 2
 ---
@@ -157,6 +157,35 @@ fn print_area(shape: &impl Shape) {
 ```
 
 นี่คือ shorthand สำหรับ generic function พร้อม trait bound ซึ่งคุณจะเรียนรู้เพิ่มเติมในบทเรียน Generics
+
+export const rpitCode = `// Rust 2024: \`impl Trait\` captures every in-scope lifetime, so this just works.
+fn evens(nums: &[i32]) -> impl Iterator<Item = i32> {
+    nums.iter().copied().filter(|n| n % 2 == 0)
+}
+
+fn main() {
+    let nums = vec![1, 2, 3, 4, 5, 6];
+    let out: Vec<i32> = evens(&nums).collect();
+    println!("{out:?}");
+}
+`;
+
+## การ Return `impl Trait`
+
+`impl Trait` ใช้ในตำแหน่ง return ได้ด้วย: ฟังก์ชันสัญญาว่าจะคืน *ชนิดใดชนิดหนึ่ง* ที่ implement trait นั้น โดยไม่ต้องระบุชื่อชนิด นี่คือวิธี return iterator หรือ closure
+
+<Playground code={rpitCode} />
+
+ใน edition 2024 `impl Trait` ที่ return ออกมาจะ capture ทุก lifetime ที่อยู่ใน scope โดยอัตโนมัติ การยืมค่าจาก `nums` จึงไม่ต้องใส่ annotation เพิ่ม ฟังก์ชันเดียวกันบน `edition = "2021"` จะถูกปฏิเสธด้วย `error[E0700]: hidden type for impl Iterator<Item = i32> captures lifetime that does not appear in bounds` และคุณต้องเติม `+ '_` เอง
+
+ถ้าต้องการตรงกันข้าม — return type ที่ตั้งใจไม่ capture อะไรเลย — ให้ระบุด้วย bound `use<>` ที่ว่าง:
+
+```rust
+fn make_counter(start: u32) -> impl FnMut() -> u32 + use<> {
+    let mut n = start;
+    move || { n += 1; n }
+}
+```
 
 ## ลองเล่น
 

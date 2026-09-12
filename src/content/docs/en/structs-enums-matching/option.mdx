@@ -1,6 +1,6 @@
 ---
 title: 'The Option Type'
-description: "Rust has no null. Absence is modeled with Option<T> — either Some(value) or None."
+description: "Rust has no null. Absence is modeled with Option<T> — either Some(value) or None — and let chains in the Rust 2024 edition."
 sidebar:
   order: 5
 ---
@@ -55,6 +55,49 @@ if let Some(value) = divide(10.0, 2.0) {
 ```
 
 The body executes only when the value is `Some`. Add `else` to handle `None` if needed.
+
+export const letChainCode = `#[derive(Debug)]
+struct User {
+    name: String,
+    age: Option<u32>,
+}
+
+fn find_user(id: u32) -> Option<User> {
+    if id == 1 {
+        Some(User { name: String::from("Ada"), age: Some(36) })
+    } else {
+        None
+    }
+}
+
+fn main() {
+    // One flat condition: find the user, unwrap the age, compare it.
+    if let Some(user) = find_user(1)
+        && let Some(age) = user.age
+        && age >= 18
+    {
+        println!("{} is an adult ({age})", user.name);
+    }
+
+    if let Some(user) = find_user(2)
+        && let Some(age) = user.age
+    {
+        println!("{} is {age}", user.name);
+    } else {
+        println!("no user 2");
+    }
+}
+`;
+
+## Let Chains — `if let` Plus Conditions (Rust 2024)
+
+Reaching into a nested `Option` used to mean nesting `if let` blocks, because `if let` could not be combined with `&&`. The Rust 2024 edition allows **let chains**: `let` bindings and boolean tests joined with `&&` inside one condition.
+
+<Playground code={letChainCode} />
+
+Every `let` in the chain binds for the rest of the chain and for the body, so `user` is in scope for the second `let` and `age` is in scope for the comparison. An `else` branch still works — it runs when any link in the chain fails.
+
+This one is edition-gated. The same code on `edition = "2021"` is rejected with `error: let chains are only allowed in Rust 2024 or later`.
 
 ## `unwrap_or` — Providing a Default
 
@@ -122,6 +165,16 @@ fn main() {
 <Playground code={optionCode} />
 
 export const quizOption = [
+    {
+        q: "Which Rust edition is required for a let chain like `if let Some(x) = opt && x > 2`?",
+        options: [
+            "Rust 2015",
+            "Rust 2018",
+            "Rust 2021",
+            "Rust 2024"
+        ],
+        answer: 3
+    },
     {
         q: "What does Option<T> represent in Rust?",
         options: [

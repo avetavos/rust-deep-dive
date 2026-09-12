@@ -1,6 +1,6 @@
 ---
 title: 'Cargo & Testing'
-description: 'เรียนรู้คำสั่ง Cargo สำหรับ build และรันโปรเจกต์ และเขียน unit test โดยใช้ #[test], assert_eq! และ #[cfg(test)] modules'
+description: 'เรียนรู้คำสั่ง Cargo สำหรับ build และรันโปรเจกต์ และเขียน unit test โดยใช้ #[test], assert_eq! และ #[cfg(test)] และสิ่งที่ edition = "2024" เปลี่ยนไป modules'
 sidebar:
   order: 5
 ---
@@ -81,7 +81,7 @@ cargo clippy
 [package]
 name    = "my_project"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 serde       = { version = "1", features = ["derive"] }
@@ -92,6 +92,32 @@ anyhow      = "1"
 # compile เฉพาะสำหรับ test และ benchmark
 pretty_assertions = "1"
 ```
+
+### Edition: `edition = "2024"` คืออะไร
+
+key `edition` เลือก dialect ของภาษาที่ crate ของคุณจะถูก compile ด้วย edition ทำให้ Rust เปลี่ยน syntax และ idiom ได้โดยไม่ทำให้ ecosystem แตกเป็นเสี่ยง — crate ที่อยู่คนละ edition link เข้าด้วยกันได้ปกติ แต่ละ crate จึงอัปเกรดตามจังหวะของตัวเองได้
+
+`cargo new` สร้าง `edition = "2024"` มาตั้งแต่ Rust 1.85 (กุมภาพันธ์ 2025) สิ่งที่ edition 2024 เปลี่ยน เรียงตามลำดับที่คุณน่าจะเจอก่อน:
+
+| สิ่งที่เปลี่ยน | มีผลกับคุณอย่างไร |
+|--------|----------------------|
+| Let chain | `if let Some(x) = opt && x > 2` compile ผ่าน — เฉพาะ edition 2024 |
+| scope ของ temporary ใน `if let` | temporary ถูก drop ก่อนเข้า branch `else` ตัด deadlock ของ lock ไปทั้งกลุ่ม |
+| การ capture lifetime ของ `impl Trait` | `impl Trait` ที่ return ออกมา capture ทุก lifetime ที่อยู่ใน scope |
+| `unsafe extern` | block `extern` ต้องเขียนเป็น `unsafe extern "C"` |
+| สงวนคำว่า `gen` | `gen` กลายเป็น keyword เก็บไว้สำหรับ generator block ในอนาคต |
+
+การย้าย crate เดิมมี 2 ขั้น และ Cargo ทำให้เกือบหมด:
+
+```bash
+# 1. แก้โค้ดให้มีความหมายเหมือนกันทั้งสอง edition
+cargo fix --edition
+
+# 2. เปลี่ยน edition = "2024" ใน Cargo.toml แล้วยืนยันพฤติกรรม
+cargo test
+```
+
+resolver ของ dependency ก็รู้จัก edition ด้วย: บน `edition = "2024"` Cargo จะเลือกเวอร์ชัน dependency ที่เข้ากับ `rust-version` ที่คุณประกาศไว้ แทนที่จะหยิบตัวใหม่สุดเสมอ
 
 ## Unit Testing ด้วย `#[test]`
 
@@ -243,6 +269,16 @@ Rust test ใช้ฟังก์ชัน `#[test]` ที่ compile แล�
 </Callout>
 
 export const quizCargoTests = [
+    {
+        q: 'edition = "2024" ใน Cargo.toml ควบคุมอะไร?',
+        options: [
+            "เวอร์ชันต่ำสุดของ Rust compiler ที่ crate รองรับ",
+            "dialect ของภาษาที่ crate ถูก compile ด้วย — syntax และ idiom เลือกแยกรายcrate",
+            "registry ที่ Cargo ใช้ดาวน์โหลด dependency",
+            "ระดับ optimisation ที่ใช้ตอน build แบบ release"
+        ],
+        answer: 1
+    },
     {
         q: "#[cfg(test)] บน mod block ทำอะไร?",
         options: [

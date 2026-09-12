@@ -84,6 +84,37 @@ fn main() {
 }
 ```
 
+export const ifLetScopeCode = `use std::sync::RwLock;
+
+fn ensure_initialized(value: &RwLock<Option<bool>>) {
+    if let Some(x) = *value.read().unwrap() {
+        println!("already set to {x}");
+    } else {
+        // Edition 2024 drops the read guard before this branch runs,
+        // so taking the write lock here cannot deadlock.
+        let mut v = value.write().unwrap();
+        if v.is_none() {
+            *v = Some(true);
+            println!("initialized");
+        }
+    }
+}
+
+fn main() {
+    let cell = RwLock::new(None);
+    ensure_initialized(&cell);
+    ensure_initialized(&cell);
+}
+`;
+
+### `if let` กับ Lock Guard (Rust 2024)
+
+lock guard เป็นค่า temporary และ edition 2024 เปลี่ยนจังหวะการ drop temporary ที่อยู่ในเงื่อนไขของ `if let` บน Rust 2021 read guard ข้างล่างจะยังมีชีวิตอยู่ตลอด branch `else` การขอ write lock ตรงนั้นจึง deadlock — thread รอ lock ที่ตัวเองถืออยู่ ส่วนบน Rust 2024 guard จะถูก drop ก่อนเข้า `else`:
+
+<Playground code={ifLetScopeCode} />
+
+ผลลัพธ์คือ `initialized` แล้วตามด้วย `already set to true` ถ้า compile ด้วย `edition = "2021"` โปรแกรมเดียวกันจะค้างตั้งแต่การเรียกครั้งแรก ถ้าอยากได้ scope แบบเดิมกลับมา ให้เขียนเงื่อนไขเป็น `match` แทน — `match` ยังถือ temporary ไว้ตลอดทั้ง expression
+
 ### การรวบรวมผลลัพธ์จากหลาย Thread
 
 รูปแบบที่พบบ่อยคือให้แต่ละ thread คำนวณค่าและ push เข้าไปใน `Vec` ที่แชร์กัน หลังจาก thread ทั้งหมดเสร็จสิ้น เรา sort ผลลัพธ์เพื่อให้ output เป็น deterministic ไม่ว่า scheduling order จะเป็นอย่างไร

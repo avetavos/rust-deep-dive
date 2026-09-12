@@ -1,6 +1,6 @@
 ---
 title: 'ประเภท Option'
-description: 'Rust ไม่มี null — การขาดหายของค่าถูกจำลองด้วย Option<T> ที่เป็น Some(value) หรือ None'
+description: 'Rust ไม่มี null — การขาดหายของค่าถูกจำลองด้วย Option<T> ที่เป็น Some(value) หรือ None พร้อม let chain ของ edition 2024'
 sidebar:
   order: 5
 ---
@@ -55,6 +55,49 @@ if let Some(value) = divide(10.0, 2.0) {
 ```
 
 ส่วน body จะ execute เฉพาะเมื่อค่าเป็น `Some` เพิ่ม `else` เพื่อจัดการ `None` ถ้าต้องการ
+
+export const letChainCode = `#[derive(Debug)]
+struct User {
+    name: String,
+    age: Option<u32>,
+}
+
+fn find_user(id: u32) -> Option<User> {
+    if id == 1 {
+        Some(User { name: String::from("Ada"), age: Some(36) })
+    } else {
+        None
+    }
+}
+
+fn main() {
+    // One flat condition: find the user, unwrap the age, compare it.
+    if let Some(user) = find_user(1)
+        && let Some(age) = user.age
+        && age >= 18
+    {
+        println!("{} is an adult ({age})", user.name);
+    }
+
+    if let Some(user) = find_user(2)
+        && let Some(age) = user.age
+    {
+        println!("{} is {age}", user.name);
+    } else {
+        println!("no user 2");
+    }
+}
+`;
+
+## Let Chain — `if let` บวกเงื่อนไข (Rust 2024)
+
+เมื่อก่อนการเข้าถึง `Option` ซ้อน `Option` ต้องเขียน `if let` ซ้อนกัน เพราะ `if let` ต่อกับ `&&` ไม่ได้ edition 2024 เปิดให้ใช้ **let chain**: ผูก `let` และเงื่อนไข boolean เข้าด้วยกันด้วย `&&` ในเงื่อนไขเดียว
+
+<Playground code={letChainCode} />
+
+ทุก `let` ใน chain จะ bind ต่อเนื่องไปยังส่วนที่เหลือของ chain และ body ดังนั้น `user` ใช้ได้ใน `let` ตัวที่สอง และ `age` ใช้ได้ในการเปรียบเทียบ ส่วน `else` ยังทำงานเหมือนเดิม — จะเข้าเมื่อข้อใดข้อหนึ่งใน chain ไม่ผ่าน
+
+เรื่องนี้ผูกกับ edition ถ้าเอาโค้ดเดียวกันไปรันบน `edition = "2021"` จะถูกปฏิเสธด้วย `error: let chains are only allowed in Rust 2024 or later`
 
 ## `unwrap_or` — ให้ค่า Default
 
@@ -122,6 +165,16 @@ fn main() {
 <Playground code={optionCode} />
 
 export const quizOption = [
+    {
+        q: "let chain แบบ `if let Some(x) = opt && x > 2` ต้องใช้ edition ไหนของ Rust?",
+        options: [
+            "Rust 2015",
+            "Rust 2018",
+            "Rust 2021",
+            "Rust 2024"
+        ],
+        answer: 3
+    },
     {
         q: 'Option<T> ใน Rust แทนอะไร?',
         options: [

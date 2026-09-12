@@ -84,6 +84,37 @@ fn main() {
 }
 ```
 
+export const ifLetScopeCode = `use std::sync::RwLock;
+
+fn ensure_initialized(value: &RwLock<Option<bool>>) {
+    if let Some(x) = *value.read().unwrap() {
+        println!("already set to {x}");
+    } else {
+        // Edition 2024 drops the read guard before this branch runs,
+        // so taking the write lock here cannot deadlock.
+        let mut v = value.write().unwrap();
+        if v.is_none() {
+            *v = Some(true);
+            println!("initialized");
+        }
+    }
+}
+
+fn main() {
+    let cell = RwLock::new(None);
+    ensure_initialized(&cell);
+    ensure_initialized(&cell);
+}
+`;
+
+### `if let` and Lock Guards (Rust 2024)
+
+A lock guard is a temporary value, and the 2024 edition changed when temporaries in an `if let` condition are dropped. On Rust 2021 the read guard below stays alive through the `else` branch, so asking for the write lock there deadlocks — the thread waits for a lock it is still holding itself. On Rust 2024 the guard is dropped before `else` runs:
+
+<Playground code={ifLetScopeCode} />
+
+It prints `initialized`, then `already set to true`. Compiled on `edition = "2021"` the same program hangs on the first call. If you ever want the old scoping back, write the condition as a `match` — `match` still holds its temporaries for the whole expression.
+
 ### Collecting Results from Multiple Threads
 
 A common pattern is to have each thread compute a value and push it into a shared `Vec`. After all threads complete, you sort the results so the output is deterministic regardless of scheduling order.

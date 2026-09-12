@@ -1,6 +1,6 @@
 ---
 title: 'Cargo & Testing'
-description: 'Learn Cargo commands for building and running projects, and write unit tests using #[test], assert_eq!, and #[cfg(test)] modules.'
+description: 'Learn Cargo commands for building and running projects, and write unit tests using #[test], assert_eq!, and #[cfg(test)] modules — plus what edition = "2024" changes.'
 sidebar:
   order: 5
 ---
@@ -81,7 +81,7 @@ cargo clippy
 [package]
 name    = "my_project"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 serde       = { version = "1", features = ["derive"] }
@@ -92,6 +92,32 @@ anyhow      = "1"
 # only compiled for tests and benchmarks
 pretty_assertions = "1"
 ```
+
+### Editions: what `edition = "2024"` means
+
+The `edition` key selects the language dialect your crate compiles under. Editions let Rust change syntax and idioms without splitting the ecosystem — crates on different editions link together fine, so every crate upgrades on its own schedule.
+
+`cargo new` has produced `edition = "2024"` since Rust 1.85 (February 2025). What that edition changed, roughly in the order you will notice it:
+
+| Change | What it means for you |
+|--------|----------------------|
+| Let chains | `if let Some(x) = opt && x > 2` compiles — on the 2024 edition only |
+| `if let` temporary scope | Temporaries drop before the `else` branch, removing a class of lock deadlocks |
+| `impl Trait` lifetime capture | A returned `impl Trait` captures every in-scope lifetime |
+| `unsafe extern` | `extern` blocks must be written `unsafe extern "C"` |
+| `gen` reserved | `gen` became a keyword, held for future generator blocks |
+
+Moving an existing crate is a two-step job, and Cargo does most of it:
+
+```bash
+# 1. rewrite the code so it means the same thing under both editions
+cargo fix --edition
+
+# 2. bump edition = "2024" in Cargo.toml, then confirm behaviour
+cargo test
+```
+
+The dependency resolver is edition-aware too: on `edition = "2024"` Cargo picks dependency versions compatible with the `rust-version` you declare, instead of always taking the newest.
 
 ## Unit Testing with `#[test]`
 
@@ -243,6 +269,16 @@ Rust tests use `#[test]` functions compiled and executed by `cargo test`. The br
 </Callout>
 
 export const quizCargoTests = [
+    {
+        q: 'What does edition = "2024" in Cargo.toml control?',
+        options: [
+            "The minimum Rust compiler version the crate supports",
+            "The language dialect the crate compiles under — syntax and idioms, chosen per crate",
+            "Which registry Cargo downloads dependencies from",
+            "The optimisation level used for release builds"
+        ],
+        answer: 1
+    },
     {
         q: "What does #[cfg(test)] on a mod block do?",
         options: [
