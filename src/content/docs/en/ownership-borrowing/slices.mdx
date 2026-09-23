@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## What Is a Slice?
 
@@ -49,6 +51,15 @@ Range syntax summary:
 | `[..n]` | first `n` elements (indices 0 to n-1) |
 | `[m..n]` | indices m to n-1 |
 | `[m..]` | from index m to the end |
+
+<Mermaid code={`flowchart LR
+    subgraph Owner
+        ARR["numbers: 10 20 30 40 50 - owns this buffer"]
+    end
+    subgraph Slice
+        FP["middle: pointer plus length 3 - a fat pointer, owns nothing"]
+    end
+    FP -->|points into index 1| ARR`} title="A slice is a pointer-plus-length view into someone else's buffer" />
 
 ### String Slices (`&str`)
 
@@ -145,6 +156,48 @@ Functions that operate on sequences should accept slices rather than owned types
 
 Both `&Vec<T>` and `&String` coerce automatically to their slice equivalents at call sites.
 
+### Splitting a Slice in Two: `split_at`
+
+`.split_at(mid)` divides a slice into two at a byte/index boundary, returning both halves as a tuple — a common building block whenever an algorithm needs "everything before" and "everything from" a point without writing two separate range expressions:
+
+```rust
+fn main() {
+    let numbers = [1, 2, 3, 4, 5];
+    let (left, right) = numbers.split_at(2);
+    println!("left={:?} right={:?}", left, right);
+}
+```
+
+```text
+left=[1, 2] right=[3, 4, 5]
+```
+
+`split_at` works on both `&[T]` and `&str` (where it splits at a byte offset and, like indexing, panics if that offset is not a char boundary). It is exactly equivalent to writing `(&numbers[..2], &numbers[2..])` yourself, just as one call that cannot accidentally disagree about where the split happens.
+
+### Getting a Safe Byte Index from `find`
+
+The byte-boundary panic earlier comes from *guessing* an offset. Methods that search a string, like `.find()`, hand you back a byte offset that is guaranteed to land on a character boundary — because it found an actual character (or the space character, below) at that position:
+
+```rust
+fn main() {
+    let s = "hello world";
+    if let Some(space_at) = s.find(' ') {
+        let word = &s[..space_at]; // find() returns a byte index, always a valid boundary here
+        println!("first word: {}", word);
+    }
+}
+```
+
+```text
+first word: hello
+```
+
+This is the general pattern for slicing text safely: never write a byte offset as a literal number unless you already know the data is pure ASCII; get the offset from `find`, `char_indices`, or `is_char_boundary` instead.
+
+### A Peek Ahead: `Box<T>`
+
+Everything in this module so far — moves, references, slices — deals with values that are either on the stack or borrowed. `Box<T>` is Rust's simplest way to put a value on the **heap** while still having exactly one, statically-checked owner: `Box::new(42)` allocates an `i32` on the heap and gives you back an 8-byte pointer to it, regardless of how large the boxed type is. It comes up properly once you need recursive types or trait objects — mentioned here only so the name is not a surprise later in the course.
+
 export const slicesCode = `fn first_word(s: &str) -> &str {
     let bytes = s.as_bytes();
     for (i, &byte) in bytes.iter().enumerate() {
@@ -186,11 +239,46 @@ fn main() {
 A slice is always a **reference** — it borrows a contiguous portion of a collection. Because the borrow checker tracks this relationship, the compiler will reject any code that tries to modify or drop the underlying data while a slice into it is still live. This prevents the classic "iterator invalidation" and "dangling pointer" bugs at compile time.
 </Callout>
 
+## Mental Model
+
+A slice is a **fat pointer**: a pointer to the first element plus a length, nothing more. It never owns what it points to and never allocates — `&s[..5]` costs exactly as much as copying two `usize`s. The byte-boundary panic exists because that pointer-plus-length pair has no idea where `char` boundaries are; it only knows byte offsets, so the moment you hand it one that lands mid-character, there is no valid `&str` to produce.
+
+## Trade-offs
+
+Slices are as cheap as references get — no allocation, no copying of the underlying data — but that cheapness is exactly why they are byte-indexed rather than character-indexed: computing "the Nth character's byte offset" for a `String` is an O(n) scan (there is no fixed-width encoding to jump through), so `&str` intentionally does not offer `O(1)` character indexing at all. If you need to index by character position often, the honest trade-off is to pay for a `Vec<char>` once, up front, rather than re-scanning a `&str` on every access.
+
+## Common Misconceptions
+
+- **"`&s[..n]` truncates safely to n bytes, the way substring functions in other languages truncate to n characters."** It slices by **byte**, and if byte `n` is not on a character boundary, it panics rather than silently producing a slightly-wrong result — the earlier `"สวัสดี"` example is exactly this.
+- **"Since slices are so cheap, cloning one whenever the borrow checker complains is basically free too."** A `&[T]`/`&str` clone (technically a `Copy`, since slices are `Copy`) only duplicates the pointer and length — but the *far* more common mistake is reaching for `.to_vec()`/`.to_string()` on the slice's target, which does allocate and copy the real data. Reach for that only when you actually need an owned, independent copy.
+- **"`&Vec<T>` and `&[T]` are basically interchangeable, so it doesn't matter which one a function signature uses."** `&[T]` accepts everything `&Vec<T>` does (via coercion) *plus* arrays and any sub-slice — there is no situation where `&Vec<T>` accepts something `&[T]` rejects, so `&[T]` is a strict improvement as a parameter type.
+
+## Reading AI-generated code
+
+Slicing user-supplied text at a hardcoded byte count is one of the most common non-obvious bugs in AI-generated Rust — it works perfectly in every test the assistant tried (English text), and panics the first time a real user pastes in non-ASCII input.
+
+<SpotTheBug code={`fn preview(input: &str) -> &str {
+    &input[..10] // assumes at least 10 ASCII bytes
+}
+
+fn main() {
+    let greeting = "Hello, world!";
+    println!("{}", preview(greeting));
+}
+`}>
+This runs fine for `"Hello, world!"` — 10 ASCII bytes is exactly 10 characters, and the string is long enough. It panics the instant a caller passes text shorter than 10 bytes (`"Hi"`), or text where byte 10 falls inside a multi-byte character (any non-ASCII input near that length). The fix is to compute a safe boundary instead of assuming one: `input.char_indices().nth(10).map(|(i, _)| &input[..i]).unwrap_or(input)` takes the first 10 *characters* (or the whole string if it is shorter), and never panics on any valid `&str`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A slice is a free-to-copy pointer-plus-length view, never an owner — for `&str` specifically, that length is counted in bytes, so get every slicing index from a character-aware API (`find`, `char_indices`, `is_char_boundary`) rather than a literal number.
+</Callout>
+
 export const quizSlices = [
     {
         q: "What type represents a borrowed view into part of a String?",
         options: ["String", "&String", "&str", "str"],
-        answer: 2
+        answer: 2,
+        explain: "&str is a borrowed, fixed-size view (pointer + length) into UTF-8 string data — it is the slice type for text, whether the underlying data is a String, a literal, or another &str."
     },
     {
         q: "What does the range syntax [1..4] select from a slice?",
@@ -200,7 +288,8 @@ export const quizSlices = [
             "Elements at indices 0, 1, 2, and 3",
             "Elements at index 1 through the end"
         ],
-        answer: 1
+        answer: 1,
+        explain: "[m..n] is a half-open range: it includes index m up to, but not including, index n — so [1..4] selects indices 1, 2, and 3."
     },
     {
         q: "Does a slice own the data it points to?",
@@ -210,7 +299,8 @@ export const quizSlices = [
             "Only if it covers the entire collection",
             "Only if the underlying collection is mutable"
         ],
-        answer: 1
+        answer: 1,
+        explain: "A slice is a reference (a fat pointer: pointer + length) in every case — it never owns the underlying data, regardless of how much of the collection it covers."
     },
     {
         q: "Why should a function parameter use &[T] instead of &Vec<T>?",
@@ -220,7 +310,30 @@ export const quizSlices = [
             "&[T] is more flexible — it accepts arrays, vector refs, and any contiguous slice",
             "There is no practical difference"
         ],
-        answer: 2
+        answer: 2,
+        explain: "&[T] accepts everything &Vec<T> does via coercion, plus arrays and sub-slices that &Vec<T> cannot — there is no case where &Vec<T> works but &[T] does not."
+    },
+    {
+        q: "Does this panic? What does it print if not?\n```rust\nfn main() {\n    let s = \"สวัสดี\";\n    let oops = &s[1..];\n    println!(\"{oops}\");\n}\n```",
+        options: [
+            "No, it prints the string with the first byte removed",
+            "Yes — byte index 1 falls inside the first multi-byte character, so this panics with a char-boundary message",
+            "No, Rust automatically rounds the index to the nearest character boundary",
+            "It fails to compile because string literals cannot be sliced"
+        ],
+        answer: 1,
+        explain: "\"สวัสดี\" starts with a 3-byte character, so byte index 1 is inside it, not on a boundary — slicing there panics: \"byte index 1 is not a char boundary; it is inside 'ส' (bytes 0..3 of string)\"."
+    },
+    {
+        q: "What does this program print?\n```rust\nfn main() {\n    let numbers = [1, 2, 3, 4, 5];\n    let (left, right) = numbers.split_at(2);\n    println!(\"{:?} {:?}\", left, right);\n}\n```",
+        options: [
+            "[1, 2] [3, 4, 5]",
+            "[1] [2, 3, 4, 5]",
+            "[1, 2, 3] [4, 5]",
+            "It fails to compile — split_at does not exist on arrays"
+        ],
+        answer: 0,
+        explain: "split_at(2) splits the slice into everything before index 2 and everything from index 2 onward — [1, 2] and [3, 4, 5] — equivalent to (&numbers[..2], &numbers[2..])."
     }
 ];
 

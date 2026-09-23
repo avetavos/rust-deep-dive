@@ -9,21 +9,23 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Slice คืออะไร?
 
-**slice** คือ reference ไปยังลำดับของ element ที่ต่อเนื่องกันใน collection ไม่ได้เป็นเจ้าของข้อมูล — เป็นการ borrow view เข้าไปยังหน่วยความจำที่มีอยู่แล้ว
+**Slice** คือ reference ไปยังลำดับของ element ที่ต่อเนื่องกันใน collection มันไม่ได้เป็นเจ้าของข้อมูล — มัน borrow view เข้าไปในหน่วยความจำที่มีอยู่แล้ว
 
-slice มีสอง type ที่พบบ่อย:
+มี slice type ที่พบบ่อยสองแบบ:
 
-- `&[T]` — slice ของ array หรือ vector ใด ๆ ของ type `T`
-- `&str` — string slice; view เข้าไปยังข้อมูล string แบบ UTF-8
+- `&[T]` — slice ของ array หรือ vector ประเภท `T` ใด ๆ
+- `&str` — string slice; view เข้าไปในข้อมูล string แบบ UTF-8
 
-เพราะ slice เป็น reference เสมอ lifetime ของ slice จึงผูกอยู่กับ collection ที่ borrow มา
+เพราะ slice เป็น reference เสมอ lifetime ของมันจึงผูกกับ collection ที่มัน borrow มา
 
-### Slice ของ Array และ Vector
+### Array และ Vector Slices
 
-เมื่อมี array หรือ vector คุณสร้าง slice ได้โดยใช้ **range syntax** ภายในวงเล็บเหลี่ยม:
+เมื่อมี array หรือ vector คุณสร้าง slice ได้โดยใช้ **range syntax** ในวงเล็บเหลี่ยม:
 
 ```rust
 fn main() {
@@ -48,11 +50,20 @@ fn main() {
 | `[..]` | ทั้ง collection |
 | `[..n]` | `n` element แรก (index 0 ถึง n-1) |
 | `[m..n]` | index m ถึง n-1 |
-| `[m..]` | จาก index m ไปจนสุดท้าย |
+| `[m..]` | จาก index m ถึงจุดจบ |
+
+<Mermaid code={`flowchart LR
+    subgraph Owner
+        ARR["numbers: 10 20 30 40 50 - owns this buffer"]
+    end
+    subgraph Slice
+        FP["middle: pointer plus length 3 - a fat pointer, owns nothing"]
+    end
+    FP -->|points into index 1| ARR`} title="slice คือ view แบบ pointer-บวก-length เข้าไปใน buffer ของคนอื่น" />
 
 ### String Slices (`&str`)
 
-**string slice** (`&str`) คือ reference ไปยังบางส่วนของ `String` หรือ string literal ตัว string literal เองก็เป็น `&str` — เป็น slice ของข้อมูลแบบ read-only ที่ฝังอยู่ใน binary
+**String slice** (`&str`) คือ reference ไปยังส่วนหนึ่งของ `String` หรือ string literal ตัว string literal เองก็เป็น `&str` — มันคือ slice ของข้อมูล read-only ที่ฝังอยู่ใน binary
 
 ```rust
 fn main() {
@@ -71,7 +82,7 @@ fn main() {
 
 ### Byte Index ไม่ใช่ Character Index
 
-`&s[..n]` slice ด้วย offset ที่นับเป็น **byte** ไม่ใช่ character สิ่งนี้มองไม่เห็นตอนใช้ ASCII เพราะแต่ละตัวอักษรใช้ 1 byte — แต่ Rust string เป็น UTF-8 และตัวอักษรที่ไม่ใช่ ASCII เช่นสระภาษาไทยหรือ emoji อาจใช้ 2, 3 หรือ 4 byte การ slice ที่ byte offset ซึ่งตกอยู่กลาง character หลาย byte ตัวใดตัวหนึ่งจะไม่ตัดหรือประมาณค่าใดๆ — มันจะ **panic**
+`&s[..n]` slice ตาม offset ของ **byte** ไม่ใช่ตาม character ซึ่งจะมองไม่เห็นความต่างเลยกับ ASCII ที่แต่ละตัวอักษรมี 1 byte — แต่ string ของ Rust เป็น UTF-8 และตัวอักษรที่ไม่ใช่ ASCII อย่างสระไทยหรือ emoji อาจใช้ 2, 3, หรือ 4 byte การ slice ที่ byte offset ที่ตกอยู่ *กลาง* ตัวอักษรหลาย byte เหล่านั้นจะไม่ตัดหรือประมาณค่าอะไรเลย — มันจะ **panic**
 
 ```rust
 // @expect-panic
@@ -88,7 +99,7 @@ start byte index 1 is not a char boundary; it is inside 'ส' (bytes 0..3 of str
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 ```
 
-`ส` (ตัวอักษรแรกของ "สวัสดี") กว้าง 3 byte ดังนั้น byte index 1 จึงตกอยู่กลางตัวมัน — ไม่มี `char` boundary ที่ตรงนั้น ทางแก้คือเลิกคิดเป็น byte offset แล้วใช้ API ที่รู้จัก character แทน:
+`ส` (ตัวอักษรแรกของ "สวัสดี") กว้าง 3 byte ดังนั้น byte index 1 จึงตกอยู่ข้างในมัน ไม่มี `char` boundary ที่ valid ตรงนั้นเลย ทางแก้คือเลิกคิดเป็น byte offset แล้วใช้ API ที่รู้จัก character แทน:
 
 ```rust
 fn main() {
@@ -113,9 +124,9 @@ fn main() {
 }
 ```
 
-### Slice ป้องกัน Dangling Index
+### Slices ป้องกัน Dangling Index
 
-หากไม่มี slice คุณอาจเก็บ index เข้าไปใน string แล้วแก้ไข string นั้น — ทำให้ index ชี้ไปยังข้อมูลที่ไม่มีความหมาย ด้วย string slice borrow checker จะรับประกันว่า slice ไม่สามารถมีอายุยืนกว่าข้อมูลที่อ้างถึงได้
+ถ้าไม่มี slice คุณอาจเก็บ index เข้าไปใน string ไว้ แล้วแก้ไข string นั้น — ทำให้ index เหลือแค่ชี้ไปยังข้อมูลที่ไม่มีความหมาย ด้วย string slice borrow checker รับประกันว่า slice จะไม่มีชีวิตอยู่นานกว่าข้อมูลที่มันอ้างถึง
 
 ```rust
 fn first_word(s: &str) -> &str {
@@ -136,14 +147,56 @@ fn main() {
 }
 ```
 
-### Slice ในฐานะพารามิเตอร์ของฟังก์ชัน
+### Slices เป็น Function Parameter
 
-ฟังก์ชันที่ทำงานกับลำดับข้อมูลควรรับ slice แทนที่จะเป็น type ที่เป็นเจ้าของค่า วิธีนี้ทำให้ฟังก์ชันทำงานได้กับ array, vector และบางส่วนของทั้งสองอย่างโดยไม่ต้องขอ ownership
+ฟังก์ชันที่ทำงานกับลำดับข้อมูลควรรับ slice แทน owned type การทำแบบนี้ทำให้มันทำงานกับ array, vector, และส่วนใด ๆ ของมันได้โดยไม่ต้องการ ownership
 
-- ควรเลือกใช้ `&[T]` แทน `&Vec<T>` สำหรับพารามิเตอร์ที่เป็นลำดับข้อมูล
-- ควรเลือกใช้ `&str` แทน `&String` สำหรับพารามิเตอร์ที่เป็น string
+- เลือก `&[T]` มากกว่า `&Vec<T>` สำหรับ parameter ที่เป็นลำดับข้อมูล
+- เลือก `&str` มากกว่า `&String` สำหรับ parameter ที่เป็น string
 
-ทั้ง `&Vec<T>` และ `&String` จะ coerce ไปเป็น slice ที่เทียบเท่ากันโดยอัตโนมัติ ณ จุดที่เรียก
+ทั้ง `&Vec<T>` และ `&String` จะ coerce เป็น slice ที่เทียบเท่ากันโดยอัตโนมัติที่จุดเรียก
+
+### แบ่ง Slice เป็นสองส่วนด้วย `split_at`
+
+`.split_at(mid)` แบ่ง slice ออกเป็นสองส่วนที่ boundary ของ byte/index แล้ว return ทั้งสองครึ่งเป็น tuple — building block ที่พบบ่อยเวลา algorithm ต้องการ "ทุกอย่างก่อนหน้า" กับ "ทุกอย่างตั้งแต่" จุดหนึ่ง โดยไม่ต้องเขียน range expression สองอัน:
+
+```rust
+fn main() {
+    let numbers = [1, 2, 3, 4, 5];
+    let (left, right) = numbers.split_at(2);
+    println!("left={:?} right={:?}", left, right);
+}
+```
+
+```text
+left=[1, 2] right=[3, 4, 5]
+```
+
+`split_at` ทำงานได้ทั้งบน `&[T]` และ `&str` (ซึ่งมันจะ split ที่ byte offset และเหมือนกับการ index มันจะ panic ถ้า offset นั้นไม่ใช่ char boundary) มันเทียบเท่ากับการเขียน `(&numbers[..2], &numbers[2..])` เองทุกประการ เพียงแต่เป็นการเรียกครั้งเดียวที่ไม่มีทางขัดแย้งกันเองว่าจุด split อยู่ตรงไหน
+
+### หา Byte Index อย่างปลอดภัยจาก `find`
+
+panic เรื่อง byte-boundary ก่อนหน้านี้เกิดจากการ *เดา* offset method ที่ค้นหาใน string อย่าง `.find()` จะคืน byte offset ที่รับประกันว่าตกบน character boundary เสมอ — เพราะมันเจอตัวอักษรจริง (หรือตัวเว้นวรรค ด้านล่าง) ที่ตำแหน่งนั้น:
+
+```rust
+fn main() {
+    let s = "hello world";
+    if let Some(space_at) = s.find(' ') {
+        let word = &s[..space_at]; // find() returns a byte index, always a valid boundary here
+        println!("first word: {}", word);
+    }
+}
+```
+
+```text
+first word: hello
+```
+
+นี่คือ pattern ทั่วไปสำหรับการ slice text อย่างปลอดภัย: อย่าเขียน byte offset เป็นตัวเลข literal เลย เว้นแต่คุณจะรู้อยู่แล้วว่าข้อมูลเป็น ASCII ล้วน ให้เอา offset มาจาก `find`, `char_indices`, หรือ `is_char_boundary` แทน
+
+### แอบดูล่วงหน้า: `Box<T>`
+
+ทุกอย่างในโมดูลนี้จนถึงตอนนี้ — move, reference, slice — เกี่ยวข้องกับค่าที่อยู่บน stack หรือ borrow มา `Box<T>` คือวิธีที่ง่ายที่สุดของ Rust ในการเอาค่าไปไว้บน **heap** ในขณะที่ยังมีเจ้าของเดียวที่เช็กแบบ static ได้อยู่: `Box::new(42)` จะ allocate `i32` บน heap แล้วคืน pointer ขนาด 8 byte ให้ ไม่ว่า type ที่ box ไว้จะใหญ่แค่ไหนก็ตาม มันจะมามีบทบาทจริงจังตอนที่คุณต้องการ recursive type หรือ trait object — เอ่ยถึงตรงนี้แค่เพื่อไม่ให้ชื่อนี้เป็นเรื่องแปลกใจทีหลังในคอร์ส
 
 export const slicesCode = `fn first_word(s: &str) -> &str {
     let bytes = s.as_bytes();
@@ -182,45 +235,105 @@ fn main() {
 
 <Playground code={slicesCode} />
 
-<Callout title="slice คือ view ที่ borrow มา — ไม่ได้เป็นเจ้าของข้อมูล">
-slice เป็น **reference** เสมอ — borrow ส่วนที่ต่อเนื่องกันของ collection เพราะ borrow checker ติดตามความสัมพันธ์นี้ คอมไพเลอร์จะปฏิเสธโค้ดใด ๆ ที่พยายามแก้ไขหรือ drop ข้อมูลที่อยู่ข้างใต้ขณะที่ยังมี slice ชี้เข้าไปอยู่ สิ่งนี้ป้องกันบั๊กคลาสสิกอย่าง "iterator invalidation" และ "dangling pointer" ตอน compile time
+<Callout title="Slice คือ View ที่ Borrow มา — ไม่ได้เป็นเจ้าของข้อมูล">
+Slice เป็น **reference** เสมอ — มัน borrow ส่วนที่ต่อเนื่องกันของ collection เนื่องจาก borrow checker track ความสัมพันธ์นี้ไว้ คอมไพเลอร์จะปฏิเสธโค้ดใด ๆ ที่พยายามแก้ไขหรือ drop ข้อมูลข้างใต้ในขณะที่ slice เข้าไปในมันยังมีชีวิตอยู่ สิ่งนี้ป้องกันบั๊กคลาสสิกอย่าง "iterator invalidation" และ "dangling pointer" ได้ตอน compile time
+</Callout>
+
+## Mental Model
+
+Slice คือ **fat pointer**: pointer ไปยัง element แรกบวกกับความยาว ไม่มีอะไรมากกว่านั้น มันไม่เคยเป็นเจ้าของสิ่งที่มันชี้ไปและไม่เคย allocate เลย — `&s[..5]` มีต้นทุนเท่ากับการ copy `usize` สองตัวพอดี panic เรื่อง byte-boundary เกิดขึ้นเพราะคู่ pointer-บวก-length นั้นไม่รู้เลยว่า `char` boundary อยู่ตรงไหน มันรู้แค่ byte offset ดังนั้นทันทีที่คุณส่งค่าที่ตกกลางตัวอักษรให้มัน ก็ไม่มี `&str` ที่ valid ให้ผลิตออกมา
+
+## Trade-offs
+
+Slice มีต้นทุนถูกที่สุดเท่าที่ reference จะทำได้ — ไม่มี allocation ไม่มีการ copy ข้อมูลข้างใต้ — แต่ความถูกนั้นเองก็เป็นเหตุผลว่าทำไมมันถึง index ด้วย byte ไม่ใช่ character: การคำนวณ "byte offset ของตัวอักษรที่ N" สำหรับ `String` คือการสแกน O(n) (ไม่มี encoding ความกว้างคงที่ให้กระโดดผ่าน) ดังนั้น `&str` จึงตั้งใจไม่มี character indexing แบบ O(1) เลย ถ้าคุณต้อง index ตามตำแหน่ง character บ่อย ๆ ทางเลือกที่ตรงไปตรงมาคือจ่ายต้นทุนสร้าง `Vec<char>` ครั้งเดียวล่วงหน้า แทนที่จะสแกน `&str` ซ้ำทุกครั้งที่เข้าถึง
+
+## Common Misconceptions
+
+- **"`&s[..n]` ตัดอย่างปลอดภัยให้เหลือ n byte เหมือนฟังก์ชัน substring ในภาษาอื่นที่ตัดให้เหลือ n character"** มัน slice ตาม **byte** และถ้า byte ที่ n ไม่ใช่ character boundary มันจะ panic แทนที่จะผลิตผลลัพธ์ที่ผิดนิดหน่อยแบบเงียบ ๆ — ตัวอย่าง `"สวัสดี"` ก่อนหน้านี้คือตัวอย่างนี้เป๊ะ
+- **"เพราะ slice ถูกมาก การ clone มันทุกครั้งที่ borrow checker บ่นก็แทบไม่มีต้นทุนเหมือนกัน"** การ clone `&[T]`/`&str` (จริง ๆ คือ `Copy` เพราะ slice เป็น `Copy`) copy แค่ pointer กับความยาว — แต่ข้อผิดพลาดที่พบบ่อยกว่ามากคือการหยิบ `.to_vec()`/`.to_string()` บนเป้าหมายของ slice มาใช้ ซึ่ง allocate และ copy ข้อมูลจริง หยิบมันมาใช้เฉพาะตอนที่คุณต้องการ copy ที่เป็นเจ้าของและเป็นอิสระจริง ๆ เท่านั้น
+- **"`&Vec<T>` กับ `&[T]` ใช้แทนกันได้พื้นฐาน ดังนั้น function signature จะใช้ตัวไหนก็ไม่ต่างกัน"** `&[T]` รับได้ทุกอย่างที่ `&Vec<T>` รับ (ผ่าน coercion) *บวก* array และ sub-slice ใด ๆ — ไม่มีสถานการณ์ไหนที่ `&Vec<T>` รับได้แต่ `&[T]` ปฏิเสธ ดังนั้น `&[T]` จึงดีกว่าอย่างชัดเจนในฐานะ parameter type
+
+## อ่านโค้ดที่ AI เขียน
+
+การ slice text ที่ user ส่งเข้ามาที่จำนวน byte ตายตัวคือบั๊กที่ไม่ชัดเจนที่พบบ่อยที่สุดในโค้ด Rust ที่ AI เขียน — มันทำงานสมบูรณ์แบบในทุก test ที่ assistant ลอง (text ภาษาอังกฤษ) แล้ว panic ทันทีที่ user จริงวาง input ที่ไม่ใช่ ASCII เข้ามา
+
+<SpotTheBug code={`fn preview(input: &str) -> &str {
+    &input[..10] // assumes at least 10 ASCII bytes
+}
+
+fn main() {
+    let greeting = "Hello, world!";
+    println!("{}", preview(greeting));
+}
+`}>
+โค้ดนี้รันได้ปกติสำหรับ `"Hello, world!"` — 10 byte ของ ASCII คือ 10 ตัวอักษรพอดี และ string ก็ยาวพอ มันจะ panic ทันทีที่ caller ส่ง text ที่สั้นกว่า 10 byte (`"Hi"`) หรือ text ที่ byte ที่ 10 ตกอยู่ข้างในตัวอักษรหลาย byte (input ที่ไม่ใช่ ASCII ใกล้ความยาวนั้น) ทางแก้คือคำนวณ boundary ที่ปลอดภัยแทนการเดา: `input.char_indices().nth(10).map(|(i, _)| &input[..i]).unwrap_or(input)` จะเอา 10 *ตัวอักษร* แรก (หรือทั้ง string ถ้าสั้นกว่านั้น) และไม่ panic เลยกับ `&str` ที่ valid ใด ๆ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Slice คือ view แบบ pointer-บวก-length ที่ copy ได้ฟรี ไม่เคยเป็นเจ้าของ — สำหรับ `&str` โดยเฉพาะ ความยาวนั้นนับเป็น byte ดังนั้นให้เอาทุก index ที่ใช้ slice มาจาก API ที่รู้จัก character (`find`, `char_indices`, `is_char_boundary`) แทนที่จะเป็นตัวเลข literal
 </Callout>
 
 export const quizSlices = [
     {
-        q: "type ใดแทน view ที่ borrow มาเข้าไปยังบางส่วนของ String?",
+        q: "Type ใดแทน view ที่ borrow มาของส่วนหนึ่งของ String?",
         options: ["String", "&String", "&str", "str"],
-        answer: 2
+        answer: 2,
+        explain: "&str คือ view ที่ borrow มา ขนาดคงที่ (pointer + length) เข้าไปในข้อมูล string แบบ UTF-8 — มันคือ slice type สำหรับ text ไม่ว่าข้อมูลข้างใต้จะเป็น String, literal, หรือ &str อีกตัว"
     },
     {
-        q: "range syntax [1..4] เลือกอะไรออกมาจาก slice?",
+        q: "range syntax [1..4] เลือกอะไรจาก slice?",
         options: [
-            "element ที่ index 1, 2, 3 และ 4",
-            "element ที่ index 1, 2 และ 3",
-            "element ที่ index 0, 1, 2 และ 3",
-            "element ที่ index 1 ไปจนสุดท้าย"
+            "Element ที่ index 1, 2, 3, และ 4",
+            "Element ที่ index 1, 2, และ 3",
+            "Element ที่ index 0, 1, 2, และ 3",
+            "Element ตั้งแต่ index 1 ถึงจุดจบ"
         ],
-        answer: 1
+        answer: 1,
+        explain: "[m..n] คือ half-open range: มันรวม index m ไปจนถึงแต่ไม่รวม index n — ดังนั้น [1..4] จึงเลือก index 1, 2, และ 3"
     },
     {
-        q: "slice เป็นเจ้าของข้อมูลที่ชี้ไปหรือไม่?",
+        q: "Slice เป็นเจ้าของข้อมูลที่มันชี้ไปไหม?",
         options: [
-            "ใช่ slice เอา ownership ไปตอนถูกสร้าง",
-            "ไม่ เป็น reference เสมอ — view ที่ borrow มา",
-            "เฉพาะถ้า slice ครอบคลุมทั้ง collection",
-            "เฉพาะถ้า collection ที่อยู่ข้างใต้เป็น mutable"
+            "ใช่ มันเอา ownership ไปตอนถูกสร้าง",
+            "ไม่ มันเป็น reference เสมอ — view ที่ borrow มา",
+            "เฉพาะถ้ามันครอบคลุมทั้ง collection",
+            "เฉพาะถ้า collection ข้างใต้เป็น mutable"
         ],
-        answer: 1
+        answer: 1,
+        explain: "Slice คือ reference (fat pointer: pointer + length) ในทุกกรณี — มันไม่เคยเป็นเจ้าของข้อมูลข้างใต้เลย ไม่ว่าจะครอบคลุม collection มากแค่ไหนก็ตาม"
     },
     {
-        q: "ทำไมพารามิเตอร์ของฟังก์ชันจึงควรใช้ &[T] แทน &Vec<T>?",
+        q: "ทำไม function parameter ควรใช้ &[T] แทน &Vec<T>?",
         options: [
-            "&Vec<T> ไม่ใช่ type ที่ใช้ได้ใน Rust",
-            "&[T] เร็วกว่าเพราะหลีกเลี่ยงการจัดสรรหน่วยความจำบน heap",
-            "&[T] ยืดหยุ่นกว่า — รับได้ทั้ง array, reference ของ vector และ slice ที่ต่อเนื่องกันใด ๆ",
-            "ในทางปฏิบัติไม่มีความแตกต่างกัน"
+            "&Vec<T> ไม่ใช่ type ที่ valid ใน Rust",
+            "&[T] เร็วกว่าเพราะเลี่ยง heap allocation",
+            "&[T] ยืดหยุ่นกว่า — มันรับได้ทั้ง array, reference ของ vector, และ slice ที่ต่อเนื่องใด ๆ",
+            "ไม่มีความต่างในทางปฏิบัติเลย"
         ],
-        answer: 2
+        answer: 2,
+        explain: "&[T] รับทุกอย่างที่ &Vec<T> รับผ่าน coercion บวกกับ array และ sub-slice ที่ &Vec<T> รับไม่ได้ — ไม่มีกรณีไหนที่ &Vec<T> ใช้ได้แต่ &[T] ใช้ไม่ได้"
+    },
+    {
+        q: "โค้ดนี้ panic ไหม? ถ้าไม่ panic มัน print อะไร?\n```rust\nfn main() {\n    let s = \"สวัสดี\";\n    let oops = &s[1..];\n    println!(\"{oops}\");\n}\n```",
+        options: [
+            "ไม่ panic มัน print string ที่ตัด byte แรกออก",
+            "panic — byte index 1 ตกอยู่ข้างในตัวอักษรหลาย byte ตัวแรก จึง panic ด้วย message เรื่อง char boundary",
+            "ไม่ panic Rust จะปัด index ให้ตรง character boundary ที่ใกล้ที่สุดอัตโนมัติ",
+            "compile ไม่ผ่านเพราะ string literal slice ไม่ได้"
+        ],
+        answer: 1,
+        explain: "\"สวัสดี\" เริ่มด้วยตัวอักษร 3 byte ดังนั้น byte index 1 จึงอยู่ข้างในมัน ไม่ใช่ boundary — การ slice ตรงนั้นจะ panic: \"byte index 1 is not a char boundary; it is inside 'ส' (bytes 0..3 of string)\""
+    },
+    {
+        q: "โปรแกรมนี้ print อะไร?\n```rust\nfn main() {\n    let numbers = [1, 2, 3, 4, 5];\n    let (left, right) = numbers.split_at(2);\n    println!(\"{:?} {:?}\", left, right);\n}\n```",
+        options: [
+            "[1, 2] [3, 4, 5]",
+            "[1] [2, 3, 4, 5]",
+            "[1, 2, 3] [4, 5]",
+            "compile ไม่ผ่าน — split_at ไม่มีบน array"
+        ],
+        answer: 0,
+        explain: "split_at(2) แบ่ง slice เป็นทุกอย่างก่อน index 2 กับทุกอย่างตั้งแต่ index 2 เป็นต้นไป — [1, 2] กับ [3, 4, 5] — เทียบเท่ากับ (&numbers[..2], &numbers[2..])"
     }
 ];
 

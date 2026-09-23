@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Borrowing Instead of Moving
 
@@ -77,6 +79,72 @@ fn main() {
 }
 ```
 
+### `&str` vs `&String` vs `String`: Which One Do I Write?
+
+Three text types show up in almost every Rust signature, and mixing them up is the single most common source of unnecessary `.clone()`s and `.to_string()`s in AI-generated code. The choice comes down to one question: *does this function need to own the text afterward?*
+
+<Mermaid code={`flowchart TD
+    Q{Does the function need to own the text afterward?}
+    Q -->|Yes - store it, move it into a struct, send it elsewhere| OWN[Parameter type: String]
+    Q -->|No - it only reads the text| REF[Parameter type: &str]
+    REF -->|Caller has a String| COERCE1[Pass &my_string - auto-coerces to &str]
+    REF -->|Caller has a literal| COERCE2[Pass the literal directly - it is already &str]`} title="Choosing a text parameter type" />
+
+| Situation | Use | Why |
+|---|---|---|
+| Function only reads the text | `&str` | Accepts both `&String` (via coercion) and string literals — the most flexible input type |
+| Function must keep, store, or move the text elsewhere | `String` | Taking ownership is unavoidable if the value needs to outlive the call |
+| Returning a view into data the caller already owns | `&str` tied to an input's lifetime | No allocation; the returned slice borrows from the input |
+| Returning brand-new text built inside the function | `String` | You cannot return a reference to data that lives only inside the function (see below) |
+| A function parameter written as `&String` | Almost never the right choice | It is strictly less flexible than `&str` for no benefit — always prefer `&str` |
+
+## Returning References and a Lifetime Teaser
+
+Taking a reference as a parameter is straightforward — the compiler already knows the reference cannot outlive its input. **Returning** a reference is where it gets interesting: the compiler needs to know *which* input the returned reference is allowed to borrow from, because different call sites might pass arguments with different lifespans.
+
+```rust
+// @expect-error E0106
+fn longest(a: &str, b: &str) -> &str {
+    if a.len() > b.len() { a } else { b }
+}
+
+fn main() {
+    let s1 = String::from("hello");
+    let s2 = String::from("world!");
+    println!("{}", longest(&s1, &s2));
+}
+```
+
+```text
+error[E0106]: missing lifetime specifier
+ --> src/main.rs:1:33
+  |
+1 | fn longest(a: &str, b: &str) -> &str {
+  |               ----     ----     ^ expected named lifetime parameter
+  |
+  = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `a` or `b`
+help: consider introducing a named lifetime parameter
+  |
+1 | fn longest<'a>(a: &'a str, b: &'a str) -> &'a str {
+  |           ++++     ++          ++          ++
+```
+
+The fix is exactly what the compiler suggests: a named **lifetime parameter**, `'a`, that ties the return value's validity to both inputs at once.
+
+```rust
+fn longest<'a>(a: &'a str, b: &'a str) -> &'a str {
+    if a.len() > b.len() { a } else { b }
+}
+
+fn main() {
+    let s1 = String::from("hello");
+    let s2 = String::from("world!");
+    println!("longest: {}", longest(&s1, &s2));
+}
+```
+
+`<'a>` does not change how long anything lives — it is a promise, checked at compile time, that the returned `&str` will not outlive whichever of `a` or `b` is shorter-lived. This is only a teaser: the full set of elision rules, `'static`, and lifetimes on structs get their own lesson in [Lifetimes](/rust/en/traits-generics/lifetimes/).
+
 export const referencesBorrowingCode = `fn calculate_length(s: &String) -> usize {
     s.len()
 }
@@ -110,6 +178,40 @@ fn main() {
 `&T` is a **shared reference** — it lets you read the value without owning it. The original owner keeps its value intact. You can have as many shared references as you like simultaneously, because they are all read-only and cannot conflict with each other.
 </Callout>
 
+## Mental Model
+
+A reference is a promise, not a pointer with extra syntax: `&T` says "let me look at this value, but I will never outlive it." The compiler tracks, for every reference, exactly which owned value it points to and refuses to compile any path where the reference could still be read after that owner is gone. Returning a reference just makes that promise explicit in the function signature — a lifetime parameter names *whose* promise the return value inherits.
+
+## Trade-offs
+
+Borrowing avoids an allocation and a copy — `&str`/`&String` cost nothing beyond a pointer and a length. The price is that a borrowed value's lifetime becomes part of your function's public contract: sometimes the compiler cannot express what you want (a function that sometimes returns a reference and sometimes needs to construct new text, for instance), and the honest fix is to return an owned `String` instead of fighting the borrow checker with lifetime annotations. Knowing when to stop borrowing and start owning is itself a skill — the decision table above is the fast path for parameters; return types often need the same judgment call.
+
+## Common Misconceptions
+
+- **"A reference is basically a raw pointer, so `fn f() -> &String` should work like returning a pointer does in C."** In C, returning a pointer to a local is a silent bug (a dangling pointer, undefined behavior on use). In Rust it does not compile at all — `E0106`/`E0515`-style errors exist specifically to catch this at compile time, because the compiler has nowhere valid to say the reference is "borrowed from."
+- **"`&String` and `&str` are interchangeable, so it doesn't matter which one I write in a signature."** They coerce for the caller's convenience, but as a *parameter type* `&str` is strictly more flexible — it accepts literals that `&String` cannot — with no downside. There is essentially never a reason to write `&String` in a signature.
+- **"Since I can have many shared references at once, I should be able to write through one of them too."** `&T` is read-only no matter how many references exist — the exclusivity rule that lets you *write* through a reference (`&mut T`) is a completely separate, stricter guarantee, covered next in Mutable Borrows.
+
+## Reading AI-generated code
+
+AI assistants frequently write a function parameter as `&Vec<T>` (a reference to an owned, growable vector) when the function only ever iterates or indexes — `&[T]`, a slice, does the same job while also accepting arrays and any partial slice of a vector.
+
+<SpotTheBug code={`fn sum_all(v: &Vec<i32>) -> i32 {
+    v.iter().sum()
+}
+
+fn main() {
+    let numbers = vec![1, 2, 3, 4];
+    println!("{}", sum_all(&numbers));
+}
+`}>
+This compiles and runs fine — the bug is a flexibility smell, not a compile error. `&Vec<i32>` only accepts a reference to an actual `Vec<i32>`; it rejects an array (`[i32; 4]`) and any already-sliced portion of a vector (`&numbers[1..3]`) without an extra explicit re-slice. Changing the parameter to `&[i32]` accepts all of those automatically via coercion, with the exact same function body — the [Slices](/rust/en/ownership-borrowing/slices/) lesson covers why `&[T]`/`&str` generalize `&Vec<T>`/`&String` this way.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Default to `&str`/`&[T]` for anything a function only reads, reserve owned `String`/`Vec<T>` for values the function must keep, and let a lifetime parameter say out loud which input a returned reference is allowed to borrow from.
+</Callout>
+
 export const quizReferencesBorrowing = [
     {
         q: "What does the & symbol do when placed before a type in a function parameter?",
@@ -119,7 +221,8 @@ export const quizReferencesBorrowing = [
             "It creates a shared reference — the function borrows the value without taking ownership",
             "It declares the value as mutable"
         ],
-        answer: 2
+        answer: 2,
+        explain: "&T declares a shared reference: the function can read the value through the reference, but ownership — and the responsibility to drop it — stays with the caller."
     },
     {
         q: "What happens to a String when a function that takes &String returns?",
@@ -129,7 +232,8 @@ export const quizReferencesBorrowing = [
             "The String is moved back to the caller automatically",
             "The String becomes invalid until the next use"
         ],
-        answer: 1
+        answer: 1,
+        explain: "A reference never owns the value it points to, so when the reference goes out of scope at the end of the function, nothing is dropped — the original String, still owned by the caller, is unaffected."
     },
     {
         q: "How many shared (&T) references to the same value can exist simultaneously?",
@@ -139,7 +243,8 @@ export const quizReferencesBorrowing = [
             "Exactly zero while there is a mutable reference",
             "Any number — shared references are all read-only"
         ],
-        answer: 3
+        answer: 3,
+        explain: "Any number of shared references may coexist because none of them can write — there is nothing for them to conflict over. Mutable references are the ones limited to exactly one at a time."
     },
     {
         q: "Why should function parameters prefer &str over &String?",
@@ -149,7 +254,30 @@ export const quizReferencesBorrowing = [
             "&String is only available in nightly Rust",
             "There is no difference between the two"
         ],
-        answer: 1
+        answer: 1,
+        explain: "&str is the more general type: a &String coerces to &str automatically at the call site, and a string literal is already &str, so &str parameters accept strictly more callers for no added cost."
+    },
+    {
+        q: "Does this compile?\n```rust\nfn longest(a: &str, b: &str) -> &str {\n    if a.len() > b.len() { a } else { b }\n}\n```",
+        options: [
+            "Yes — Rust infers the return borrows from whichever argument is returned",
+            "No — error[E0106]: missing lifetime specifier, because the signature does not say which input the return value borrows from",
+            "Yes, but only if both arguments happen to have the same length at runtime",
+            "No — string slices can never be returned from a function"
+        ],
+        answer: 1,
+        explain: "The compiler cannot infer which of two differently-lived inputs a returned reference borrows from — the fix is a named lifetime parameter, `fn longest<'a>(a: &'a str, b: &'a str) -> &'a str`."
+    },
+    {
+        q: "What does this program print?\n```rust\nfn greet(name: &str) {\n    println!(\"Hello, {}!\", name);\n}\nfn main() {\n    let owned = String::from(\"Bob\");\n    greet(&owned);\n    greet(\"Charlie\");\n}\n```",
+        options: [
+            "It fails to compile because a literal cannot be passed where &String is expected",
+            "Hello, Bob!\nHello, Charlie!",
+            "Hello, Bob!\nHello, Bob!",
+            "It fails to compile because owned needs to be mut"
+        ],
+        answer: 1,
+        explain: "&owned coerces from &String to &str, and \"Charlie\" is already a &str literal — both calls compile and run, printing each greeting in order."
     }
 ];
 

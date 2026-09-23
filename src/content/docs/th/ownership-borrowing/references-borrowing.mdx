@@ -1,6 +1,6 @@
 ---
 title: 'References และ Borrowing'
-description: 'borrow ค่าด้วย &T เพื่อใช้งานโดยไม่ต้องเอา ownership ไป ฟังก์ชันที่รับ reference จะไม่กลืนค่าของผู้เรียก'
+description: 'Borrow a value with &T to use it without taking ownership. Functions that accept references do not consume the caller''s value.'
 sidebar:
   order: 3
 ---
@@ -9,12 +9,14 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Borrow แทนที่จะ Move
 
-การ move ค่าเข้าไปในฟังก์ชันมักไม่จำเป็น — คุณแค่อยากให้ฟังก์ชันอ่านค่า ไม่ได้อยากยกความเป็นเจ้าของให้ Rust แก้ปัญหานี้ด้วย **references** reference ช่วยให้คุณส่งค่าเข้าไปในฟังก์ชันได้โดยไม่ต้องสละ ownership
+การ move ค่าเข้าไปในฟังก์ชันมักไม่จำเป็น — คุณแค่ต้องการให้ฟังก์ชันอ่านค่า ไม่ได้ต้องการให้มันเป็นเจ้าของ Rust แก้ปัญหานี้ด้วย **references** reference ช่วยให้คุณส่งค่าเข้าไปในฟังก์ชันโดยไม่ต้องสละ ownership
 
-syntax `&T` หมายถึง "shared reference ไปยังค่าของ type `T`" การสร้าง reference เรียกว่า **borrowing**
+syntax `&T` แปลว่า "shared reference ไปยังค่าประเภท `T`" การสร้าง reference เรียกว่า **borrowing**
 
 ```rust
 fn calculate_length(s: &String) -> usize {
@@ -28,11 +30,11 @@ fn main() {
 }
 ```
 
-syntax `&s` สร้าง reference ไปยัง `s` ส่วน signature ของฟังก์ชัน `s: &String` ประกาศว่าพารามิเตอร์นี้เป็น reference ไม่ใช่ `String` ที่เป็นเจ้าของค่า
+syntax `&s` สร้าง reference ไปยัง `s` function signature `s: &String` ประกาศว่า parameter เป็น reference ไม่ใช่ `String` ที่เป็นเจ้าของ
 
-### References ไม่ได้เป็นเจ้าของ
+### Reference ไม่ได้เป็นเจ้าของ
 
-เพราะ reference ไม่ได้เป็นเจ้าของค่าที่ชี้ไป ค่านั้นจึง **ไม่ถูก dropped** เมื่อ reference ออกจาก scope ownership ยังคงอยู่กับตัวแปรเดิม
+เพราะ reference ไม่ได้เป็นเจ้าของค่าที่มันชี้ไป ค่านั้นจึง **ไม่ถูก dropped** เมื่อ reference ออกจาก scope ownership ยังอยู่กับตัวแปรเดิม
 
 ```rust
 fn print_greeting(name: &String) {
@@ -49,7 +51,7 @@ fn main() {
 
 ### Shared References หลายตัว
 
-คุณสามารถมี shared reference (`&T`) ไปยังค่าหนึ่ง **จำนวนเท่าไรก็ได้** พร้อม ๆ กัน ตราบใดที่ไม่มีตัวใดเป็น mutable reference เลย shared reference เป็นแบบ read-only
+คุณสามารถมี shared reference (`&T`) **กี่ตัวก็ได้** ไปยังค่าเดียวกันในเวลาเดียวกัน ตราบใดที่ไม่มีตัวไหนเป็น mutable reference shared reference เป็นแบบอ่านอย่างเดียว
 
 ```rust
 fn main() {
@@ -61,9 +63,9 @@ fn main() {
 }
 ```
 
-### References กับ Signature ของฟังก์ชัน
+### References กับ Function Signature
 
-เมื่อพารามิเตอร์ของฟังก์ชันเป็น `&String` ผู้เรียกจะส่ง `&my_string` เข้าไป เมื่อพารามิเตอร์เป็น `&str` (string slice) ฟังก์ชันจะยืดหยุ่นกว่า — รับได้ทั้ง `&String` และ string literal โดยทั่วไปควรเลือกใช้ `&str` แทน `&String` สำหรับพารามิเตอร์ของฟังก์ชัน
+เมื่อ function parameter เป็น `&String` caller จะส่ง `&my_string` เมื่อ parameter เป็น `&str` (string slice) ฟังก์ชันจะยืดหยุ่นกว่า — มันรับได้ทั้ง `&String` และ string literal ควรเลือก `&str` มากกว่า `&String` สำหรับ function parameter เป็นกฎทั่วไป
 
 ```rust
 fn greet(name: &str) {
@@ -76,6 +78,72 @@ fn main() {
     greet("Charlie");       // string literal is already &str
 }
 ```
+
+### `&str` vs `&String` vs `String`: ควรใช้แบบไหน?
+
+Text type สามแบบนี้โผล่ในแทบทุก signature ของ Rust และการสับสนระหว่างพวกมันคือต้นตอที่พบบ่อยที่สุดของ `.clone()`/`.to_string()` ที่ไม่จำเป็นในโค้ดที่ AI เขียน การเลือกขึ้นอยู่กับคำถามเดียว: *ฟังก์ชันนี้ต้องเป็นเจ้าของ text หลังจากนั้นไหม?*
+
+<Mermaid code={`flowchart TD
+    Q{Does the function need to own the text afterward?}
+    Q -->|Yes - store it, move it into a struct, send it elsewhere| OWN[Parameter type: String]
+    Q -->|No - it only reads the text| REF[Parameter type: &str]
+    REF -->|Caller has a String| COERCE1[Pass &my_string - auto-coerces to &str]
+    REF -->|Caller has a literal| COERCE2[Pass the literal directly - it is already &str]`} title="การเลือก parameter type สำหรับ text" />
+
+| สถานการณ์ | ใช้ | เพราะอะไร |
+|---|---|---|
+| ฟังก์ชันแค่อ่าน text | `&str` | รับได้ทั้ง `&String` (ผ่าน coercion) และ string literal — input type ที่ยืดหยุ่นที่สุด |
+| ฟังก์ชันต้องเก็บ, store, หรือย้าย text ไปที่อื่น | `String` | การเอา ownership ไปเลี่ยงไม่ได้ ถ้าค่าต้องมีชีวิตอยู่นานกว่าการเรียกครั้งนี้ |
+| return มุมมองเข้าไปในข้อมูลที่ caller เป็นเจ้าของอยู่แล้ว | `&str` ที่ผูกกับ lifetime ของ input | ไม่มี allocation; slice ที่ return borrow มาจาก input |
+| return text ใหม่ที่สร้างขึ้นภายในฟังก์ชัน | `String` | คุณ return reference ไปยังข้อมูลที่อยู่แค่ภายในฟังก์ชันไม่ได้ (ดูด้านล่าง) |
+| function parameter ที่เขียนเป็น `&String` | แทบไม่ใช่ตัวเลือกที่ถูกต้องเลย | มันยืดหยุ่นน้อยกว่า `&str` อย่างชัดเจนโดยไม่ได้ประโยชน์อะไร — เลือก `&str` เสมอ |
+
+## Returning References และ Lifetime Teaser
+
+การรับ reference เป็น parameter นั้นตรงไปตรงมา — คอมไพเลอร์รู้อยู่แล้วว่า reference จะไม่มีชีวิตอยู่นานกว่า input ของมัน การ **return** reference ต่างหากที่น่าสนใจ: คอมไพเลอร์ต้องรู้ว่า reference ที่ return ยืมมาจาก input *ตัวไหน* เพราะแต่ละจุดที่เรียกอาจส่ง argument ที่มีอายุต่างกัน
+
+```rust
+// @expect-error E0106
+fn longest(a: &str, b: &str) -> &str {
+    if a.len() > b.len() { a } else { b }
+}
+
+fn main() {
+    let s1 = String::from("hello");
+    let s2 = String::from("world!");
+    println!("{}", longest(&s1, &s2));
+}
+```
+
+```text
+error[E0106]: missing lifetime specifier
+ --> src/main.rs:1:33
+  |
+1 | fn longest(a: &str, b: &str) -> &str {
+  |               ----     ----     ^ expected named lifetime parameter
+  |
+  = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `a` or `b`
+help: consider introducing a named lifetime parameter
+  |
+1 | fn longest<'a>(a: &'a str, b: &'a str) -> &'a str {
+  |           ++++     ++          ++          ++
+```
+
+ทางแก้คือสิ่งที่คอมไพเลอร์แนะนำตรง ๆ: **lifetime parameter** ชื่อ `'a` ที่ผูกความ valid ของค่าที่ return เข้ากับทั้งสอง input พร้อมกัน
+
+```rust
+fn longest<'a>(a: &'a str, b: &'a str) -> &'a str {
+    if a.len() > b.len() { a } else { b }
+}
+
+fn main() {
+    let s1 = String::from("hello");
+    let s2 = String::from("world!");
+    println!("longest: {}", longest(&s1, &s2));
+}
+```
+
+`<'a>` ไม่ได้เปลี่ยนว่าอะไรมีชีวิตอยู่นานแค่ไหน — มันคือคำสัญญาที่ตรวจสอบตอน compile time ว่า `&str` ที่ return จะไม่มีชีวิตอยู่นานกว่า `a` หรือ `b` ตัวที่สั้นกว่า นี่เป็นแค่ teaser: ชุดกฎ elision เต็มรูปแบบ, `'static`, และ lifetime บน struct มีบทของตัวเองใน [Lifetimes](/rust/th/traits-generics/lifetimes/)
 
 export const referencesBorrowingCode = `fn calculate_length(s: &String) -> usize {
     s.len()
@@ -106,50 +174,110 @@ fn main() {
 
 <Playground code={referencesBorrowingCode} />
 
-<Callout title="reference borrow โดยไม่เอา ownership ไป">
-`&T` คือ **shared reference** — ให้คุณอ่านค่าได้โดยไม่ต้องเป็นเจ้าของ เจ้าของเดิมยังถือค่านั้นไว้ครบถ้วน คุณสามารถมี shared reference ได้มากเท่าที่ต้องการพร้อม ๆ กัน เพราะเป็นแบบ read-only ทั้งหมดและไม่ขัดแย้งกันเอง
+<Callout title="Reference คือการ Borrow โดยไม่เอา Ownership ไป">
+`&T` คือ **shared reference** — มันให้คุณอ่านค่าได้โดยไม่เป็นเจ้าของ เจ้าของเดิมยังมีค่านั้นครบถ้วน คุณมี shared reference ได้กี่ตัวก็ได้พร้อมกัน เพราะทุกตัวเป็นแบบอ่านอย่างเดียวและไม่มีทางขัดแย้งกันเอง
+</Callout>
+
+## Mental Model
+
+Reference คือคำสัญญา ไม่ใช่ pointer ที่มี syntax เพิ่ม: `&T` บอกว่า "ขอดูค่านี้หน่อย แต่ฉันจะไม่มีชีวิตอยู่นานกว่ามัน" คอมไพเลอร์ track ทุก reference ว่ามันชี้ไปยังค่าที่เป็นเจ้าของตัวไหนเป๊ะ ๆ และปฏิเสธ path ใด ๆ ที่ reference อาจถูกอ่านได้หลังจากเจ้าของนั้นหายไปแล้ว การ return reference ก็แค่ทำให้คำสัญญานั้นชัดเจนขึ้นใน function signature — lifetime parameter บอกว่าค่าที่ return สืบทอดคำสัญญาของ*ใคร*
+
+## Trade-offs
+
+การ borrow เลี่ยง allocation กับการ copy ได้ — `&str`/`&String` แทบไม่มีต้นทุนอะไรนอกจาก pointer กับความยาว ราคาที่ต้องจ่ายคือ lifetime ของค่าที่ borrow มากลายเป็นส่วนหนึ่งของ contract สาธารณะของฟังก์ชันคุณ: บางครั้งคอมไพเลอร์ไม่สามารถแสดงสิ่งที่คุณต้องการได้ (เช่น ฟังก์ชันที่บางทีต้อง return reference บางทีต้องสร้าง text ใหม่) และทางแก้ที่ตรงไปตรงมาคือ return `String` ที่เป็นเจ้าของแทนที่จะฝืนสู้กับ borrow checker ด้วย lifetime annotation การรู้ว่าเมื่อไหร่ควรหยุด borrow แล้วเริ่มเป็นเจ้าของคือทักษะในตัวมันเอง — ตารางตัดสินใจข้างบนคือทางลัดสำหรับ parameter ส่วน return type มักต้องใช้วิจารณญาณแบบเดียวกัน
+
+## Common Misconceptions
+
+- **"Reference ก็คือ raw pointer พื้นฐาน ดังนั้น `fn f() -> &String` ควรทำงานเหมือน return pointer ใน C"** ใน C การ return pointer ไปยัง local คือบั๊กแบบเงียบ ๆ (dangling pointer, undefined behavior ตอนใช้) ใน Rust มัน compile ไม่ผ่านเลย — error แบบ `E0106`/`E0515` มีไว้จับสิ่งนี้ตอน compile time โดยเฉพาะ เพราะคอมไพเลอร์ไม่มีที่ที่ valid จะบอกว่า reference นั้น "borrow มาจาก" ตรงไหน
+- **"`&String` กับ `&str` ใช้แทนกันได้ ดังนั้นเขียนแบบไหนใน signature ก็ไม่ต่างกัน"** พวกมัน coerce ให้ caller สะดวกก็จริง แต่ในฐานะ *parameter type* `&str` ยืดหยุ่นกว่าอย่างชัดเจน — มันรับ literal ที่ `&String` รับไม่ได้ — โดยไม่มีข้อเสียเลย แทบไม่มีเหตุผลที่จะเขียน `&String` ใน signature เลย
+- **"เพราะฉันมี shared reference ได้หลายตัวพร้อมกัน ฉันน่าจะเขียนผ่านตัวใดตัวหนึ่งได้ด้วย"** `&T` เป็นแบบอ่านอย่างเดียวไม่ว่าจะมี reference กี่ตัว — กฎ exclusivity ที่ให้คุณ *เขียน* ผ่าน reference ได้ (`&mut T`) เป็นการรับประกันคนละแบบที่เข้มงวดกว่า จะพูดถึงในบทถัดไป Mutable Borrows
+
+## อ่านโค้ดที่ AI เขียน
+
+AI assistant มักเขียน function parameter เป็น `&Vec<T>` (reference ไปยัง vector ที่เป็นเจ้าของ ขยายขนาดได้) ทั้งที่ฟังก์ชันแค่ iterate หรือ index เท่านั้น — `&[T]` ซึ่งเป็น slice ทำงานแบบเดียวกันได้ พร้อมรับ array และ slice บางส่วนของ vector ได้ด้วย
+
+<SpotTheBug code={`fn sum_all(v: &Vec<i32>) -> i32 {
+    v.iter().sum()
+}
+
+fn main() {
+    let numbers = vec![1, 2, 3, 4];
+    println!("{}", sum_all(&numbers));
+}
+`}>
+โค้ดนี้ compile ผ่านและรันได้ปกติ — บั๊กคือ smell เรื่องความยืดหยุ่น ไม่ใช่ compile error `&Vec<i32>` รับได้แค่ reference ไปยัง `Vec<i32>` จริง ๆ เท่านั้น — มันปฏิเสธ array (`[i32; 4]`) และส่วนที่ถูก slice ไปแล้วของ vector (`&numbers[1..3]`) โดยไม่ต้อง re-slice ใหม่อย่างชัดเจน การเปลี่ยน parameter เป็น `&[i32]` จะรับทั้งหมดนั้นอัตโนมัติผ่าน coercion ด้วย function body เดิมทุกประการ — บท [Slices](/rust/th/ownership-borrowing/slices/) จะพูดถึงว่าทำไม `&[T]`/`&str` จึงเป็นภาพรวมของ `&Vec<T>`/`&String` แบบนี้
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+เลือก `&str`/`&[T]` เป็นค่าเริ่มต้นสำหรับสิ่งที่ฟังก์ชันแค่อ่าน สงวน `String`/`Vec<T>` ที่เป็นเจ้าของไว้สำหรับค่าที่ฟังก์ชันต้องเก็บไว้จริง ๆ และให้ lifetime parameter พูดออกมาตรง ๆ ว่า reference ที่ return ยืมมาจาก input ตัวไหน
 </Callout>
 
 export const quizReferencesBorrowing = [
     {
-        q: "สัญลักษณ์ & ทำอะไรเมื่อวางไว้หน้า type ในพารามิเตอร์ของฟังก์ชัน?",
+        q: "สัญลักษณ์ & ที่วางไว้หน้า type ใน function parameter ทำอะไร?",
         options: [
             "copy ค่าเข้าไปในฟังก์ชัน",
             "move ค่าเข้าไปในฟังก์ชัน",
             "สร้าง shared reference — ฟังก์ชัน borrow ค่าโดยไม่เอา ownership ไป",
-            "ประกาศค่าให้เป็น mutable"
+            "ประกาศให้ค่านั้นเป็น mutable"
         ],
-        answer: 2
+        answer: 2,
+        explain: "&T ประกาศ shared reference: ฟังก์ชันอ่านค่าผ่าน reference ได้ แต่ ownership — และหน้าที่ในการ drop มัน — ยังอยู่กับ caller"
     },
     {
-        q: "เกิดอะไรขึ้นกับ String เมื่อฟังก์ชันที่รับ &String return ออกมา?",
+        q: "เกิดอะไรขึ้นกับ String เมื่อฟังก์ชันที่รับ &String return กลับมา?",
         options: [
-            "String ถูกคืนเพราะ reference ออกจาก scope",
-            "String ยังใช้งานได้ — ฟังก์ชันแค่ borrow ไปเฉย ๆ",
-            "String ถูก move กลับไปให้ผู้เรียกโดยอัตโนมัติ",
-            "String ใช้งานไม่ได้จนกว่าจะใช้ครั้งถัดไป"
+            "String ถูกคืนหน่วยความจำเพราะ reference ออกจาก scope",
+            "String ยังใช้งานได้ปกติ — ฟังก์ชันแค่ borrow มัน",
+            "String ถูก move กลับไปให้ caller อัตโนมัติ",
+            "String ใช้งานไม่ได้จนกว่าจะถูกใช้ครั้งถัดไป"
         ],
-        answer: 1
+        answer: 1,
+        explain: "reference ไม่เคยเป็นเจ้าของค่าที่มันชี้ไป ดังนั้นเมื่อ reference ออกจาก scope ตอนจบฟังก์ชัน จะไม่มีอะไรถูก drop เลย — String เดิมที่ caller ยังเป็นเจ้าของอยู่ไม่ได้รับผลกระทบ"
     },
     {
         q: "shared reference (&T) ไปยังค่าเดียวกันสามารถมีอยู่พร้อมกันได้กี่ตัว?",
         options: [
-            "ไม่เกินหนึ่ง",
-            "ไม่เกินสอง",
-            "ศูนย์ตัวพอดีขณะที่มี mutable reference อยู่",
-            "จำนวนเท่าไรก็ได้ — shared reference เป็น read-only ทั้งหมด"
+            "ไม่เกินหนึ่งตัว",
+            "ไม่เกินสองตัว",
+            "ศูนย์ตัวถ้ามี mutable reference อยู่",
+            "กี่ตัวก็ได้ — shared reference ทุกตัวเป็นแบบอ่านอย่างเดียว"
         ],
-        answer: 3
+        answer: 3,
+        explain: "shared reference มีอยู่ร่วมกันได้กี่ตัวก็ได้เพราะไม่มีตัวไหนเขียนได้เลย จึงไม่มีอะไรให้ขัดแย้งกัน mutable reference ต่างหากที่ถูกจำกัดไว้ที่หนึ่งตัวในแต่ละครั้ง"
     },
     {
-        q: "ทำไมพารามิเตอร์ของฟังก์ชันจึงควรเลือก &str แทน &String?",
+        q: "ทำไม function parameter ควรเลือก &str มากกว่า &String?",
         options: [
             "&str เป็น mutable ส่วน &String ไม่ใช่",
-            "&str รับได้ทั้ง reference ของ String ที่เป็นเจ้าของค่า และ string literal ผ่านการ coerce",
-            "&String มีให้ใช้เฉพาะใน nightly Rust เท่านั้น",
-            "ทั้งสองอย่างไม่มีความแตกต่างกัน"
+            "&str รับได้ทั้ง reference ของ String ที่เป็นเจ้าของ และ string literal ผ่าน coercion",
+            "&String มีให้ใช้เฉพาะใน nightly Rust",
+            "ทั้งสองไม่มีความต่างกันเลย"
         ],
-        answer: 1
+        answer: 1,
+        explain: "&str เป็น type ที่ทั่วไปกว่า: &String จะ coerce เป็น &str อัตโนมัติที่จุดเรียก และ string literal ก็เป็น &str อยู่แล้ว ดังนั้น parameter แบบ &str จึงรับ caller ได้มากกว่าโดยไม่มีต้นทุนเพิ่ม"
+    },
+    {
+        q: "โค้ดนี้ compile ไหม?\n```rust\nfn longest(a: &str, b: &str) -> &str {\n    if a.len() > b.len() { a } else { b }\n}\n```",
+        options: [
+            "compile ผ่าน — Rust จะ infer ว่าค่าที่ return borrow มาจาก argument ตัวที่ถูก return",
+            "compile ไม่ผ่าน — error[E0106]: missing lifetime specifier เพราะ signature ไม่บอกว่าค่าที่ return borrow มาจาก input ตัวไหน",
+            "compile ผ่าน แต่เฉพาะตอนที่ argument ทั้งสองมีความยาวเท่ากันตอน runtime เท่านั้น",
+            "compile ไม่ผ่าน — string slice ไม่สามารถ return จากฟังก์ชันได้เลย"
+        ],
+        answer: 1,
+        explain: "คอมไพเลอร์ไม่สามารถ infer ได้ว่า reference ที่ return มาจาก input ตัวไหนในสอง input ที่มีอายุต่างกัน — ทางแก้คือ lifetime parameter ที่ตั้งชื่อไว้ `fn longest<'a>(a: &'a str, b: &'a str) -> &'a str`"
+    },
+    {
+        q: "โปรแกรมนี้ print อะไร?\n```rust\nfn greet(name: &str) {\n    println!(\"Hello, {}!\", name);\n}\nfn main() {\n    let owned = String::from(\"Bob\");\n    greet(&owned);\n    greet(\"Charlie\");\n}\n```",
+        options: [
+            "compile ไม่ผ่าน เพราะ literal ส่งไปที่ &String ไม่ได้",
+            "Hello, Bob!\nHello, Charlie!",
+            "Hello, Bob!\nHello, Bob!",
+            "compile ไม่ผ่าน เพราะ owned ต้องเป็น mut"
+        ],
+        answer: 1,
+        explain: "&owned coerce จาก &String เป็น &str และ \"Charlie\" ก็เป็น &str literal อยู่แล้ว — ทั้งสองการเรียก compile ผ่านและรัน print แต่ละคำทักทายตามลำดับ"
     }
 ];
 

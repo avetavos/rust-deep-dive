@@ -1,6 +1,6 @@
 ---
 title: 'Mutable Borrows'
-description: 'ใช้ &mut T เพื่อแก้ไขค่าที่ borrow มา borrow checker บังคับการเข้าถึงแบบ exclusive: mutable borrow หนึ่งตัว XOR shared borrow จำนวนเท่าไรก็ได้ — แต่ไม่มีทั้งสองอย่างพร้อมกัน'
+description: 'Use &mut T to modify a borrowed value. The borrow checker enforces exclusive access: one mutable borrow XOR any number of shared borrows — never both at once.'
 sidebar:
   order: 4
 ---
@@ -9,13 +9,15 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
-## การ Mutate ผ่าน Reference
+## Mutate ผ่าน Reference
 
-shared reference `&T` เป็นแบบ read-only เมื่อคุณต้องการแก้ไขค่าที่ borrow มา ให้ใช้ **mutable reference**: `&mut T`
+shared reference `&T` เป็นแบบอ่านอย่างเดียว เมื่อคุณต้องการแก้ไขค่าที่ borrow มา ให้ใช้ **mutable reference**: `&mut T`
 
-เงื่อนไขสองข้อต้องเป็นจริงทั้งคู่:
-1. ตัวแปรเดิมต้องถูกประกาศด้วย `mut`
+ต้องมีเงื่อนไขสองข้อพร้อมกัน:
+1. ตัวแปรเดิมต้องประกาศด้วย `mut`
 2. ตัว reference เองต้องเขียนเป็น `&mut`
 
 ```rust
@@ -30,13 +32,13 @@ fn main() {
 }
 ```
 
-### กฎการเข้าถึงแบบ Exclusive
+### กฎ Exclusive-Access
 
-borrow checker บังคับ invariant ข้อเดียว:
+borrow checker บังคับใช้ invariant เดียว:
 
-> ณ จุดใด ๆ ในโค้ด คุณอาจมี **อย่างใดอย่างหนึ่ง** ระหว่าง shared reference จำนวนเท่าไรก็ได้ **หรือ** mutable reference เพียง **หนึ่งตัว** ไปยังค่าหนึ่ง — **แต่ไม่มีทั้งสองอย่างพร้อมกัน**
+> ณ จุดใด ๆ ในโค้ด คุณมีได้ **อย่างใดอย่างหนึ่ง** ระหว่าง shared reference กี่ตัวก็ได้ **หรือ** mutable reference เพียง **หนึ่งตัว** ไปยังค่าเดียวกัน — **ไม่เคยทั้งสองอย่างพร้อมกัน**
 
-กฎนี้ป้องกัน **data races** ตอน compile time data race เกิดขึ้นเมื่อ thread ตั้งแต่สองตัวขึ้นไปเข้าถึงหน่วยความจำเดียวกันพร้อมกัน และอย่างน้อยหนึ่งการเข้าถึงเป็นการเขียน ด้วยการทำให้การเข้าถึงแบบ mutable พร้อมกันกลายเป็น compile error Rust จึงกำจัดบั๊กประเภท data race ทั้งหมดออกไป — แม้ในโค้ดแบบ single-threaded กฎเดียวกันนี้ก็ช่วยให้ตรรกะถูกต้องสมเหตุสมผล
+กฎนี้ป้องกัน **data race** ตอน compile time data race เกิดขึ้นเมื่อสอง thread ขึ้นไปเข้าถึงหน่วยความจำเดียวกันพร้อมกัน และอย่างน้อยหนึ่งการเข้าถึงคือการเขียน การทำให้การเข้าถึงแบบ mutable พร้อมกันเป็น compile error ทำให้ Rust ตัดบั๊กทั้งหมวด data-race ออกไป — แม้แต่ในโค้ด single-thread กฎเดียวกันนี้ก็ยังช่วยให้ logic ถูกต้อง
 
 ```rust
 // @expect-error E0502
@@ -60,9 +62,52 @@ error[E0502]: cannot borrow `s` as mutable because it is also borrowed as immuta
   |                       -- immutable borrow later used here
 ```
 
+<Mermaid code={`flowchart LR
+    Free[No active borrow]
+    Shared[N shared borrows, all read-only]
+    Exclusive[One exclusive borrow, read-write]
+    Free -->|&x| Shared
+    Shared -->|another &x| Shared
+    Shared -->|last shared use ends, NLL| Free
+    Free -->|&mut x| Exclusive
+    Exclusive -->|borrow's last use ends, NLL| Free
+    Shared -. blocked while any read is still live .-> Exclusive
+    Exclusive -. blocked, only one writer at a time .-> Exclusive`} title="state machine ของ exclusivity ที่ borrow ทุกตัวต้องเป็นไปตาม" />
+
+### Mutable Borrow สองตัวพร้อมกัน
+
+กฎเดียวกันนี้ปิดกั้น mutable borrow ตัวที่สองแม้จะไม่มี shared reference เข้ามาเกี่ยวข้องเลย — `&mut T` เป็น exclusive กับ *ทุกอย่าง* รวมถึง `&mut T` อีกตัวด้วย:
+
+```rust
+// @expect-error E0499
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let r1 = &mut v;
+    let r2 = &mut v;
+    r1.push(4);
+    r2.push(5);
+}
+```
+
+```text
+error[E0499]: cannot borrow `v` as mutable more than once at a time
+ --> src/main.rs:4:14
+  |
+3 |     let r1 = &mut v;
+  |              ------ first mutable borrow occurs here
+4 |     let r2 = &mut v;
+  |              ^^^^^^ second mutable borrow occurs here
+5 |     r1.push(4);
+  |     -- first borrow later used here
+
+error: aborting due to 1 previous error
+```
+
+ทางแก้คือ pattern เดียวกับที่หัวข้อถัดไปจะทำให้เป็นทางการ: ใช้ `r1` จนถึงจุดใช้งานสุดท้าย (last use) ก่อนสร้าง `r2` เพื่อไม่ให้ borrow ทั้งสองซ้อนกันในเวลาเดียวกัน
+
 ### Non-Lexical Lifetimes (NLL)
 
-ตั้งแต่ Rust 2018 เป็นต้นมา คอมไพเลอร์ใช้ **Non-Lexical Lifetimes (NLL)**: borrow จะสิ้นสุดที่จุดสุดท้ายที่ถูกใช้งานจริง ไม่ใช่ที่ตอนจบของ block ที่ครอบอยู่ นั่นหมายความว่าคุณสามารถเริ่ม borrow ใหม่ได้อย่างปลอดภัยหลังจากการใช้งานครั้งสุดท้ายของตัวก่อนหน้า แม้จะอยู่ใน scope เดียวกันก็ตาม
+ตั้งแต่ Rust 2018 คอมไพเลอร์ใช้ **Non-Lexical Lifetimes (NLL)**: borrow หนึ่งจะจบลงที่จุดใช้งานจริงครั้งสุดท้าย ไม่ใช่ที่ท้าย block ที่ครอบมันอยู่ นั่นแปลว่าคุณเริ่ม borrow ใหม่ได้อย่างปลอดภัยหลังจาก last use ของ borrow ก่อนหน้า แม้จะอยู่ใน scope เดียวกัน
 
 ```rust
 fn main() {
@@ -77,9 +122,53 @@ fn main() {
 }
 ```
 
-### Mutable References กับพารามิเตอร์ของฟังก์ชัน
+### Two-Phase Borrows
 
-การส่ง `&mut T` เข้าไปในฟังก์ชันบ่งบอกว่าฟังก์ชันนั้น **อาจ** แก้ไขค่าได้ ทำให้การ mutate ชัดเจนและมองเห็นได้ตรงจุดที่เรียก — คุณเห็น `&mut` ได้ทุกจุดที่ค่าอาจเปลี่ยนแปลง
+มีข้อยกเว้นตั้งใจหนึ่งข้อของ exclusivity แบบเข้มงวด และมันมีอยู่เพื่อไม่ให้โค้ดที่ดูปกติต้องใช้ตัวแปรชั่วคราวเพิ่ม ลองดู `v.push(v.len())`: การ evaluate argument `v.len()` ต้องการการอ่านแบบ shared ของ `v` แต่ `.push(...)` ต้องการ `&mut v` — และทั้งสองเกิดขึ้นใน expression เดียวกัน
+
+```rust
+fn main() {
+    let mut v = vec![1, 2, 3];
+    // two-phase borrow: v.push(...) needs &mut v, but v.len() (a shared read)
+    // is allowed to run first while the &mut is only "reserved"
+    v.push(v.len());
+    println!("{:?}", v);
+}
+```
+
+```text
+[1, 2, 3, 3]
+```
+
+โค้ดนี้ compile ผ่านเพราะ **two-phase borrows**: `&mut v` ที่ `.push` ต้องการจะถูก *จองไว้* ก่อนเท่านั้น (ทำตัวเหมือน shared borrow ระหว่างที่ argument ยัง evaluate อยู่) และจะกลายเป็น exclusive borrow เต็มตัวก็ตอนที่ `.push` ถูกเรียกจริง ๆ เท่านั้น ซึ่งตอนนั้น `v.len()` ถูกอ่านไปแล้ว ถ้าไม่มีข้อยกเว้นนี้ `v.push(v.len())` จะผิดกฎเหมือนตัวอย่าง `r1`/`r2` ข้างบนเป๊ะ และผู้เรียน Rust ทุกคนจะต้องเขียน `let len = v.len(); v.push(len);` แทน
+
+### Reborrowing
+
+คุณ copy `&mut T` ไม่ได้ (มีได้แค่ตัวเดียวเสมอ) แต่คุณสร้าง `&mut T` ที่มีอายุสั้นกว่า *จาก* ตัวเดิมได้ ใช้มัน แล้วกลับมาใช้ตัวเดิมต่อ — สิ่งนี้เรียกว่า **reborrowing** และมันเกิดขึ้นได้ทั้งแบบชัดเจน (`&mut *r`) และแบบ implicit ทุกครั้งที่คุณส่ง `&mut T` เข้าไปในฟังก์ชัน
+
+```rust
+fn add_one(n: &mut i32) {
+    *n += 1;
+}
+
+fn main() {
+    let mut x = 41;
+    let r = &mut x;
+    add_one(&mut *r); // reborrow: a shorter-lived &mut carved out of r
+    add_one(r);       // r itself is usable again afterwards
+    println!("{}", x);
+}
+```
+
+```text
+43
+```
+
+`add_one(&mut *r)` dereference `r` แล้ว re-borrow มันทันที — อายุของ reborrow นั้นจบลงเมื่อ `add_one` return ทำให้ `r` เองกลับมาใช้ได้อีกในบรรทัดถัดไป จริง ๆ แล้ว `add_one(r)` เดี่ยว ๆ ก็ทำ reborrow แบบ *implicit* อยู่แล้ว (การส่ง `&mut T` ไปยัง parameter ที่ต้องการ `&mut T` จะ reborrow อัตโนมัติ); รูปแบบ `&mut *r` ที่ชัดเจนมีไว้เพื่อความชัดเจนเป็นหลัก หรือตอนที่คุณต้อง reborrow ผ่าน indirection อีกชั้น เช่น `&mut &mut T`
+
+### Mutable References กับ Function Parameters
+
+การส่ง `&mut T` ให้ฟังก์ชันบ่งบอกว่าฟังก์ชัน **อาจ** แก้ไขค่านั้น ทำให้การ mutate ชัดเจนและมองเห็นได้ที่จุดเรียก — คุณเห็น `&mut` ในทุกจุดที่ค่าอาจเปลี่ยน
 
 ```rust
 fn double(n: &mut i32) {
@@ -93,7 +182,165 @@ fn main() {
 }
 ```
 
-สังเกต operator dereference `*n`: ในการแก้ไขค่าที่ mutable reference ชี้ไป คุณต้อง dereference ก่อน สำหรับ method ของ `String` อย่าง `.push_str()` Rust จะ dereference ให้อัตโนมัติผ่านฟีเจอร์ที่เรียกว่า **auto-deref**
+สังเกต dereference operator `*n`: การแก้ไขค่าที่ mutable reference ชี้ไป คุณต้อง dereference มันก่อน สำหรับ method ของ `String` อย่าง `.push_str()` Rust จะ dereference ให้อัตโนมัติผ่านฟีเจอร์ที่เรียกว่า **auto-deref**
+
+### Iterator Invalidation
+
+`for x in &v` ถือ shared borrow ของ `v` ไว้ตลอดทั้ง loop การพยายาม mutate `v` จากข้างใน loop นั้นคือการละเมิด exclusivity แบบเดียวกับก่อนหน้า เพียงแต่สังเกตยากกว่าเพราะ borrow เป็น implicit อยู่ใน syntax `for` แทนที่จะเป็น `&v` ชัดเจนใน `let`:
+
+```rust
+// @expect-error E0502
+fn main() {
+    let mut v = vec![1, 2, 3];
+    for x in &v {
+        v.push(*x); // ERROR: mutating v while iterating over &v
+    }
+    println!("{:?}", v);
+}
+```
+
+```text
+error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable
+ --> src/main.rs:4:9
+  |
+3 |     for x in &v {
+  |              --
+  |              |
+  |              immutable borrow occurs here
+  |              immutable borrow later used here
+4 |         v.push(*x); // ERROR: mutating v while iterating over &v
+  |         ^^^^^^^^^^ mutable borrow occurs here
+
+error: aborting due to 1 previous error
+```
+
+นี่ไม่ใช่ borrow checker ที่ระวังเกินเหตุ: `Vec` **reallocate ใหม่ได้** เมื่อมันขยายขนาด ย้าย element ทั้งหมดไปยัง heap buffer ใหม่ — pointer ภายในของ iterator จะเหลือแค่ชี้ไปยังหน่วยความจำที่คืนไปแล้ว compile error นี้แทนที่บั๊ก use-after-free จริงที่ภาษาอื่นปล่อยให้คุณเขียนได้ ทางแก้แทบทุกครั้งคือ collect สิ่งที่ต้องการ push ใส่ `Vec` แยกต่างหากก่อน แล้วค่อย extend หลัง loop: `let mut to_add = Vec::new(); for x in &v { to_add.push(*x); } v.extend(to_add);`
+
+### Move, Assign, และ Extract ผ่าน Borrow ที่ยังมีชีวิตอยู่
+
+error code สามตัวที่เกี่ยวข้องกันครอบคลุมวิธีที่โค้ดพยายามทำให้ค่าที่ reference ยังพึ่งพาอยู่ใช้งานไม่ได้ ทุกตัวมีรูปแบบเดียวกัน: มี borrow อยู่ แล้วมีอะไรบางอย่างพยายามเปลี่ยนสิ่งที่มันชี้ไป
+
+**`E0505`** — move ค่าออกมาทั้งที่ยังมี borrow ที่มีชีวิตอยู่:
+
+```rust
+// @expect-error E0505
+fn consume(v: Vec<i32>) {
+    println!("consumed len {}", v.len());
+}
+
+fn main() {
+    let v = vec![1, 2, 3];
+    let r = &v;
+    consume(v); // moving v while r is still borrowing it
+    println!("{:?}", r);
+}
+```
+
+```text
+error[E0505]: cannot move out of `v` because it is borrowed
+ --> src/main.rs:9:13
+  |
+7 |     let v = vec![1, 2, 3];
+  |         - binding `v` declared here
+8 |     let r = &v;
+  |             -- borrow of `v` occurs here
+9 |     consume(v); // moving v while r is still borrowing it
+  |             ^ move out of `v` occurs here
+10|     println!("{:?}", r);
+  |                      - borrow later used here
+```
+
+แก้โดยจัดโครงสร้างใหม่ให้ last use ของ borrow เกิดก่อนการ move (NLL จะปล่อยให้ borrow จบทันเวลา):
+
+```rust
+fn consume(v: Vec<i32>) {
+    println!("consumed len {}", v.len());
+}
+
+fn main() {
+    let v = vec![1, 2, 3];
+    let r = &v;
+    println!("{:?}", r); // last use of r ends its borrow here (NLL)
+    consume(v); // fine now — no live borrow of v
+}
+```
+
+ถ้า last use ของ borrow ไม่สามารถย้ายมาก่อนได้จริง ๆ ในฟังก์ชันที่ยาวกว่านี้ `std::mem::take` (จากบทก่อนหน้า) ให้ผลลัพธ์เดียวกันโดยไม่ต้องจัดลำดับใหม่: มัน move ค่าออกมาแล้วทิ้งค่า default ที่ valid ไว้แทน ทำให้ไม่มีจังหวะไหนที่ค่าถูก borrow และ move พร้อมกันเลย
+
+**`E0506`** — assign ให้ตัวแปรทั้งที่มันยังถูก borrow อยู่:
+
+```rust
+// @expect-error E0506
+fn main() {
+    let mut s = String::from("hello");
+    let r = &s;
+    s = String::from("replaced"); // assigning to s while r borrows it
+    println!("{} {}", r, s);
+}
+```
+
+```text
+error[E0506]: cannot assign to `s` because it is borrowed
+ --> src/main.rs:4:5
+  |
+3 |     let r = &s;
+  |             -- `s` is borrowed here
+4 |     s = String::from("replaced"); // assigning to s while r borrows it
+  |     ^ `s` is assigned to here but it was already borrowed
+5 |     println!("{} {}", r, s);
+  |                       - borrow later used here
+```
+
+แก้โดยจัดโครงสร้างใหม่ให้ last use ของ `r` มาก่อน assignment อีกครั้ง:
+
+```rust
+fn main() {
+    let mut s = String::from("hello");
+    let r = &s;
+    println!("{}", r); // last use of r ends its borrow here (NLL)
+    s = String::from("replaced"); // fine now — no live borrow of s
+    println!("{}", s);
+}
+```
+
+**`E0507`** — move ค่าออกจาก field ของ struct (หรือ index) ที่เข้าถึงผ่าน shared reference:
+
+```rust
+// @expect-error E0507
+struct Wrapper {
+    text: String,
+}
+
+fn main() {
+    let w = Wrapper { text: String::from("inside") };
+    let r = &w;
+    let taken = r.text; // moving out of *r, a borrowed value
+    println!("{}", taken);
+}
+```
+
+```text
+error[E0507]: cannot move out of `r.text` which is behind a shared reference
+ --> src/main.rs:9:17
+  |
+9 |     let taken = r.text; // moving out of *r, a borrowed value
+  |                 ^^^^^^ move occurs because `r.text` has type `String`, which does not implement the `Copy` trait
+```
+
+ตรงนี้ `clone` คือทางแก้แบบ idiomatic — คุณ move field ออกจากข้างหลัง reference ใด ๆ ไม่ได้เลย ไม่ว่าจะ borrow อยู่หรือไม่ ดังนั้นการ copy อย่างชัดเจนคือเครื่องมือที่ถูกต้อง ไม่ใช่ทางลัด:
+
+```rust
+struct Wrapper {
+    text: String,
+}
+
+fn main() {
+    let w = Wrapper { text: String::from("inside") };
+    let r = &w;
+    let taken = r.text.clone(); // clone instead of moving out from behind &w
+    println!("{} {}", taken, w.text); // both usable — w still owns its field
+}
+```
 
 export const mutableBorrowsCode = `fn append_world(s: &mut String) {
     s.push_str(", world");
@@ -117,40 +364,120 @@ fn main() {
 
 <Playground code={mutableBorrowsCode} />
 
-<Callout title="mutable borrow หนึ่งตัว หรือ shared borrow หลายตัว — แต่ไม่มีทั้งสองอย่าง">
-กฎการเข้าถึงแบบ exclusive คือข้อจำกัดที่สำคัญที่สุดของ borrow checker กฎนี้หมายความว่าฟังก์ชันใดก็ตามที่ถือ `&mut T` อยู่จะมี **การเข้าถึงแบบ exclusive ที่รับประกันได้** ต่อค่านั้น — ไม่มีโค้ดอื่นอ่านหรือเขียนค่านั้นได้จนกว่า mutable borrow จะสิ้นสุดลง สิ่งนี้กำจัด data race และบั๊ก iterator-invalidation ตอน compile time
+<Callout title="Mutable Borrow เดียว หรือ Shared Borrow หลายตัว — ไม่เคยทั้งสองพร้อมกัน">
+กฎ exclusive-access คือข้อจำกัดที่สำคัญที่สุดของ borrow checker มันแปลว่าฟังก์ชันไหนก็ตามที่ถือ `&mut T` จะได้ **การเข้าถึงแบบ exclusive รับประกัน** ไปยังค่านั้น — ไม่มีโค้ดอื่นอ่านหรือเขียนมันได้จนกว่า mutable borrow จะจบ สิ่งนี้ตัด data race กับบั๊ก iterator invalidation ออกไปตอน compile time
+</Callout>
+
+## Mental Model
+
+ให้คิดว่าทุกค่ามี lock แบบ single-writer ที่คอมไพเลอร์ (ไม่ใช่ OS) บังคับใช้ทั้งหมดตอน compile time แบบไม่มีต้นทุน: ผู้อ่านมีกี่คนก็ได้พร้อมกัน แต่ทันทีที่ผู้เขียนหนึ่งคนถือ lock ไว้ ทุกคนอื่น — ทั้งผู้อ่านและผู้เขียน — ต้องรอจนกว่า last use ของผู้เขียนคนนั้นจะจบ ทั้ง NLL และ two-phase borrow มีไว้เพื่อทำให้ "รอจนกว่า last use" รบกวนน้อยที่สุด กฎจึงรู้สึกเหมือนหายไปสำหรับโค้ดที่เรียงลำดับกันจริง ๆ และจะกัดก็ต่อเมื่อ borrow สองตัวซ้อนกันในเวลาจริง ๆ เท่านั้น
+
+## Trade-offs
+
+กฎ exclusivity คือสิ่งที่ทำให้ Rust แบบไม่มี `unsafe` ปลอดภัยจาก data race และ iterator invalidation และ NLL/two-phase borrow ตัด false positive เกือบทั้งหมดที่ borrow checker เวอร์ชันเก่าแบบ lexical เคยสร้าง สิ่งที่เหลืออยู่คือต้นทุนจริง ที่บางครั้งน่าหงุดหงิด: pattern ที่มนุษย์มองว่าปลอดภัยชัดเจน — mutate field หนึ่งของ struct พร้อมกับอ่านอีก field หนึ่ง หรือจัดโครงสร้าง loop ที่ทั้งอ่านและ mutate collection แบบมีเงื่อนไข — บางครั้งยังต้องเขียนใหม่ (split borrow บน field, collect-แล้ว-extend บน collection) แค่เพื่อให้ checker ที่ให้เหตุผลกับค่าทั้งก้อน ไม่ใช่ byte เฉพาะที่มนุษย์มองเห็นว่าไม่เกี่ยวข้องกัน พอใจ
+
+## Common Misconceptions
+
+- **"mutable reference สองตัวไม่เป็นไร ตราบใดที่ฉันไม่ได้ใช้ทั้งคู่จริง ๆ"** `E0499` เกิดขึ้นทันทีที่ borrow ทั้งสองมีชีวิตอยู่พร้อมกัน ไม่ว่าคุณจะเคยเรียก method ผ่านตัวที่สองหรือไม่ก็ตาม — คอมไพเลอร์ track scope ของ borrow ไม่ใช่ว่าคุณเคยอ่านจาก reference ตัวไหนจริง ๆ
+- **"`v.push(v.len())` ต้องเป็นการเจาะจงกรณีพิเศษแบบ hack ไม่ใช่กฎจริง"** มันเป็นฟีเจอร์ที่ตั้งใจและมีชื่อเรียก — two-phase borrows — ไม่ใช่ความไม่สอดคล้องกัน `&mut` ที่ `.push()` ต้องการจะถูก *จองไว้* เท่านั้นระหว่างที่ argument ของมันยัง evaluate อยู่ และจะ exclusive เต็มตัวก็ต่อเมื่อการเรียกเกิดขึ้นจริงเท่านั้น
+- **"การ iterate ด้วย `for x in &v` แล้ว mutate `v` ข้างใน loop ไม่เป็นไร ตราบใดที่ไม่แตะ element ที่กำลังดูอยู่"** คอมไพเลอร์ให้เหตุผลในระดับนั้นไม่ได้ — และมีเหตุผลที่ดี: `v.push(...)` อาจกระตุ้นให้ reallocate ทั้งหมด ทำให้ address ของทุก element ใช้ไม่ได้ ไม่ใช่แค่ตัวที่คุณคิดว่าจะไม่แตะ
+
+## อ่านโค้ดที่ AI เขียน
+
+AI assistant มักถือ reference เข้าไปใน `Vec` ไว้ (บ่อยครั้งผ่านการ index, `&v[0]`) ข้ามการเรียกที่ทำให้ reallocate ได้ อย่าง `.push()` — โค้ดดูปกติดีเพราะค่าที่ index นั้น "ไม่น่าจะเปลี่ยน" แต่คอมไพเลอร์กำลังให้เหตุผลกับ address ของ buffer ไม่ใช่ค่า
+
+<SpotTheBug code={`fn main() {
+    let mut v = vec![1, 2, 3];
+    let first = &v[0];
+    v.push(4);
+    println!("first is: {}", first);
+}
+`}>
+โค้ดนี้ compile ไม่ผ่าน — `error[E0502]: cannot borrow \`v\` as mutable because it is also borrowed as immutable` — และนั่นคือประเด็นสำคัญ: มันคือ pattern ที่ AI assistant เขียนพอดีเมื่อสมมติว่า `&v[0]` เป็นค่าคงที่ ไม่ใช่ borrow ที่มีชีวิตอยู่ของ buffer ที่ `v` เป็นเจ้าของอยู่ตอนนี้ `.push(4)` อาจทำให้ `v` ต้อง allocate buffer ใหม่ที่ใหญ่กว่าแล้วย้าย element ทุกตัวเข้าไป ซึ่งจะทำให้ `first` ชี้ไปยังหน่วยความจำที่คืนไปแล้วถ้าคอมไพเลอร์อนุญาต ทางแก้คืออ่าน `v[0]` เป็นค่าที่เป็นเจ้าของก่อนการ push (`let first = v[0];` สำหรับ element ที่เป็น `Copy` หรือ `.clone()` สำหรับตัวที่ไม่ใช่) หรือจัดลำดับใหม่ให้ last use ของ `first` เกิดก่อน `v.push(4)`
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ผู้อ่านกี่คนก็ได้ หรือผู้เขียนคนเดียว ไม่เคยทั้งสองพร้อมกัน ตรวจสอบทั้งหมดตอน compile time — NLL กับ two-phase borrow มีไว้แค่ทำให้กฎนั้นสอดคล้องกับวิธีที่โค้ดแบบเรียงลำดับทำงานจริง ไม่เคยมีไว้เพื่อทำให้กฎอ่อนลง
 </Callout>
 
 export const quizMutableBorrows = [
     {
-        q: "syntax ใดที่สร้าง mutable reference ไปยังตัวแปรชื่อ data?",
+        q: "syntax แบบไหนสร้าง mutable reference ไปยังตัวแปรชื่อ data?",
         options: ["&data", "mut &data", "&mut data", "ref mut data"],
-        answer: 2
+        answer: 2,
+        explain: "&mut data สร้าง reference แบบ exclusive ที่ mutate ได้ ส่วน `mut &data` และ `ref mut data` ไม่ใช่ syntax ที่ valid สำหรับสิ่งนี้ใน Rust"
     },
     {
-        q: "mutable reference ไปยังค่าเดียวกันสามารถมีอยู่พร้อมกันได้กี่ตัว?",
-        options: ["ศูนย์", "หนึ่งเดียวเท่านั้น", "สอง", "จำนวนเท่าไรก็ได้"],
-        answer: 1
+        q: "mutable reference ไปยังค่าเดียวกันมีอยู่พร้อมกันได้กี่ตัว?",
+        options: ["ศูนย์", "หนึ่งเดียวเท่านั้น", "สองตัว", "กี่ตัวก็ได้"],
+        answer: 1,
+        explain: "กฎ exclusivity อนุญาตให้มี &mut T ที่มีชีวิตอยู่ได้แค่ตัวเดียวในแต่ละครั้ง — ตัวที่สอง แม้จะไม่มี shared reference เกี่ยวข้องเลย ก็คือ error[E0499]"
     },
     {
-        q: "คุณสามารถถือ shared reference และ mutable reference ไปยังค่าเดียวกันพร้อมกันได้ไหม?",
+        q: "คุณสามารถถือ shared reference กับ mutable reference ไปยังค่าเดียวกันพร้อมกันได้ไหม?",
         options: [
-            "ได้ ตราบใดที่ไม่ใช้ตัวใดเลย",
+            "ได้ ตราบใดที่ไม่มีตัวไหนถูกใช้",
             "ได้ mutable reference อยู่ร่วมกับ shared reference ได้",
             "ไม่ได้ — borrow checker ห้ามการรวมกันแบบนี้",
-            "ได้เฉพาะถ้าค่าเป็น Copy"
+            "ได้เฉพาะถ้าค่านั้นเป็น Copy"
         ],
-        answer: 2
+        answer: 2,
+        explain: "shared reference กับ mutable reference ไปยังค่าเดียวกันไม่มีวันมีชีวิตอยู่พร้อมกันได้เลย — การรวมกันแบบนั้นคือสิ่งที่ error[E0502] จับพอดี"
     },
     {
-        q: "กฎการเข้าถึงแบบ exclusive ของ &mut T ป้องกันปัญหาตอน compile-time ข้อใด?",
+        q: "กฎ exclusive-access สำหรับ &mut T ป้องกันปัญหาตอน compile time อะไร?",
         options: [
-            "stack overflow",
-            "integer overflow",
-            "data races และ iterator invalidation",
-            "คำเตือนตัวแปรที่ไม่ได้ใช้งาน"
+            "Stack overflow",
+            "Integer overflow",
+            "Data race และ iterator invalidation",
+            "Unused variable warning"
         ],
-        answer: 2
+        answer: 2,
+        explain: "การรับประกันว่ามีผู้เขียนได้อย่างมากหนึ่งคน (หรือผู้อ่านหลายคน ไม่เคยทั้งสองพร้อมกัน) ตอน compile time ตัด data race ออกไปทั้งหมด และจับ pattern แบบ iterator invalidation เช่นการ mutate Vec ระหว่าง iterate มันได้"
+    },
+    {
+        q: "โค้ดนี้ compile ไหม?\n```rust\nfn main() {\n    let mut v = vec![1, 2, 3];\n    v.push(v.len());\n    println!(\"{:?}\", v);\n}\n```",
+        options: [
+            "ไม่ — error[E0502] เหมือนความขัดแย้ง shared-กับ-mutable ทั่วไป",
+            "compile ผ่าน — two-phase borrow ให้อ่าน v.len() ได้ก่อนที่ &mut จาก .push() จะ active เต็มตัว",
+            "ไม่ — คุณต้องเขียน `let len = v.len(); v.push(len);` เสมอแทน",
+            "compile ผ่าน แต่เฉพาะเพราะ Vec<i32> implement Copy พอดี"
+        ],
+        answer: 1,
+        explain: "Two-phase borrow จองไว้แค่ &mut v ของ .push() ระหว่างที่ argument ของมัน (v.len()) ยัง evaluate อยู่ และจะ activate แบบ exclusive ก็ต่อเมื่อการเรียกเกิดขึ้นจริงเท่านั้น — รูปแบบที่พบบ่อยมากนี้จึง compile ผ่าน"
+    },
+    {
+        q: "โปรแกรมนี้ print อะไร?\n```rust\nfn add_one(n: &mut i32) {\n    *n += 1;\n}\nfn main() {\n    let mut x = 41;\n    let r = &mut x;\n    add_one(&mut *r);\n    add_one(r);\n    println!(\"{}\", x);\n}\n```",
+        options: [
+            "compile ไม่ผ่าน — ใช้ r ซ้ำหลัง reborrow ไม่ได้",
+            "41",
+            "43",
+            "compile ไม่ผ่าน — &mut *r ไม่ใช่ syntax ที่ valid"
+        ],
+        answer: 2,
+        explain: "&mut *r reborrow r ให้กับการเรียก add_one ครั้งแรก และ reborrow นั้นจบตอน add_one return ทำให้ r ใช้ได้อีกครั้งในการเรียกที่สอง — x จะถูกเพิ่มสองครั้ง จาก 41 เป็น 43"
+    },
+    {
+        q: "ทำไมโค้ดนี้ compile ไม่ผ่าน?\n```rust\nfn main() {\n    let mut v = vec![1, 2, 3];\n    for x in &v {\n        v.push(*x);\n    }\n}\n```",
+        options: [
+            "for loop iterate บน Vec<i32> ไม่ได้เลย",
+            "*x มี type ที่ผิดสำหรับ .push()",
+            "for loop ถือ shared borrow ของ v ไว้ตลอดการทำงาน และ .push() ต้องการ &mut v — การละเมิด exclusivity แบบเดียวกับความขัดแย้งอ่าน/เขียนอื่น ๆ",
+            "v ไม่เคยถูกประกาศเป็น mut"
+        ],
+        answer: 2,
+        explain: "`for x in &v` borrow v เป็น &Vec<i32> ตลอดทั้ง loop `v.push(*x)` ต้องการ &mut v ในขณะที่ shared borrow นั้นยังมีชีวิตอยู่ — error[E0502] — เพราะ push อาจ reallocate และทำให้ตำแหน่งของ iterator ใช้ไม่ได้"
+    },
+    {
+        q: "ทางแก้แบบ idiomatic สำหรับ E0507 นี้คืออะไร?\n```rust\nstruct Wrapper { text: String }\nfn main() {\n    let w = Wrapper { text: String::from(\"inside\") };\n    let r = &w;\n    let taken = r.text; // E0507\n    println!(\"{}\", taken);\n}\n```",
+        options: [
+            "เติม #[derive(Copy)] ให้ Wrapper เพื่อให้ move text ออกมาได้",
+            "เปลี่ยน `let taken = r.text;` เป็น `let taken = r.text.clone();`",
+            "ลบบรรทัด `let r = &w;` ทิ้งไปเลย",
+            "เปลี่ยน field ของ struct เป็น `text: &str`"
+        ],
+        answer: 1,
+        explain: "คุณ move field ที่ไม่ใช่ Copy ออกจากข้างหลัง reference ใด ๆ ไม่ได้เลย การ clone มันคือทางแก้แบบ idiomatic ตรงนี้ — Wrapper derive Copy ไม่ได้เพราะ String ไม่ใช่ Copy และการลบ borow ทิ้งจะทำให้ตัวอย่างเสียประเด็นไป"
     }
 ];
 

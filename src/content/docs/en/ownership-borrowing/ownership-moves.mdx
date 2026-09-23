@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## One Owner at a Time
 
@@ -65,6 +67,37 @@ fn main() {
 }
 ```
 
+### What a Move Actually Does in Memory
+
+The error above raises an obvious question: if `s2 = s1` is cheap, what actually happened to the bytes of `"hello"`? A `String` is not the text itself — it is a small, fixed-size **header** living on the stack: a pointer to a heap buffer, a length, and a capacity. Measured on this toolchain:
+
+```rust
+fn main() {
+    println!("size_of::<String>() = {}", std::mem::size_of::<String>());
+}
+```
+
+```text
+size_of::<String>() = 24
+```
+
+Three `usize` fields (pointer, length, capacity) at 8 bytes each on a 64-bit target — 24 bytes total. The actual UTF-8 bytes (`h`, `e`, `l`, `l`, `o`) live separately, on the heap.
+
+`let s2 = s1;` copies only that 24-byte header from `s1`'s stack slot into `s2`'s stack slot. **It never touches the heap bytes at all** — copying them would be wasteful, and it is exactly what `.clone()` is for when you actually want it.
+
+<Mermaid code={`flowchart TB
+    subgraph Stack
+        H1[s1 header - ptr len 5 cap 5 - marked moved, unusable]
+        H2[s2 header - ptr len 5 cap 5 - now the owner]
+    end
+    subgraph Heap
+        BUF[heap buffer - 5 bytes - h e l l o]
+    end
+    H1 -. compiler forbids reading this .-> BUF
+    H2 -->|owns it, will free it on drop| BUF`} title="A move copies the 24-byte header, never the heap bytes" />
+
+This is also *why* the compiler must reject using `s1` afterward, rather than just leaving it as a harmless duplicate pointer: both `s1` and `s2` would point at the very same heap buffer. If both were allowed to go out of scope, both destructors would try to free that same pointer — a **double free**. Instead, the compiler tracks `s1` as "moved-from" and statically forbids every use of it, so only `s2`'s destructor ever runs.
+
 ### `Copy` Types Are Duplicated
 
 Simple scalar types stored entirely on the stack — integers, `bool`, `char`, floating-point numbers, and tuples of these — implement `Copy`. Assigning or passing them makes a **bitwise copy**; the original remains valid.
@@ -79,6 +112,42 @@ fn main() {
 
 Common `Copy` types: `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `f32`, `f64`, `bool`, `char`.
 
+### `Copy` vs `Clone`: Why You Cannot Always Derive Both
+
+`Copy` is a marker trait: it tells the compiler "assignment may duplicate this value bit-for-bit instead of moving it." That is only sound when every field of a type is itself `Copy` — a type that owns a heap allocation, like `String` or `Vec<T>`, can never be `Copy`, because a bitwise duplicate would create two owners of the same heap buffer (the double-free problem from the previous section). `Copy` also requires `Clone` as a supertrait: every `Copy` type must also be `Clone`, since a bitwise copy is trivially a valid "clone."
+
+Trying to derive `Copy` on a struct that contains a non-`Copy` field is a compile error, not a warning:
+
+```rust
+// @expect-error E0204
+#[derive(Clone, Copy)]
+struct UserId {
+    label: String,
+    id: u32,
+}
+
+fn main() {
+    let u = UserId { label: String::from("alice"), id: 1 };
+    println!("{} {}", u.label, u.id);
+}
+```
+
+```text
+error[E0204]: the trait `Copy` cannot be implemented for this type
+ --> src/main.rs:2:8
+  |
+1 | #[derive(Clone, Copy)]
+  |                 ---- in this derive macro expansion
+2 | struct UserId {
+  |        ^^^^^^
+3 |     label: String,
+  |     ------------- this field does not implement `Copy`
+
+error: aborting due to 1 previous error
+```
+
+The fix is almost never "make `String` implement `Copy`" (it can't, for the same double-free reason) — it is to drop the `#[derive(Copy)]` and keep only `#[derive(Clone)]`, then call `.clone()` explicitly at the one or two call sites that genuinely need an independent copy.
+
 ### Explicit Deep Copy with `.clone()`
 
 When you need a full independent copy of a heap-owning value, call `.clone()`. This is an explicit opt-in to a potentially expensive operation.
@@ -90,6 +159,106 @@ fn main() {
     println!("original={} copy={}", original, copy);
 }
 ```
+
+### `Drop` Order and RAII
+
+Every value with resources to release — heap memory, a file handle, a lock — can implement the `Drop` trait, and Rust calls `drop` automatically when the value's owner goes out of scope. This pattern, where acquiring a resource and owning a value are the same act, is called **RAII** (Resource Acquisition Is Initialization): you never call a `close()` or `free()` method yourself, because the compiler already knows exactly where every value's scope ends.
+
+The *order* `Drop` runs in is a real, observable rule, not an implementation detail:
+
+- Local variables drop in **reverse declaration order** (last declared, first dropped).
+- A struct's fields drop **in declaration order** (first field first).
+- A temporary value with no name (like `Guard("...")` used directly in an expression) drops at the **end of the statement** it appears in.
+
+```rust
+struct Guard(&'static str);
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        println!("dropping {}", self.0);
+    }
+}
+
+struct Holder {
+    first: Guard,
+    second: Guard,
+}
+
+fn main() {
+    let _a = Guard("a (local, declared first)");
+    let _b = Guard("b (local, declared second)");
+    let h = Holder { first: Guard("h.first"), second: Guard("h.second") };
+    println!("holder fields: {} / {}", h.first.0, h.second.0);
+    println!("temporary: {}", Guard("temporary (end of this statement)").0);
+    println!("end of main");
+}
+```
+
+```text
+holder fields: h.first / h.second
+temporary: temporary (end of this statement)
+dropping temporary (end of this statement)
+end of main
+dropping h.first
+dropping h.second
+dropping b (local, declared second)
+dropping a (local, declared first)
+```
+
+The unnamed `Guard` drops immediately after the `println!` statement that created it — long before `main` ends. Then, at the true end of `main`, `h`'s fields drop first-to-second (declaration order), and only after that do the locals `_a` and `_b` drop, last-declared-first (`_b` before `_a`).
+
+### `mem::take`, `mem::replace`, and `mem::swap`
+
+Sometimes you need to move a value out of a place you do not own outright — a struct field, or a mutable reference — while leaving something valid behind (you cannot leave a struct field truly empty; every field must hold a value of its type at all times). The `std::mem` functions exist for exactly this:
+
+```rust
+use std::mem;
+
+fn main() {
+    // mem::take leaves the default value (empty String) behind
+    let mut s1 = String::from("original");
+    let taken = mem::take(&mut s1);
+    println!("taken={:?} s1={:?}", taken, s1);
+
+    // mem::replace swaps in a new value and gives back the old one
+    let mut s2 = String::from("old value");
+    let old = mem::replace(&mut s2, String::from("new value"));
+    println!("old={:?} s2={:?}", old, s2);
+
+    // mem::swap exchanges the contents of two bindings in place
+    let mut a = String::from("a-value");
+    let mut b = String::from("b-value");
+    mem::swap(&mut a, &mut b);
+    println!("a={:?} b={:?}", a, b);
+}
+```
+
+```text
+taken="original" s1=""
+old="old value" s2="new value"
+a="b-value" b="a-value"
+```
+
+`mem::take(&mut place)` moves `place`'s value out and leaves `Default::default()` behind — only works for types implementing `Default`, which `String` and `Vec<T>` do (empty string, empty vec). `mem::replace(&mut place, new)` is the general form: it leaves whatever `new` you supply, not just the type's default. `mem::swap(&mut a, &mut b)` exchanges two values without either one ever being "moved-from" and invalid — useful for in-place algorithms that need to swap struct fields or vector elements.
+
+### Partial Moves
+
+Moving one field out of a struct or tuple only invalidates *that field* — the rest of the value stays usable, though the struct as a whole can no longer be used or moved:
+
+```rust
+struct Pair {
+    a: String,
+    b: String,
+}
+
+fn main() {
+    let p = Pair { a: String::from("a"), b: String::from("b") };
+    let taken = p.a; // partial move: only p.a moves out
+    println!("{} {}", taken, p.b); // p.b is still usable
+}
+```
+
+The [Structs](/rust/en/structs-enums-matching/structs/) lesson covers this in more depth, including how partial moves interact with struct update syntax (`..base`) — the short version here is enough to recognize the pattern when you see it.
 
 ### Returning Ownership
 
@@ -137,6 +306,41 @@ fn main() {
 Once a non-`Copy` value has been moved, the compiler permanently invalidates the original binding. Any attempt to use it afterwards is a **compile-time error** — `error[E0382]: borrow of moved value`. You cannot accidentally access freed memory.
 </Callout>
 
+## Mental Model
+
+A move is a header transplant, not a data copy: for a heap-owning type, only the small fixed-size pointer/length/capacity record changes hands, and the compiler erases your ability to use the old name so there is never a moment where two names both claim the same heap buffer. `Copy` types skip this dance entirely because there is no heap buffer to double-own — a bitwise duplicate is always safe, so the compiler just does it silently instead of making you track which name is "current."
+
+## Trade-offs
+
+Moving by default is nearly free (copying a 24-byte header, not the underlying data) and rules out use-after-free and double-free at compile time — but it means passing a large heap value into a function *by ownership* when you only meant to read it forces an unnecessary design choice on every caller. `.clone()` buys back flexibility at a real, visible runtime cost (a full heap allocation and byte-for-byte copy), which is exactly why the language makes it an explicit method call instead of something that happens implicitly on assignment, the way it might in a language with reference semantics everywhere.
+
+## Common Misconceptions
+
+- **"`.clone()` is the fix the compiler suggested, so it's the right fix."** The suggestion is *a* fix that always works, not necessarily the *best* one. Most of the time a move error means the code should have borrowed (`&s1`) instead of taking ownership — reach for `.clone()` only when you genuinely need two independent, divergeable copies of the data.
+- **"A struct with a `String` field just needs `#[derive(Copy)]` added and it'll work like the small structs I've seen."** `Copy` requires every field to be `Copy`, and `String`/`Vec<T>`/any heap-owning type never is — `#[derive(Copy)]` on such a struct is `error[E0204]`, not a warning you can ignore.
+- **"`Drop` order doesn't matter as long as everything eventually gets cleaned up."** It matters whenever one value's destructor depends on another still being valid — a struct holding a database connection and a struct holding a transaction on that connection need to drop in the right order, and Rust's fixed rules (fields in declaration order, locals in reverse) are what make that order predictable instead of implementation-defined.
+
+## Reading AI-generated code
+
+The most common shape of the clone-to-silence smell is cloning an entire collection just to iterate over it read-only — the clone adds a full deep copy for no benefit, because iterating never needed ownership in the first place.
+
+<SpotTheBug code={`fn total_length(names: &Vec<String>) -> usize {
+    let cloned = names.clone(); // unnecessary — we only read it
+    cloned.iter().map(|s| s.len()).sum()
+}
+
+fn main() {
+    let names = vec![String::from("Ada"), String::from("Grace")];
+    println!("{}", total_length(&names));
+}
+`}>
+`names` is already a `&Vec<String>` — a read-only reference. Calling `.clone()` deep-copies every `String` in the vector (each one a separate heap allocation) just to call `.iter()` on the copy, when `.iter()` works identically on the original reference. The fix is to delete the `.clone()` line entirely and call `names.iter()` directly — nothing about the rest of the function needs to change.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A move relocates a small fixed-size header and invalidates the old name to prevent a double free; `.clone()` is the only thing that actually duplicates the underlying data, so reach for it deliberately, not reflexively whenever the compiler complains.
+</Callout>
+
 export const quizOwnershipMoves = [
     {
         q: "What happens when you assign a String to a new variable in Rust?",
@@ -146,12 +350,14 @@ export const quizOwnershipMoves = [
             "The value is moved and the original binding becomes invalid",
             "The compiler throws a runtime panic"
         ],
-        answer: 2
+        answer: 2,
+        explain: "String is not Copy, so `let s2 = s1;` moves the 24-byte header (pointer/len/cap) into s2 and marks s1 as moved-from — using s1 afterward is a compile error, not a runtime one."
     },
     {
         q: "Which of these types implements Copy?",
         options: ["String", "Vec<i32>", "i32", "Box<i32>"],
-        answer: 2
+        answer: 2,
+        explain: "i32 is a small stack-only scalar with no heap allocation to double-own, so it implements Copy. String, Vec<i32>, and Box<i32> all own heap memory and cannot."
     },
     {
         q: "How do you get an explicit independent copy of a String?",
@@ -161,7 +367,8 @@ export const quizOwnershipMoves = [
             "let b = a.clone();",
             "let b = &a;"
         ],
-        answer: 2
+        answer: 2,
+        explain: ".clone() is the explicit, opt-in deep copy for heap-owning types; String has no .copy() method, and `let b = a;` moves rather than copies."
     },
     {
         q: "After passing a String into a function that takes ownership, can the caller use it again?",
@@ -171,7 +378,30 @@ export const quizOwnershipMoves = [
             "Yes, but only if the function returns it",
             "Only if the String is marked mut"
         ],
-        answer: 1
+        answer: 1,
+        explain: "Passing by value moves the String into the function's parameter; the caller's binding is left moved-from and cannot be used again unless the function explicitly returns ownership back."
+    },
+    {
+        q: "Does this compile?\n```rust\n#[derive(Clone, Copy)]\nstruct UserId {\n    label: String,\n    id: u32,\n}\nfn main() {}\n```",
+        options: [
+            "No — error[E0204]: the trait `Copy` cannot be implemented for this type, because `label: String` does not implement Copy",
+            "Yes, because deriving Clone alongside Copy always satisfies the supertrait requirement",
+            "Yes, but only the id field is actually copied at runtime; label is silently skipped",
+            "No, but the fix is to remove #[derive(Clone)] instead of #[derive(Copy)]"
+        ],
+        answer: 0,
+        explain: "Copy requires every field to be Copy. String owns heap memory and is never Copy, so deriving Copy on UserId is error[E0204] — the fix is to drop #[derive(Copy)] and keep only Clone."
+    },
+    {
+        q: "What does this program print?\n```rust\nstruct Guard(&'static str);\nimpl Drop for Guard {\n    fn drop(&mut self) { println!(\"drop {}\", self.0); }\n}\nfn main() {\n    let _a = Guard(\"a\");\n    let _b = Guard(\"b\");\n}\n```",
+        options: [
+            "drop a\ndrop b — declaration order",
+            "drop a\ndrop b — because _a was borrowed for longer",
+            "Nothing is printed — Guard has no Drop impl",
+            "drop b\ndrop a — locals drop in reverse declaration order"
+        ],
+        answer: 3,
+        explain: "Local variables drop in reverse declaration order — last declared, first dropped — so _b (declared second) drops before _a (declared first)."
     }
 ];
 

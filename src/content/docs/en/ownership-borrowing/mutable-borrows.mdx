@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Mutating Through a Reference
 
@@ -60,6 +62,49 @@ error[E0502]: cannot borrow `s` as mutable because it is also borrowed as immuta
   |                       -- immutable borrow later used here
 ```
 
+<Mermaid code={`flowchart LR
+    Free[No active borrow]
+    Shared[N shared borrows, all read-only]
+    Exclusive[One exclusive borrow, read-write]
+    Free -->|&x| Shared
+    Shared -->|another &x| Shared
+    Shared -->|last shared use ends, NLL| Free
+    Free -->|&mut x| Exclusive
+    Exclusive -->|borrow's last use ends, NLL| Free
+    Shared -. blocked while any read is still live .-> Exclusive
+    Exclusive -. blocked, only one writer at a time .-> Exclusive`} title="The exclusivity state machine every borrow obeys" />
+
+### Two Mutable Borrows at Once
+
+The same rule blocks a second mutable borrow even when there is no shared reference involved at all — `&mut T` is exclusive against *everything*, including another `&mut T`:
+
+```rust
+// @expect-error E0499
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let r1 = &mut v;
+    let r2 = &mut v;
+    r1.push(4);
+    r2.push(5);
+}
+```
+
+```text
+error[E0499]: cannot borrow `v` as mutable more than once at a time
+ --> src/main.rs:4:14
+  |
+3 |     let r1 = &mut v;
+  |              ------ first mutable borrow occurs here
+4 |     let r2 = &mut v;
+  |              ^^^^^^ second mutable borrow occurs here
+5 |     r1.push(4);
+  |     -- first borrow later used here
+
+error: aborting due to 1 previous error
+```
+
+The fix is the same pattern the next section formalizes: finish using `r1` (its last use) before creating `r2`, so the two borrows never overlap in time.
+
 ### Non-Lexical Lifetimes (NLL)
 
 Since Rust 2018, the compiler uses **Non-Lexical Lifetimes (NLL)**: a borrow ends at the last point it is actually used, not at the end of the enclosing block. This means you can safely start a new borrow after the previous one's last use, even within the same scope.
@@ -76,6 +121,50 @@ fn main() {
     println!("{}", r2);
 }
 ```
+
+### Two-Phase Borrows
+
+There is one deliberate exception to strict exclusivity, and it exists precisely so ordinary-looking code does not need a temporary variable. Consider `v.push(v.len())`: evaluating the argument `v.len()` needs a shared read of `v`, but `.push(...)` needs `&mut v` — and both happen in the same expression.
+
+```rust
+fn main() {
+    let mut v = vec![1, 2, 3];
+    // two-phase borrow: v.push(...) needs &mut v, but v.len() (a shared read)
+    // is allowed to run first while the &mut is only "reserved"
+    v.push(v.len());
+    println!("{:?}", v);
+}
+```
+
+```text
+[1, 2, 3, 3]
+```
+
+This compiles because of **two-phase borrows**: the `&mut v` that `.push` needs is first only *reserved* (behaving like a shared borrow for the duration of argument evaluation), and only becomes a fully active exclusive borrow at the point `.push` is actually called — by which time `v.len()` has already been read. Without this special case, `v.push(v.len())` would be exactly as illegal as the `r1`/`r2` example above, and every Rust learner would need to write `let len = v.len(); v.push(len);` instead.
+
+### Reborrowing
+
+You cannot copy a `&mut T` (there can only ever be one), but you can create a shorter-lived `&mut T` *from* one and use it, then go back to using the original — this is called **reborrowing**, and it happens both explicitly (`&mut *r`) and implicitly whenever you pass a `&mut T` into a function.
+
+```rust
+fn add_one(n: &mut i32) {
+    *n += 1;
+}
+
+fn main() {
+    let mut x = 41;
+    let r = &mut x;
+    add_one(&mut *r); // reborrow: a shorter-lived &mut carved out of r
+    add_one(r);       // r itself is usable again afterwards
+    println!("{}", x);
+}
+```
+
+```text
+43
+```
+
+`add_one(&mut *r)` dereferences `r` and immediately re-borrows it — the reborrow's lifetime ends when `add_one` returns, so `r` itself is free to use again on the next line. In fact `add_one(r)` on its own already does an *implicit* reborrow (passing a `&mut T` where a `&mut T` parameter is expected reborrows automatically); the explicit `&mut *r` form exists mainly for clarity or when you need to reborrow through one more layer of indirection, such as a `&mut &mut T`.
 
 ### Mutable References and Function Parameters
 
@@ -94,6 +183,164 @@ fn main() {
 ```
 
 Note the `*n` dereference operator: to modify the value a mutable reference points to, you must dereference it first. For `String` methods like `.push_str()`, Rust applies the dereference automatically through a feature called **auto-deref**.
+
+### Iterator Invalidation
+
+`for x in &v` holds a shared borrow of `v` for the entire loop. Trying to mutate `v` from inside that loop is the same exclusivity violation as before, just harder to spot because the borrow is implicit in the `for` syntax rather than an explicit `&v` sitting in a `let`:
+
+```rust
+// @expect-error E0502
+fn main() {
+    let mut v = vec![1, 2, 3];
+    for x in &v {
+        v.push(*x); // ERROR: mutating v while iterating over &v
+    }
+    println!("{:?}", v);
+}
+```
+
+```text
+error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable
+ --> src/main.rs:4:9
+  |
+3 |     for x in &v {
+  |              --
+  |              |
+  |              immutable borrow occurs here
+  |              immutable borrow later used here
+4 |         v.push(*x); // ERROR: mutating v while iterating over &v
+  |         ^^^^^^^^^^ mutable borrow occurs here
+
+error: aborting due to 1 previous error
+```
+
+This is not the borrow checker being overly cautious: a `Vec` can **reallocate** when it grows, moving every existing element to a new heap buffer — the iterator's internal pointer would be left pointing at freed memory. The compile error is standing in for a real use-after-free bug that other languages let you write. The fix is almost always to collect what you want to push into a separate `Vec` first, then extend after the loop: `let mut to_add = Vec::new(); for x in &v { to_add.push(*x); } v.extend(to_add);`.
+
+### Moving, Assigning, and Extracting Through a Live Borrow
+
+Three related error codes cover the ways code can try to invalidate a value that a live reference still depends on. Each has the same shape: a borrow exists, then something tries to change what it points to.
+
+**`E0505`** — moving a value out from under a live borrow:
+
+```rust
+// @expect-error E0505
+fn consume(v: Vec<i32>) {
+    println!("consumed len {}", v.len());
+}
+
+fn main() {
+    let v = vec![1, 2, 3];
+    let r = &v;
+    consume(v); // moving v while r is still borrowing it
+    println!("{:?}", r);
+}
+```
+
+```text
+error[E0505]: cannot move out of `v` because it is borrowed
+ --> src/main.rs:9:13
+  |
+7 |     let v = vec![1, 2, 3];
+  |         - binding `v` declared here
+8 |     let r = &v;
+  |             -- borrow of `v` occurs here
+9 |     consume(v); // moving v while r is still borrowing it
+  |             ^ move out of `v` occurs here
+10|     println!("{:?}", r);
+  |                      - borrow later used here
+```
+
+Fix by restructuring so the borrow's last use happens before the move (NLL then lets the borrow end in time):
+
+```rust
+fn consume(v: Vec<i32>) {
+    println!("consumed len {}", v.len());
+}
+
+fn main() {
+    let v = vec![1, 2, 3];
+    let r = &v;
+    println!("{:?}", r); // last use of r ends its borrow here (NLL)
+    consume(v); // fine now — no live borrow of v
+}
+```
+
+If the borrow's last use genuinely cannot move earlier in a longer function, `std::mem::take` (from the previous lesson) achieves the same result without reordering: it moves the value out while leaving a valid default behind, so nothing is ever borrowed-and-moved at the same instant.
+
+**`E0506`** — assigning to a variable while it is borrowed:
+
+```rust
+// @expect-error E0506
+fn main() {
+    let mut s = String::from("hello");
+    let r = &s;
+    s = String::from("replaced"); // assigning to s while r borrows it
+    println!("{} {}", r, s);
+}
+```
+
+```text
+error[E0506]: cannot assign to `s` because it is borrowed
+ --> src/main.rs:4:5
+  |
+3 |     let r = &s;
+  |             -- `s` is borrowed here
+4 |     s = String::from("replaced"); // assigning to s while r borrows it
+  |     ^ `s` is assigned to here but it was already borrowed
+5 |     println!("{} {}", r, s);
+  |                       - borrow later used here
+```
+
+Fix, again by restructuring so `r`'s last use precedes the assignment:
+
+```rust
+fn main() {
+    let mut s = String::from("hello");
+    let r = &s;
+    println!("{}", r); // last use of r ends its borrow here (NLL)
+    s = String::from("replaced"); // fine now — no live borrow of s
+    println!("{}", s);
+}
+```
+
+**`E0507`** — moving a value out of a struct field (or index) accessed through a shared reference:
+
+```rust
+// @expect-error E0507
+struct Wrapper {
+    text: String,
+}
+
+fn main() {
+    let w = Wrapper { text: String::from("inside") };
+    let r = &w;
+    let taken = r.text; // moving out of *r, a borrowed value
+    println!("{}", taken);
+}
+```
+
+```text
+error[E0507]: cannot move out of `r.text` which is behind a shared reference
+ --> src/main.rs:9:17
+  |
+9 |     let taken = r.text; // moving out of *r, a borrowed value
+  |                 ^^^^^^ move occurs because `r.text` has type `String`, which does not implement the `Copy` trait
+```
+
+Here `clone` is the idiomatic fix — you cannot move a field out from behind any reference, borrowed or not, so an explicit copy is the correct tool, not a workaround:
+
+```rust
+struct Wrapper {
+    text: String,
+}
+
+fn main() {
+    let w = Wrapper { text: String::from("inside") };
+    let r = &w;
+    let taken = r.text.clone(); // clone instead of moving out from behind &w
+    println!("{} {}", taken, w.text); // both usable — w still owns its field
+}
+```
 
 export const mutableBorrowsCode = `fn append_world(s: &mut String) {
     s.push_str(", world");
@@ -121,16 +368,50 @@ fn main() {
 The exclusive-access rule is the borrow checker's most important constraint. It means any function holding a `&mut T` has **guaranteed exclusive access** to that value — no other code can read or write it until the mutable borrow ends. This eliminates data races and iterator-invalidation bugs at compile time.
 </Callout>
 
+## Mental Model
+
+Think of every value as having a single-writer lock that the compiler, not the OS, enforces entirely at compile time and for free: any number of readers can hold it at once, but the instant one writer takes it, everyone else — readers and writers alike — must wait until that writer's last use. NLL and two-phase borrows both exist to make "wait until the last use" as unintrusive as possible, so the rule feels like it disappears for code that is actually sequential, and only bites when two borrows truly do overlap in time.
+
+## Trade-offs
+
+The exclusivity rule is what makes `unsafe`-free Rust immune to data races and iterator invalidation, and NLL/two-phase borrows remove almost all of the false positives an earlier, more lexical version of the borrow checker used to produce. What remains is a real, occasionally frustrating cost: patterns that are obviously safe to a human — mutating one field of a struct while reading another, or restructuring a loop that both reads and conditionally mutates a collection — sometimes still need to be rewritten (split borrows on fields, collect-then-extend on collections) purely to satisfy a checker that reasons about whole values, not always about the specific bytes a human can see are unrelated.
+
+## Common Misconceptions
+
+- **"Two mutable references are fine as long as I never actually use them both."** `E0499` fires the moment both borrows are simultaneously *live*, regardless of whether you ever call a method through the second one — the compiler tracks borrow scopes, not whether you happened to read from a particular reference.
+- **"`v.push(v.len())` must be a special-cased hack, not a real rule."** It is a deliberate, named feature — two-phase borrows — not an inconsistency. The `&mut` your `.push()` call needs is only *reserved* while its own arguments are still evaluating, and becomes fully exclusive only once the call actually happens.
+- **"Iterating with `for x in &v` and mutating `v` inside the loop is fine as long as I don't touch the specific element I'm looking at."** The compiler cannot reason at that granularity — and for good reason: `v.push(...)` can trigger a full reallocation that invalidates every element's address, not just the one you thought you were leaving alone.
+
+## Reading AI-generated code
+
+AI assistants frequently hold onto a reference into a `Vec` (often via indexing, `&v[0]`) across a call that can reallocate the vector, such as `.push()` — the code looks obviously fine because the value at that index "shouldn't change," but the compiler is reasoning about the buffer's address, not the value.
+
+<SpotTheBug code={`fn main() {
+    let mut v = vec![1, 2, 3];
+    let first = &v[0];
+    v.push(4);
+    println!("first is: {}", first);
+}
+`}>
+This does not compile — `error[E0502]: cannot borrow \`v\` as mutable because it is also borrowed as immutable` — and that is the point: it is exactly the pattern an AI assistant writes when it assumes `&v[0]` is a stable value rather than a live borrow of the buffer `v` currently owns. `.push(4)` can force `v` to allocate a new, larger buffer and move every element into it, which would leave `first` pointing at freed memory if the compiler allowed it. The fix is to read `v[0]` into an owned value before the push (`let first = v[0];` for `Copy` elements, or `.clone()` for non-`Copy` ones), or to reorder so the last use of `first` happens before `v.push(4)`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Any number of readers or exactly one writer, never both, checked entirely at compile time — NLL and two-phase borrows exist only to make that rule line up with how sequential code actually reads, never to weaken it.
+</Callout>
+
 export const quizMutableBorrows = [
     {
         q: "What syntax creates a mutable reference to a variable named data?",
         options: ["&data", "mut &data", "&mut data", "ref mut data"],
-        answer: 2
+        answer: 2,
+        explain: "&mut data creates an exclusive, mutable reference. `mut &data` and `ref mut data` are not valid Rust syntax for this."
     },
     {
         q: "How many mutable references to the same value can exist at the same time?",
         options: ["Zero", "Exactly one", "Two", "Any number"],
-        answer: 1
+        answer: 1,
+        explain: "The exclusivity rule allows exactly one live &mut T at a time — a second one, even with no shared references involved, is error[E0499]."
     },
     {
         q: "Can you hold a shared reference and a mutable reference to the same value simultaneously?",
@@ -140,7 +421,8 @@ export const quizMutableBorrows = [
             "No — the borrow checker forbids this combination",
             "Only if the value is Copy"
         ],
-        answer: 2
+        answer: 2,
+        explain: "A shared reference and a mutable reference to the same value can never be simultaneously live — that combination is exactly what error[E0502] catches."
     },
     {
         q: "What compile-time problem does the exclusive-access rule for &mut T prevent?",
@@ -150,7 +432,52 @@ export const quizMutableBorrows = [
             "Data races and iterator invalidation",
             "Unused variable warnings"
         ],
-        answer: 2
+        answer: 2,
+        explain: "Guaranteeing at most one writer (or many readers, never both) at compile time rules out data races entirely and catches iterator-invalidation patterns like mutating a Vec while iterating over it."
+    },
+    {
+        q: "Does this compile?\n```rust\nfn main() {\n    let mut v = vec![1, 2, 3];\n    v.push(v.len());\n    println!(\"{:?}\", v);\n}\n```",
+        options: [
+            "No — error[E0502], the same as any other shared-plus-mutable conflict",
+            "Yes — two-phase borrows let v.len() be read before the &mut from .push() becomes fully active",
+            "No — you must always write `let len = v.len(); v.push(len);` instead",
+            "Yes, but only because Vec<i32> happens to implement Copy"
+        ],
+        answer: 1,
+        explain: "Two-phase borrows reserve .push()'s &mut v while its argument (v.len()) is still evaluating, and only activate it exclusively once the call happens — so this specific, very common shape compiles."
+    },
+    {
+        q: "What does this program print?\n```rust\nfn add_one(n: &mut i32) {\n    *n += 1;\n}\nfn main() {\n    let mut x = 41;\n    let r = &mut x;\n    add_one(&mut *r);\n    add_one(r);\n    println!(\"{}\", x);\n}\n```",
+        options: [
+            "It fails to compile — you cannot use r twice after reborrowing it",
+            "41",
+            "43",
+            "It fails to compile — &mut *r is not valid syntax"
+        ],
+        answer: 2,
+        explain: "&mut *r reborrows r for the first add_one call, and that reborrow ends when add_one returns, so r is usable again for the second call — x is incremented twice, from 41 to 43."
+    },
+    {
+        q: "Why does this fail to compile?\n```rust\nfn main() {\n    let mut v = vec![1, 2, 3];\n    for x in &v {\n        v.push(*x);\n    }\n}\n```",
+        options: [
+            "for loops cannot iterate over Vec<i32> at all",
+            "*x has the wrong type for .push()",
+            "The for loop holds a shared borrow of v for its entire duration, and .push() needs &mut v — the same exclusivity violation as any other read/write conflict",
+            "v was never declared as mut"
+        ],
+        answer: 2,
+        explain: "`for x in &v` borrows v as &Vec<i32> for the whole loop. `v.push(*x)` needs &mut v while that shared borrow is still live — error[E0502] — because push can reallocate and invalidate the iterator's position."
+    },
+    {
+        q: "What is the idiomatic fix for this E0507 error?\n```rust\nstruct Wrapper { text: String }\nfn main() {\n    let w = Wrapper { text: String::from(\"inside\") };\n    let r = &w;\n    let taken = r.text; // E0507\n    println!(\"{}\", taken);\n}\n```",
+        options: [
+            "Add #[derive(Copy)] to Wrapper so text can be moved out",
+            "Change `let taken = r.text;` to `let taken = r.text.clone();`",
+            "Remove the `let r = &w;` line entirely",
+            "Change the struct field to `text: &str`"
+        ],
+        answer: 1,
+        explain: "You can never move a non-Copy field out from behind any reference. Cloning it is the idiomatic fix here — Wrapper cannot derive Copy because String isn't Copy, and removing the borrow would defeat the point of the example."
     }
 ];
 

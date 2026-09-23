@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## What is Ownership?
 
@@ -79,11 +81,93 @@ export const ownershipIntroCode = `fn main() {
 Ownership violations are caught at **compile time**, not at runtime. If your program compiles, the memory model guarantees are upheld — no buffer overflows, no dangling pointers, no data races from unsynchronized access.
 </Callout>
 
+## Which Chapter Do I Need?
+
+Every line of Rust code that touches a value is really answering one question: *what do I need to do with this value right now?* The answer routes you to one of the four lessons in this module.
+
+<Mermaid code={`flowchart TD
+    Q{What do you need from the value?}
+    Q -->|Give it away for good| MOVE[Move ownership - this lesson, Ownership and Moves]
+    Q -->|Just read it| REF[Shared reference, read-only - References and Borrowing]
+    Q -->|Change it in place| MUT[Exclusive reference, mutable - Mutable Borrows]
+    Q -->|Only need part of a collection| SLICE[Borrowed view - Slices]`} title="Ownership decision flow" />
+
+If you are not sure yet, the default in idiomatic Rust is almost always **borrow first** (`&T`, or `&mut T` if you must mutate) and reach for a move only when the callee genuinely needs to own the value afterward — for example, storing it in a struct or sending it to another thread.
+
+## What the Compiler Says: Reusing a Moved Value
+
+The single most common first error every Rust learner hits is using a value after it has moved. Here it is with a `Vec<i32>` instead of a `String`, to show the rule is about the type's `Copy`-ness, not about strings specifically:
+
+```rust
+// @expect-error E0382
+fn main() {
+    let v1 = vec![1, 2, 3];
+    let v2 = v1; // v1 moves into v2 — Vec<i32> is not Copy
+    println!("{:?}", v1); // ERROR: v1 was moved
+    println!("{:?}", v2);
+}
+```
+
+```text
+error[E0382]: borrow of moved value: `v1`
+ --> src/main.rs:4:22
+  |
+2 |     let v1 = vec![1, 2, 3];
+  |         -- move occurs because `v1` has type `Vec<i32>`, which does not implement the `Copy` trait
+3 |     let v2 = v1; // v1 moves into v2 — Vec<i32> is not Copy
+  |              -- value moved here
+4 |     println!("{:?}", v1); // ERROR: v1 was moved
+  |                      ^^ value borrowed here after move
+  |
+help: consider cloning the value if the performance cost is acceptable
+  |
+3 |     let v2 = v1.clone(); // v1 moves into v2 — Vec<i32> is not Copy
+  |                ++++++++
+```
+
+Notice the compiler names the exact rule: `Vec<i32>` "does not implement the `Copy` trait." The next lesson, Ownership & Moves, is entirely about which types do and why that distinction exists.
+
+## Mental Model
+
+Think of ownership as a single-owner tree, not a web of pointers. At every instant, each value has exactly one variable that is responsible for freeing it — moving a value re-roots that responsibility onto a new variable, and it never duplicates. Borrowing (`&T` and `&mut T`) does not touch this tree at all — it just opens a temporary, compiler-checked window onto a value someone else still owns, and the window is guaranteed to close before the owner does.
+
+## Trade-offs
+
+Compile-time ownership checking has a real cost: it is more upfront mental effort than a garbage-collected language, and the compiler will reject some patterns that are actually safe but that it cannot prove safe (shared mutable graphs are the classic example — Rust pushes those into `Rc`/`RefCell`, covered later in the course). What you get in exchange is zero runtime overhead for memory safety — no GC pause, no reference-counting tax by default — and a whole category of bugs (use-after-free, double-free, data races on shared data) that simply cannot compile.
+
+## Common Misconceptions
+
+- **"Moving a value copies it, like assignment does in most other languages."** The opposite is true by default: assignment *moves* non-`Copy` values and invalidates the original. Only types that explicitly implement `Copy` get a bitwise duplicate instead — the next lesson covers exactly which types qualify and why.
+- **"The three rules mean Rust is silently copying data behind my back to stay safe."** No hidden copies happen. The compiler either transfers ownership (cheap: it copies a small fixed-size header, never the underlying heap data) or lets you borrow — an explicit `.clone()` is the only way to get a real duplicate of the data.
+- **"Once I understand the `&` syntax, I understand ownership."** Syntax is the easy part. The rule that takes longest to internalize is the *exclusivity* invariant enforced across an entire function body — that a value can have many readers or one writer, never both — which the Mutable Borrows lesson covers in depth.
+
+## Reading AI-generated code
+
+AI assistants very often write function signatures that take ownership (`s: String`) when the function body only ever reads the value. This compiles fine, so nothing flags it automatically — but it forces every caller to either move their own value away or add an unnecessary `.clone()`.
+
+<SpotTheBug code={`fn print_summary(title: String) {
+    println!("Summary: {}", title);
+}
+
+fn main() {
+    let title = String::from("Quarterly Report");
+    print_summary(title);
+    // println!("{}", title); // would not compile — title was moved for no reason
+}
+`}>
+`print_summary` never mutates or stores `title` — it only reads it once to print. Taking `String` by value forces the caller to give up ownership (or clone) just to make one read-only call. The fix, covered in the next lesson, is to take a reference instead: `fn print_summary(title: &str)`, called as `print_summary(&title)` — the caller keeps `title` usable afterward, and no heap data is copied at all.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Ownership answers "who frees this," borrowing answers "who can read or write it right now" — and every syntax choice in this module exists to let you pick the cheapest one that is still provably safe.
+</Callout>
+
 export const quizOwnershipIndex = [
     {
         q: "How many owners can a value have at one time in Rust?",
         options: ["Zero", "Exactly one", "As many as needed", "At most two"],
-        answer: 1
+        answer: 1,
+        explain: "Rust's first ownership rule is that every value has exactly one owner at any given moment — that single owner is responsible for freeing it."
     },
     {
         q: "What happens to a value when its owner goes out of scope?",
@@ -93,7 +177,8 @@ export const quizOwnershipIndex = [
             "It is dropped — its memory is freed immediately",
             "It becomes a dangling pointer"
         ],
-        answer: 2
+        answer: 2,
+        explain: "Rust inserts a call to Drop::drop at the exact point the owner goes out of scope — there is no GC cycle to wait for; cleanup is deterministic and immediate."
     },
     {
         q: "Which mechanism does Rust use to guarantee memory safety?",
@@ -103,7 +188,30 @@ export const quizOwnershipIndex = [
             "A mark-and-sweep GC that runs between function calls",
             "Manual malloc/free calls inserted by the programmer"
         ],
-        answer: 1
+        answer: 1,
+        explain: "Rust has no GC of any kind by default. The borrow checker proves ownership and borrowing rules hold before the program ever runs, then compiles the drop calls in directly."
+    },
+    {
+        q: "Does this compile? What happens if you try?\n```rust\nfn main() {\n    let a = vec![1, 2, 3];\n    let b = a;\n    println!(\"{:?}\", a);\n}\n```",
+        options: [
+            "It fails to compile: error[E0382] borrow of moved value: `a`",
+            "It prints [1, 2, 3] twice",
+            "It prints [1, 2, 3] then an empty vector",
+            "It compiles but panics at runtime"
+        ],
+        answer: 0,
+        explain: "Vec<i32> is not Copy, so `let b = a;` moves a into b. Using a afterward is a compile-time error, not a runtime one — this is caught before the program can ever run."
+    },
+    {
+        q: "What does this program print?\n```rust\nfn main() {\n    let x = 5;\n    let y = x;\n    println!(\"{} {}\", x, y);\n}\n```",
+        options: [
+            "It fails to compile because y also needs mut",
+            "5 5 — i32 implements Copy, so x remains valid after the assignment",
+            "5 then a compile error referencing x on the second use",
+            "It prints only 5 once because x is moved into y"
+        ],
+        answer: 1,
+        explain: "i32 is a Copy type, so `let y = x;` makes a bitwise copy instead of moving. Both x and y are valid afterward, and the program prints \"5 5\"."
     }
 ];
 

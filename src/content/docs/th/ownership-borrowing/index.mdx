@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Ownership คืออะไร?
 
@@ -79,11 +81,93 @@ export const ownershipIntroCode = `fn main() {
 การละเมิดกฎ ownership จะถูกจับได้ตอน **compile time** ไม่ใช่ตอน runtime ถ้าโปรแกรมของคุณคอมไพล์ผ่าน การรับประกันของโมเดลหน่วยความจำก็จะเป็นจริงเสมอ — ไม่มี buffer overflow ไม่มี dangling pointer ไม่มี data race จากการเข้าถึงที่ไม่ได้ซิงค์กัน
 </Callout>
 
+## ต้องอ่านบทไหน?
+
+ทุกบรรทัดของโค้ด Rust ที่แตะค่าใดค่าหนึ่ง จริง ๆ แล้วกำลังตอบคำถามเดียว: *ตอนนี้ฉันต้องทำอะไรกับค่านี้?* คำตอบจะพาไปยังหนึ่งในสี่บทของโมดูลนี้
+
+<Mermaid code={`flowchart TD
+    Q{What do you need from the value?}
+    Q -->|Give it away for good| MOVE[Move ownership - this lesson, Ownership and Moves]
+    Q -->|Just read it| REF[Shared reference, read-only - References and Borrowing]
+    Q -->|Change it in place| MUT[Exclusive reference, mutable - Mutable Borrows]
+    Q -->|Only need part of a collection| SLICE[Borrowed view - Slices]`} title="แผนภาพการตัดสินใจเรื่อง ownership" />
+
+ถ้ายังไม่แน่ใจ ค่าเริ่มต้นของ Rust แบบ idiomatic เกือบทุกครั้งคือ **borrow ก่อนเสมอ** (`&T` หรือ `&mut T` ถ้าจำเป็นต้อง mutate) แล้วค่อยเลือก move เมื่อฟังก์ชันที่เรียกต้องเป็นเจ้าของค่านั้นจริง ๆ เท่านั้น — เช่น เก็บมันไว้ใน struct หรือส่งข้าม thread
+
+## Compiler พูดว่าอะไร: การใช้ค่าที่ถูก Move ไปแล้ว
+
+error แรกที่ผู้เรียน Rust แทบทุกคนเจอคือการใช้ค่าหลังจากมันถูก move ไปแล้ว ตัวอย่างนี้ใช้ `Vec<i32>` แทน `String` เพื่อแสดงว่ากฎนี้อยู่ที่ความเป็น `Copy` ของ type ไม่ใช่เรื่องเฉพาะของ string:
+
+```rust
+// @expect-error E0382
+fn main() {
+    let v1 = vec![1, 2, 3];
+    let v2 = v1; // v1 moves into v2 — Vec<i32> is not Copy
+    println!("{:?}", v1); // ERROR: v1 was moved
+    println!("{:?}", v2);
+}
+```
+
+```text
+error[E0382]: borrow of moved value: `v1`
+ --> src/main.rs:4:22
+  |
+2 |     let v1 = vec![1, 2, 3];
+  |         -- move occurs because `v1` has type `Vec<i32>`, which does not implement the `Copy` trait
+3 |     let v2 = v1; // v1 moves into v2 — Vec<i32> is not Copy
+  |              -- value moved here
+4 |     println!("{:?}", v1); // ERROR: v1 was moved
+  |                      ^^ value borrowed here after move
+  |
+help: consider cloning the value if the performance cost is acceptable
+  |
+3 |     let v2 = v1.clone(); // v1 moves into v2 — Vec<i32> is not Copy
+  |                ++++++++
+```
+
+สังเกตว่าคอมไพเลอร์เอ่ยชื่อกฎตรง ๆ: `Vec<i32>` "does not implement the `Copy` trait" บทถัดไป Ownership และ Moves จะพูดถึงเรื่องนี้ทั้งบท ว่า type ไหนเป็น `Copy` และทำไม
+
+## Mental Model
+
+ให้คิดว่า ownership เป็นต้นไม้ที่มีเจ้าของเพียงคนเดียว ไม่ใช่ตาข่ายของ pointer ในทุกขณะ แต่ละค่าจะมีตัวแปรเพียงหนึ่งเดียวที่รับผิดชอบการคืนหน่วยความจำของมัน — การ move ค่าคือการย้ายความรับผิดชอบนั้นไปยังตัวแปรใหม่ ไม่เคยทำสำเนาซ้ำ ส่วนการ borrow (`&T` และ `&mut T`) ไม่แตะต้นไม้นี้เลย มันแค่เปิดหน้าต่างชั่วคราวที่คอมไพเลอร์ตรวจสอบแล้วไปยังค่าที่คนอื่นยังเป็นเจ้าของอยู่ และหน้าต่างนั้นรับประกันว่าจะปิดก่อนที่เจ้าของจะปิดมันเอง
+
+## Trade-offs
+
+การเช็ก ownership ตอน compile time มีต้นทุนจริง: มันต้องใช้ความคิดล่วงหน้ามากกว่าภาษาที่มี garbage collector และคอมไพเลอร์จะปฏิเสธบาง pattern ที่จริง ๆ ปลอดภัยแต่มันพิสูจน์ไม่ได้ (กราฟที่แชร์ mutable state คือตัวอย่างคลาสสิก — Rust ผลักเรื่องนี้ไปให้ `Rc`/`RefCell` ซึ่งจะพูดถึงทีหลังในคอร์ส) สิ่งที่ได้กลับมาคือ overhead ตอน runtime สำหรับความปลอดภัยของหน่วยความจำเป็นศูนย์ — ไม่มี GC pause ไม่มีภาษีของการนับ reference โดย default — และบั๊กทั้งหมวด (use-after-free, double-free, data race บนข้อมูลที่แชร์กัน) จะคอมไพล์ไม่ผ่านเลย
+
+## Common Misconceptions
+
+- **"การ move ค่าคือการ copy มัน เหมือนกับการ assign ในภาษาอื่น ๆ ส่วนใหญ่"** ตรงกันข้ามคือความจริงโดย default: การ assign จะ *move* ค่าที่ไม่ใช่ `Copy` และทำให้ตัวเดิมใช้งานไม่ได้ มีแค่ type ที่ implement `Copy` อย่างชัดเจนเท่านั้นที่จะได้สำเนาแบบ bitwise แทน — บทถัดไปจะบอกว่า type ไหนเข้าเงื่อนไขนี้และทำไม
+- **"กฎสามข้อนี้แปลว่า Rust แอบ copy ข้อมูลอยู่เบื้องหลังเพื่อความปลอดภัย"** ไม่มี copy แบบซ่อนเกิดขึ้นเลย คอมไพเลอร์จะถ่ายโอน ownership เท่านั้น (ถูก: มัน copy แค่ header ขนาดคงที่เล็ก ๆ ไม่เคย copy ข้อมูลบน heap) หรือไม่ก็ให้คุณ borrow — การเรียก `.clone()` อย่างชัดเจนเท่านั้นที่จะได้สำเนาจริงของข้อมูล
+- **"พอเข้าใจ syntax `&` แล้ว ก็เข้าใจ ownership ทั้งหมดแล้ว"** syntax คือส่วนที่ง่ายที่สุด กฎที่ใช้เวลาซึมซับนานที่สุดคือ invariant เรื่อง *exclusivity* ที่บังคับใช้ตลอดทั้งฟังก์ชัน — ว่าค่าหนึ่งมีผู้อ่านได้หลายคนหรือผู้เขียนได้คนเดียว ไม่เคยทั้งสองอย่างพร้อมกัน — ซึ่งบท Mutable Borrows จะลงลึกเรื่องนี้
+
+## อ่านโค้ดที่ AI เขียน
+
+AI assistant มักเขียน function signature ที่รับ ownership ไปเลย (`s: String`) ทั้งที่ body ของฟังก์ชันแค่อ่านค่านั้นเท่านั้น โค้ดแบบนี้ compile ผ่านสบาย ๆ จึงไม่มีอะไรเตือนอัตโนมัติ — แต่มันบังคับให้ caller ทุกคนต้อง move ค่าของตัวเองทิ้งไป หรือไม่ก็ต้องเติม `.clone()` ที่ไม่จำเป็น
+
+<SpotTheBug code={`fn print_summary(title: String) {
+    println!("Summary: {}", title);
+}
+
+fn main() {
+    let title = String::from("Quarterly Report");
+    print_summary(title);
+    // println!("{}", title); // would not compile — title was moved for no reason
+}
+`}>
+`print_summary` ไม่เคย mutate หรือเก็บ `title` ไว้เลย — มันแค่อ่านครั้งเดียวเพื่อ print การรับ `String` แบบ by value บังคับให้ caller ต้องสละ ownership (หรือ clone) แค่เพื่อเรียกฟังก์ชันแบบอ่านอย่างเดียว ทางแก้ที่บทถัดไปจะพูดถึงคือรับ reference แทน: `fn print_summary(title: &str)` เรียกด้วย `print_summary(&title)` — caller จะยังใช้ `title` ต่อได้ และไม่มีการ copy ข้อมูลบน heap เลย
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Ownership ตอบคำถาม "ใครมีหน้าที่คืนหน่วยความจำนี้" ส่วน borrowing ตอบคำถาม "ใครอ่านหรือเขียนมันได้ตอนนี้" — และทุกทางเลือกของ syntax ในโมดูลนี้มีไว้เพื่อให้คุณเลือกวิธีที่ถูกที่สุดที่ยังพิสูจน์ได้ว่าปลอดภัย
+</Callout>
+
 export const quizOwnershipIndex = [
     {
         q: "ใน Rust ค่าหนึ่งค่าสามารถมีเจ้าของได้กี่คนในเวลาเดียวกัน?",
         options: ["ศูนย์", "หนึ่งเดียวเท่านั้น", "มากเท่าที่ต้องการ", "ไม่เกินสอง"],
-        answer: 1
+        answer: 1,
+        explain: "กฎ ownership ข้อแรกของ Rust คือทุกค่ามีเจ้าของเพียงหนึ่งเดียวในทุกขณะ — เจ้าของคนเดียวนั้นรับผิดชอบการคืนหน่วยความจำของมัน"
     },
     {
         q: "เกิดอะไรขึ้นกับค่าเมื่อเจ้าของของตัวเองออกจาก scope?",
@@ -93,7 +177,8 @@ export const quizOwnershipIndex = [
             "ถูก dropped — หน่วยความจำถูกคืนทันที",
             "กลายเป็น dangling pointer"
         ],
-        answer: 2
+        answer: 2,
+        explain: "Rust แทรกการเรียก Drop::drop ตรงจุดที่เจ้าของออกจาก scope พอดี — ไม่มีรอบ GC ให้รอ การคืนหน่วยความจำเกิดขึ้นทันทีและคาดเดาได้"
     },
     {
         q: "Rust ใช้กลไกใดเพื่อรับประกันความปลอดภัยของหน่วยความจำ?",
@@ -103,7 +188,30 @@ export const quizOwnershipIndex = [
             "GC แบบ mark-and-sweep ที่ทำงานระหว่างการเรียกฟังก์ชัน",
             "การเรียก malloc/free ด้วยมือที่โปรแกรมเมอร์แทรกเอง"
         ],
-        answer: 1
+        answer: 1,
+        explain: "Rust ไม่มี GC แบบใดเลยโดย default borrow checker พิสูจน์กฎ ownership และ borrowing ให้เป็นจริงก่อนโปรแกรมจะรันด้วยซ้ำ แล้วค่อย compile การเรียก drop เข้าไปตรง ๆ"
+    },
+    {
+        q: "โค้ดนี้ compile ไหม? ถ้าลองรันจะเกิดอะไรขึ้น?\n```rust\nfn main() {\n    let a = vec![1, 2, 3];\n    let b = a;\n    println!(\"{:?}\", a);\n}\n```",
+        options: [
+            "compile ไม่ผ่าน: error[E0382] borrow of moved value: `a`",
+            "print [1, 2, 3] สองครั้ง",
+            "print [1, 2, 3] แล้วตามด้วย vector ว่าง",
+            "compile ผ่านแต่ panic ตอน runtime"
+        ],
+        answer: 0,
+        explain: "Vec<i32> ไม่ใช่ Copy ดังนั้น `let b = a;` จะ move a เข้าไปใน b การใช้ a ต่อจากนั้นเป็น error ตอน compile time ไม่ใช่ runtime — ถูกจับได้ก่อนโปรแกรมจะรันด้วยซ้ำ"
+    },
+    {
+        q: "โปรแกรมนี้ print อะไร?\n```rust\nfn main() {\n    let x = 5;\n    let y = x;\n    println!(\"{} {}\", x, y);\n}\n```",
+        options: [
+            "compile ไม่ผ่านเพราะ y ก็ต้องเป็น mut ด้วย",
+            "5 5 — i32 implement Copy ดังนั้น x ยังใช้ได้หลัง assign",
+            "5 แล้วตามด้วย compile error ที่การใช้ x ครั้งที่สอง",
+            "print แค่ 5 ครั้งเดียวเพราะ x ถูก move เข้า y"
+        ],
+        answer: 1,
+        explain: "i32 เป็น Copy type ดังนั้น `let y = x;` จะทำสำเนาแบบ bitwise แทนการ move ทั้ง x และ y จึงยังใช้ได้ และโปรแกรม print \"5 5\""
     }
 ];
 

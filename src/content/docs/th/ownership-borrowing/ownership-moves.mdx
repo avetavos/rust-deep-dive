@@ -1,6 +1,6 @@
 ---
 title: 'Ownership และ Moves'
-description: 'แต่ละค่ามีเจ้าของหนึ่งเดียว การ assign หรือส่งค่าที่ไม่ใช่ Copy จะ move ค่านั้น ค่า Copy จะถูกทำซ้ำ ใช้ .clone() เพื่อทำ deep copy แบบชัดเจน'
+description: 'Each value has one owner. Assigning or passing a non-Copy value moves it. Copy types are duplicated. Use .clone() for an explicit deep copy.'
 sidebar:
   order: 2
 ---
@@ -9,14 +9,16 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
-## เจ้าของได้ทีละหนึ่ง
+## เจ้าของเดียวในเวลาเดียว
 
-ทุกค่าใน Rust มีเจ้าของเพียงหนึ่งเดียว เมื่อคุณ assign ค่าให้ตัวแปรอีกตัว หรือส่งค่านั้นเข้าไปในฟังก์ชัน **สิ่งที่เกิดขึ้นขึ้นอยู่กับว่า type นั้น implement `Copy` หรือไม่**
+ค่าทุกตัวใน Rust มีเจ้าของเพียงหนึ่งเดียว เมื่อคุณ assign ค่าให้ตัวแปรอื่น หรือส่งมันเข้าไปในฟังก์ชัน **สิ่งที่เกิดขึ้นขึ้นอยู่กับว่า type นั้น implement `Copy` หรือไม่**
 
-### Type ที่ไม่ใช่ `Copy` จะ Move
+### Type ที่ไม่ใช่ `Copy` จะถูก Move
 
-Type ที่เป็นเจ้าของหน่วยความจำบน heap — อย่างเช่น `String`, `Vec<i32>` หรือ `Box<i32>` — จะ **ไม่** implement `Copy` เมื่อคุณ assign ตัวหนึ่งไปยังอีกตัวแปรหนึ่ง ค่านั้นจะถูก **moved**: binding เดิมจะใช้งานไม่ได้
+Type ที่เป็นเจ้าของหน่วยความจำบน heap — เช่น `String`, `Vec<i32>`, หรือ `Box<i32>` — จะ **ไม่** implement `Copy` เมื่อคุณ assign ตัวหนึ่งให้ตัวแปรอื่น ค่านั้นจะถูก **move**: binding เดิมจะใช้งานไม่ได้อีกต่อไป
 
 ```rust
 // @expect-error E0382
@@ -29,7 +31,7 @@ fn main() {
 }
 ```
 
-การใช้ `s1` หลังจากถูก move ไปแล้วคือ compile-time error:
+การใช้ `s1` หลังจากถูก move คือ compile-time error:
 
 ```text
 error[E0382]: borrow of moved value: `s1`
@@ -49,9 +51,9 @@ help: consider cloning the value if the performance cost is acceptable
   |                ++++++++
 ```
 
-ทางแก้ที่คอมไพเลอร์แนะนำเองคือ `.clone()` — และนั่นคือกับดัก: การหยิบ `.clone()` มาใช้ทุกครั้งที่ borrow checker ฟ้อง คือ "smell" ที่พบบ่อยที่สุดในโค้ด Rust ที่ AI เขียน มันทำให้ error หายไปก็จริง แต่บ่อยครั้งความหมายที่แท้จริงคือโค้ดควร borrow (`&s1`) แทนที่จะ move ตั้งแต่แรก ใช้ `.clone()` เมื่อคุณต้องการ deep copy จริงๆ อย่างตั้งใจ — ไม่ใช่เป็นปฏิกิริยาอัตโนมัติเพื่อทำให้ error หายไป
+ทางแก้ที่คอมไพเลอร์แนะนำเองคือ `.clone()` — และนั่นคือกับดักพอดี: การหยิบ `.clone()` มาใช้ทุกครั้งที่ borrow checker บ่นคือ "smell" ที่พบบ่อยที่สุดในโค้ด Rust ที่ AI เขียน มันทำให้ error หายไปก็จริง แต่บ่อยครั้งมันแปลว่าโค้ดควร borrow (`&s1`) ตั้งแต่แรกแทนที่จะ move ให้มอง `.clone()` เป็นการทำ deep copy อย่างตั้งใจสำหรับตอนที่คุณต้องการมันจริง ๆ — ไม่ใช่ปฏิกิริยาสะท้อนเพื่อทำให้ error หายไป
 
-กฎเดียวกันนี้ใช้เมื่อคุณส่งค่าเข้าไปในฟังก์ชัน:
+กฎเดียวกันนี้ใช้ตอนที่คุณส่งค่าเข้าไปในฟังก์ชันด้วย:
 
 ```rust
 fn consume(s: String) {
@@ -65,9 +67,40 @@ fn main() {
 }
 ```
 
-### Type ที่เป็น `Copy` จะถูกทำซ้ำ
+### สิ่งที่ Move เกิดขึ้นจริง ๆ ในหน่วยความจำ
 
-Type แบบ scalar ง่าย ๆ ที่เก็บอยู่บน stack ทั้งหมด — จำนวนเต็ม, `bool`, `char`, ตัวเลขทศนิยม และ tuple ของสิ่งเหล่านี้ — จะ implement `Copy` การ assign หรือส่งต่อค่าเหล่านี้จะทำ **copy แบบ bitwise**; ตัวเดิมยังใช้งานได้
+error ข้างบนทำให้เกิดคำถามที่ชัดเจน: ถ้า `s2 = s1` ทำงานถูกกว่านี้ แล้ว byte ของ `"hello"` เกิดอะไรขึ้น? `String` ไม่ใช่ตัว text เอง — มันคือ **header** ขนาดเล็กคงที่ที่อยู่บน stack: pointer ไปยัง heap buffer, ความยาว, และ capacity วัดจริงบน toolchain นี้:
+
+```rust
+fn main() {
+    println!("size_of::<String>() = {}", std::mem::size_of::<String>());
+}
+```
+
+```text
+size_of::<String>() = 24
+```
+
+field ประเภท `usize` สามตัว (pointer, length, capacity) ตัวละ 8 byte บน target 64-bit — รวม 24 byte ส่วน byte จริงของ UTF-8 (`h`, `e`, `l`, `l`, `o`) อยู่แยกต่างหากบน heap
+
+`let s2 = s1;` copy แค่ header 24 byte นั้นจาก stack slot ของ `s1` ไปยัง stack slot ของ `s2` **มันไม่แตะ byte บน heap เลย** — การ copy มันจะสิ้นเปลืองโดยใช่เหตุ และนั่นคือสิ่งที่ `.clone()` มีไว้สำหรับตอนที่คุณต้องการมันจริง ๆ
+
+<Mermaid code={`flowchart TB
+    subgraph Stack
+        H1[s1 header - ptr len 5 cap 5 - marked moved, unusable]
+        H2[s2 header - ptr len 5 cap 5 - now the owner]
+    end
+    subgraph Heap
+        BUF[heap buffer - 5 bytes - h e l l o]
+    end
+    H1 -. compiler forbids reading this .-> BUF
+    H2 -->|owns it, will free it on drop| BUF`} title="การ move copy header 24 byte เท่านั้น ไม่เคย copy byte บน heap" />
+
+นี่คือเหตุผลว่าทำไมคอมไพเลอร์ต้องปฏิเสธการใช้ `s1` ต่อจากนั้น แทนที่จะปล่อยให้มันเป็น pointer ซ้ำที่ไม่มีพิษภัย: ทั้ง `s1` และ `s2` จะชี้ไปยัง heap buffer เดียวกันเป๊ะ ถ้าทั้งคู่ออกจาก scope ได้ ทั้งคู่จะพยายามคืน pointer เดียวกัน — เกิด **double free** แทนที่จะเป็นแบบนั้น คอมไพเลอร์ track `s1` ว่า "moved-from" และห้ามการใช้งานมันทุกจุดตอน compile time ทำให้มีแค่ destructor ของ `s2` เท่านั้นที่จะรัน
+
+### `Copy` Types ถูกทำซ้ำ
+
+Type สเกลาร์ง่าย ๆ ที่อยู่บน stack ทั้งหมด — integer, `bool`, `char`, floating-point, และ tuple ของสิ่งเหล่านี้ — implement `Copy` การ assign หรือส่งพวกมันคือการทำ **bitwise copy**; ตัวเดิมยังใช้งานได้ต่อ
 
 ```rust
 fn main() {
@@ -77,11 +110,47 @@ fn main() {
 }
 ```
 
-Type ที่เป็น `Copy` ที่พบบ่อย: `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `f32`, `f64`, `bool`, `char`
+`Copy` type ที่พบบ่อย: `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `f32`, `f64`, `bool`, `char`
 
-### Deep Copy แบบชัดเจนด้วย `.clone()`
+### `Copy` กับ `Clone`: ทำไม Derive ทั้งคู่พร้อมกันไม่ได้เสมอไป
 
-เมื่อคุณต้องการ copy แบบอิสระเต็มรูปแบบของค่าที่เป็นเจ้าของหน่วยความจำบน heap ให้เรียก `.clone()` นี่คือการเลือกทำ (opt-in) อย่างชัดเจนต่อการดำเนินการที่อาจมีค่าใช้จ่ายสูง
+`Copy` เป็น marker trait: มันบอกคอมไพเลอร์ว่า "การ assign ทำสำเนาแบบ bit-for-bit ได้แทนการ move" ซึ่งจะถูกต้องก็ต่อเมื่อทุก field ของ type นั้นเป็น `Copy` เอง — type ที่เป็นเจ้าของ heap allocation อย่าง `String` หรือ `Vec<T>` จะเป็น `Copy` ไม่ได้เลย เพราะสำเนาแบบ bitwise จะสร้างเจ้าของสองตัวให้ heap buffer เดียวกัน (ปัญหา double-free จากหัวข้อก่อนหน้า) `Copy` ยังต้องมี `Clone` เป็น supertrait ด้วย: ทุก `Copy` type ต้อง `Clone` ได้ด้วย เพราะ bitwise copy ก็ถือเป็น "clone" ที่ถูกต้องอยู่แล้ว
+
+การพยายาม derive `Copy` บน struct ที่มี field ที่ไม่ใช่ `Copy` คือ compile error ไม่ใช่ warning:
+
+```rust
+// @expect-error E0204
+#[derive(Clone, Copy)]
+struct UserId {
+    label: String,
+    id: u32,
+}
+
+fn main() {
+    let u = UserId { label: String::from("alice"), id: 1 };
+    println!("{} {}", u.label, u.id);
+}
+```
+
+```text
+error[E0204]: the trait `Copy` cannot be implemented for this type
+ --> src/main.rs:2:8
+  |
+1 | #[derive(Clone, Copy)]
+  |                 ---- in this derive macro expansion
+2 | struct UserId {
+  |        ^^^^^^
+3 |     label: String,
+  |     ------------- this field does not implement `Copy`
+
+error: aborting due to 1 previous error
+```
+
+ทางแก้แทบไม่เคยเป็น "ทำให้ `String` implement `Copy`" (มันทำไม่ได้ ด้วยเหตุผล double-free เดียวกัน) — แต่คือการเอา `#[derive(Copy)]` ออกแล้วเก็บแค่ `#[derive(Clone)]` ไว้ แล้วเรียก `.clone()` อย่างชัดเจนตรงจุดที่ต้องการ copy อิสระจริง ๆ เท่านั้น
+
+### Deep Copy อย่างชัดเจนด้วย `.clone()`
+
+เมื่อคุณต้องการ copy อิสระเต็มรูปแบบของค่าที่เป็นเจ้าของ heap ให้เรียก `.clone()` นี่คือการ opt-in อย่างชัดเจนให้กับ operation ที่อาจมีต้นทุนสูง
 
 ```rust
 fn main() {
@@ -91,9 +160,109 @@ fn main() {
 }
 ```
 
+### ลำดับการ `Drop` และ RAII
+
+ค่าใด ๆ ที่มี resource ต้องปล่อย — หน่วยความจำ heap, file handle, lock — สามารถ implement trait `Drop` ได้ และ Rust จะเรียก `drop` ให้อัตโนมัติเมื่อเจ้าของค่าออกจาก scope pattern นี้ ที่การได้มาซึ่ง resource กับการเป็นเจ้าของค่าคือการกระทำเดียวกัน เรียกว่า **RAII** (Resource Acquisition Is Initialization): คุณไม่ต้องเรียก method `close()` หรือ `free()` เองเลย เพราะคอมไพเลอร์รู้อยู่แล้วว่า scope ของแต่ละค่าจบตรงไหนเป๊ะ
+
+*ลำดับ* ที่ `Drop` รันคือกฎจริงที่สังเกตเห็นได้ ไม่ใช่รายละเอียด implementation:
+
+- ตัวแปร local จะ drop ตาม **ลำดับย้อนกลับของการประกาศ** (ประกาศทีหลังสุด, drop ก่อนสุด)
+- field ของ struct จะ drop **ตามลำดับที่ประกาศ** (field แรกก่อน)
+- ค่า temporary ที่ไม่มีชื่อ (เช่น `Guard("...")` ที่ใช้ตรง ๆ ใน expression) จะ drop ที่ **จุดจบของ statement** ที่มันปรากฏอยู่
+
+```rust
+struct Guard(&'static str);
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        println!("dropping {}", self.0);
+    }
+}
+
+struct Holder {
+    first: Guard,
+    second: Guard,
+}
+
+fn main() {
+    let _a = Guard("a (local, declared first)");
+    let _b = Guard("b (local, declared second)");
+    let h = Holder { first: Guard("h.first"), second: Guard("h.second") };
+    println!("holder fields: {} / {}", h.first.0, h.second.0);
+    println!("temporary: {}", Guard("temporary (end of this statement)").0);
+    println!("end of main");
+}
+```
+
+```text
+holder fields: h.first / h.second
+temporary: temporary (end of this statement)
+dropping temporary (end of this statement)
+end of main
+dropping h.first
+dropping h.second
+dropping b (local, declared second)
+dropping a (local, declared first)
+```
+
+`Guard` ที่ไม่มีชื่อจะ drop ทันทีหลัง statement `println!` ที่สร้างมัน — ก่อน `main` จะจบนานมาก จากนั้น ณ จุดจบจริงของ `main` field ของ `h` จะ drop จากตัวแรกไปตัวที่สอง (ตามลำดับประกาศ) แล้วค่อยถึงคิว local `_a` กับ `_b` ที่ drop โดยประกาศทีหลังสุดก่อน (`_b` ก่อน `_a`)
+
+### `mem::take`, `mem::replace`, และ `mem::swap`
+
+บางครั้งคุณต้อง move ค่าออกจาก place ที่คุณไม่ได้เป็นเจ้าของแบบเต็ม ๆ — field ของ struct หรือ mutable reference — ในขณะที่ต้องทิ้งอะไรที่ valid ไว้แทน (คุณทิ้ง field ของ struct ให้ว่างเปล่าจริง ๆ ไม่ได้ ทุก field ต้องมีค่าของ type ของมันตลอดเวลา) ฟังก์ชันใน `std::mem` มีไว้เพื่อสิ่งนี้พอดี:
+
+```rust
+use std::mem;
+
+fn main() {
+    // mem::take leaves the default value (empty String) behind
+    let mut s1 = String::from("original");
+    let taken = mem::take(&mut s1);
+    println!("taken={:?} s1={:?}", taken, s1);
+
+    // mem::replace swaps in a new value and gives back the old one
+    let mut s2 = String::from("old value");
+    let old = mem::replace(&mut s2, String::from("new value"));
+    println!("old={:?} s2={:?}", old, s2);
+
+    // mem::swap exchanges the contents of two bindings in place
+    let mut a = String::from("a-value");
+    let mut b = String::from("b-value");
+    mem::swap(&mut a, &mut b);
+    println!("a={:?} b={:?}", a, b);
+}
+```
+
+```text
+taken="original" s1=""
+old="old value" s2="new value"
+a="b-value" b="a-value"
+```
+
+`mem::take(&mut place)` move ค่าของ `place` ออกมาแล้วทิ้ง `Default::default()` ไว้แทน — ใช้ได้เฉพาะ type ที่ implement `Default` ซึ่ง `String` กับ `Vec<T>` ทำได้ (string ว่าง, vec ว่าง) `mem::replace(&mut place, new)` คือรูปแบบทั่วไปกว่า: มันทิ้งค่า `new` ที่คุณระบุไว้ ไม่ใช่แค่ค่า default ของ type `mem::swap(&mut a, &mut b)` สลับค่าของสองตัวโดยไม่มีตัวไหนกลายเป็น "moved-from" ที่ใช้งานไม่ได้เลย — มีประโยชน์กับ algorithm แบบ in-place ที่ต้องสลับ field ของ struct หรือ element ของ vector
+
+### Partial Moves
+
+การ move field เดียวออกจาก struct หรือ tuple จะทำให้ *เฉพาะ field นั้น* ใช้งานไม่ได้ — ส่วนที่เหลือยังใช้ได้ตามปกติ แม้ว่าตัว struct ทั้งก้อนจะใช้งานหรือ move ต่อไม่ได้อีกแล้ว:
+
+```rust
+struct Pair {
+    a: String,
+    b: String,
+}
+
+fn main() {
+    let p = Pair { a: String::from("a"), b: String::from("b") };
+    let taken = p.a; // partial move: only p.a moves out
+    println!("{} {}", taken, p.b); // p.b is still usable
+}
+```
+
+บท [Structs](/rust/th/structs-enums-matching/structs/) จะพูดถึงเรื่องนี้ลึกกว่านี้ รวมถึงว่า partial move มีผลกับ struct update syntax (`..base`) ยังไง — เวอร์ชันสั้น ๆ ตรงนี้เพียงพอให้จำ pattern นี้ได้เมื่อเจอ
+
 ### การคืน Ownership
 
-ฟังก์ชันสามารถคืน ownership กลับไปให้ผู้เรียกได้ด้วยการ return ค่านั้นออกมา:
+ฟังก์ชันสามารถคืน ownership ให้ caller ได้โดยการ return ค่านั้น:
 
 ```rust
 fn take_and_give_back(s: String) -> String {
@@ -107,7 +276,7 @@ fn main() {
 }
 ```
 
-วิธีนี้ใช้ได้แต่ยืดยาว ในทางปฏิบัติคุณจะเลือกใช้ **borrowing** (บทเรียนถัดไป) แทนการ move-แล้ว-return เกือบทุกครั้ง
+วิธีนี้ถูกต้องแต่ยืดยาว ในทางปฏิบัติ คุณจะเลือก **borrowing** (บทถัดไป) มากกว่าการ move-แล้ว-return แทบทุกครั้ง
 
 export const ownershipMovesCode = `fn take_ownership(s: String) -> String {
     println!("inside take_ownership: {}", s);
@@ -133,8 +302,43 @@ fn main() {
 
 <Playground code={ownershipMovesCode} />
 
-<Callout title="การใช้ค่าที่ถูก move ไปแล้วคือ compile error">
-เมื่อค่าที่ไม่ใช่ `Copy` ถูก move ไปแล้ว คอมไพเลอร์จะทำให้ binding เดิมใช้งานไม่ได้อย่างถาวร ถ้าคุณพยายามใช้ binding นั้นหลังจากนั้นจะได้ **compile-time error** — `error[E0382]: borrow of moved value` คุณจะไม่สามารถเผลอเข้าถึงหน่วยความจำที่ถูกคืนไปแล้วได้
+<Callout title="การใช้ค่าที่ถูก Move ไปแล้วคือ Compile Error">
+เมื่อค่าที่ไม่ใช่ `Copy` ถูก move ไปแล้ว คอมไพเลอร์จะทำให้ binding เดิมใช้งานไม่ได้อย่างถาวร การพยายามใช้มันหลังจากนั้นคือ **compile-time error** — `error[E0382]: borrow of moved value` คุณไม่มีทางเข้าถึงหน่วยความจำที่ถูกคืนไปแล้วโดยไม่ได้ตั้งใจ
+</Callout>
+
+## Mental Model
+
+การ move คือการปลูกถ่าย header ไม่ใช่การ copy ข้อมูล: สำหรับ type ที่เป็นเจ้าของ heap มีแค่ record ขนาดคงที่เล็ก ๆ (pointer/length/capacity) เท่านั้นที่เปลี่ยนมือ และคอมไพเลอร์ลบความสามารถในการใช้ชื่อเดิม เพื่อไม่ให้มีจังหวะไหนที่สองชื่ออ้าง heap buffer เดียวกันพร้อมกัน `Copy` type ข้ามขั้นตอนนี้ไปเลยเพราะไม่มี heap buffer ให้เป็นเจ้าของซ้ำสอง — bitwise duplicate ปลอดภัยเสมอ คอมไพเลอร์เลยทำมันเงียบ ๆ แทนที่จะบังคับให้คุณ track ว่าชื่อไหน "current" อยู่
+
+## Trade-offs
+
+การ move เป็น default นั้นเกือบไม่มีต้นทุนเลย (copy header 24 byte ไม่ใช่ข้อมูลจริง) และตัดปัญหา use-after-free กับ double-free ออกไปตอน compile time — แต่มันแปลว่าการส่งค่า heap ขนาดใหญ่เข้าฟังก์ชันแบบ *เอา ownership ไป* ทั้งที่ตั้งใจแค่จะอ่าน จะบังคับให้ caller ทุกคนต้องตัดสินใจเรื่องการออกแบบที่ไม่จำเป็น `.clone()` ซื้อความยืดหยุ่นคืนมาด้วยต้นทุน runtime ที่มองเห็นได้จริง (heap allocation เต็มรูปแบบและ copy ทีละ byte) ซึ่งเป็นเหตุผลพอดีว่าทำไมภาษาถึงทำให้มันเป็นการเรียก method อย่างชัดเจน แทนที่จะเกิดขึ้นแบบ implicit ตอน assign เหมือนภาษาที่ใช้ reference semantics ทุกที่
+
+## Common Misconceptions
+
+- **"`.clone()` คือทางแก้ที่คอมไพเลอร์แนะนำ มันต้องถูกต้องแน่ ๆ"** คำแนะนำนั้นคือทางแก้ *แบบหนึ่ง* ที่ใช้ได้เสมอ ไม่ใช่ทางแก้ที่ *ดีที่สุด* เสมอไป ส่วนใหญ่ move error แปลว่าโค้ดควร borrow (`&s1`) แทนการเอา ownership ไป — หยิบ `.clone()` มาใช้เฉพาะตอนที่คุณต้องการ copy อิสระสองชุดที่แยกกันพัฒนาต่อได้จริง ๆ
+- **"struct ที่มี field เป็น `String` แค่เติม `#[derive(Copy)]` ก็ใช้ได้เหมือน struct เล็ก ๆ ที่เคยเห็น"** `Copy` ต้องการให้ทุก field เป็น `Copy` และ `String`/`Vec<T>`/type ที่เป็นเจ้าของ heap ใด ๆ ไม่เคยเป็นเลย — `#[derive(Copy)]` บน struct แบบนั้นคือ `error[E0204]` ไม่ใช่ warning ที่เพิกเฉยได้
+- **"ลำดับ `Drop` ไม่สำคัญ ตราบใดที่สุดท้ายทุกอย่างถูกเก็บกวาด"** มันสำคัญทุกครั้งที่ destructor ของค่าหนึ่งขึ้นอยู่กับอีกค่าที่ยังต้อง valid อยู่ — struct ที่ถือ database connection กับ struct ที่ถือ transaction บน connection นั้นต้อง drop ตามลำดับที่ถูกต้อง และกฎตายตัวของ Rust (field ตามลำดับประกาศ, local ย้อนกลับ) คือสิ่งที่ทำให้ลำดับนั้นคาดเดาได้ แทนที่จะขึ้นกับ implementation
+
+## อ่านโค้ดที่ AI เขียน
+
+รูปแบบที่พบบ่อยที่สุดของ clone-to-silence smell คือการ clone collection ทั้งก้อนแค่เพื่อ iterate อ่านมันเฉย ๆ — การ clone เพิ่ม deep copy เต็มรูปแบบโดยไม่ได้ประโยชน์อะไรเลย เพราะการ iterate ไม่เคยต้องการ ownership ตั้งแต่แรก
+
+<SpotTheBug code={`fn total_length(names: &Vec<String>) -> usize {
+    let cloned = names.clone(); // unnecessary — we only read it
+    cloned.iter().map(|s| s.len()).sum()
+}
+
+fn main() {
+    let names = vec![String::from("Ada"), String::from("Grace")];
+    println!("{}", total_length(&names));
+}
+`}>
+`names` เป็น `&Vec<String>` อยู่แล้ว — reference แบบอ่านอย่างเดียว การเรียก `.clone()` จะ deep-copy `String` ทุกตัวใน vector (แต่ละตัวคือ heap allocation แยกกัน) แค่เพื่อเรียก `.iter()` บน copy นั้น ทั้งที่ `.iter()` ทำงานเหมือนกันทุกประการบน reference ตัวเดิม ทางแก้คือลบบรรทัด `.clone()` ทิ้งไปเลย แล้วเรียก `names.iter()` ตรง ๆ — ส่วนที่เหลือของฟังก์ชันไม่ต้องเปลี่ยนอะไรเลย
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+การ move ย้าย header ขนาดเล็กคงที่และทำให้ชื่อเดิมใช้ไม่ได้เพื่อป้องกัน double free; `.clone()` เท่านั้นที่ทำสำเนาข้อมูลจริง ๆ ดังนั้นหยิบมันมาใช้อย่างตั้งใจ ไม่ใช่ปฏิกิริยาสะท้อนทุกครั้งที่คอมไพเลอร์บ่น
 </Callout>
 
 export const quizOwnershipMoves = [
@@ -146,12 +350,14 @@ export const quizOwnershipMoves = [
             "ค่าถูก move และ binding เดิมใช้งานไม่ได้",
             "คอมไพเลอร์โยน runtime panic ออกมา"
         ],
-        answer: 2
+        answer: 2,
+        explain: "String ไม่ใช่ Copy ดังนั้น `let s2 = s1;` จะ move header 24 byte (pointer/len/cap) เข้า s2 และทำเครื่องหมาย s1 ว่า moved-from — การใช้ s1 หลังจากนั้นคือ compile error ไม่ใช่ runtime error"
     },
     {
         q: "type ใดต่อไปนี้ implement Copy?",
         options: ["String", "Vec<i32>", "i32", "Box<i32>"],
-        answer: 2
+        answer: 2,
+        explain: "i32 เป็นสเกลาร์เล็ก ๆ บน stack ล้วน ๆ ไม่มี heap allocation ให้เป็นเจ้าของซ้ำ จึง implement Copy ได้ ส่วน String, Vec<i32>, Box<i32> ล้วนเป็นเจ้าของ heap memory จึงไม่ได้"
     },
     {
         q: "คุณจะได้ copy แบบอิสระอย่างชัดเจนของ String ได้อย่างไร?",
@@ -161,7 +367,8 @@ export const quizOwnershipMoves = [
             "let b = a.clone();",
             "let b = &a;"
         ],
-        answer: 2
+        answer: 2,
+        explain: ".clone() คือ deep copy แบบ opt-in อย่างชัดเจนสำหรับ type ที่เป็นเจ้าของ heap; String ไม่มี method .copy() และ `let b = a;` คือการ move ไม่ใช่ copy"
     },
     {
         q: "หลังจากส่ง String เข้าไปในฟังก์ชันที่เอา ownership ไป ผู้เรียกยังใช้ String ตัวนั้นได้อีกไหม?",
@@ -171,7 +378,30 @@ export const quizOwnershipMoves = [
             "ได้ แต่เฉพาะถ้าฟังก์ชัน return ค่านั้นกลับมา",
             "ได้เฉพาะถ้า String ถูกประกาศเป็น mut"
         ],
-        answer: 1
+        answer: 1,
+        explain: "การส่งค่าแบบ by value จะ move String เข้าไปใน parameter ของฟังก์ชัน binding ของ caller จะเหลือแค่ moved-from และใช้ต่อไม่ได้ เว้นแต่ฟังก์ชันจะ return ownership กลับมาให้อย่างชัดเจน"
+    },
+    {
+        q: "โค้ดนี้ compile ไหม?\n```rust\n#[derive(Clone, Copy)]\nstruct UserId {\n    label: String,\n    id: u32,\n}\nfn main() {}\n```",
+        options: [
+            "ไม่ — error[E0204]: the trait `Copy` cannot be implemented for this type เพราะ `label: String` ไม่ implement Copy",
+            "compile ผ่าน เพราะ derive Clone คู่กับ Copy จะทำให้เงื่อนไข supertrait ผ่านเสมอ",
+            "compile ผ่าน แต่ตอน runtime มีแค่ field id เท่านั้นที่ถูก copy จริง ส่วน label ถูกข้ามไปเงียบ ๆ",
+            "compile ไม่ผ่าน แต่ทางแก้คือเอา #[derive(Clone)] ออกแทนที่จะเอา #[derive(Copy)] ออก"
+        ],
+        answer: 0,
+        explain: "Copy ต้องการให้ทุก field เป็น Copy String เป็นเจ้าของ heap memory จึงไม่เคยเป็น Copy ดังนั้นการ derive Copy บน UserId คือ error[E0204] — ทางแก้คือเอา #[derive(Copy)] ออกแล้วเก็บแค่ Clone"
+    },
+    {
+        q: "โปรแกรมนี้ print อะไร?\n```rust\nstruct Guard(&'static str);\nimpl Drop for Guard {\n    fn drop(&mut self) { println!(\"drop {}\", self.0); }\n}\nfn main() {\n    let _a = Guard(\"a\");\n    let _b = Guard(\"b\");\n}\n```",
+        options: [
+            "drop a\ndrop b — ตามลำดับประกาศ",
+            "drop a\ndrop b — เพราะ _a ถูก borrow นานกว่า",
+            "ไม่มีอะไร print เลย — Guard ไม่มี Drop impl",
+            "drop b\ndrop a — local จะ drop ตามลำดับย้อนกลับของการประกาศ"
+        ],
+        answer: 3,
+        explain: "ตัวแปร local จะ drop ตามลำดับย้อนกลับของการประกาศ — ประกาศทีหลังสุด drop ก่อนสุด — ดังนั้น _b (ประกาศทีหลัง) จะ drop ก่อน _a (ประกาศก่อน)"
     }
 ];
 
