@@ -68,7 +68,7 @@ frontmatter (`title`, `description`, `sidebar.order`) → imports → concept in
 > - **Rust string escapes inside `export const` template literals must be doubled** (`\\n` / `\\t`). Format macros use single braces (`{}`, `{:?}`, `{name}`) which are fine inside the backtick string.
 > - **Never put a bare `{...}` in prose or headings** — keep struct literals and format strings in backtick code spans or fenced ```rust blocks.
 > - **Never put a bare angle-bracket generic in prose** — `Vec<T>`, `Option<T>`, `&str`, `Box<dyn Trait>` are parsed as HTML/JSX tags and break MDX. Always wrap them in backtick code spans.
-> - **Internal links must include the base path**, e.g. `/rust-deep-dive/en/ownership-borrowing/`.
+> - **Internal links must include the base path**, e.g. `/rust/en/ownership-borrowing/`.
 
 ### Rust Playground notes
 
