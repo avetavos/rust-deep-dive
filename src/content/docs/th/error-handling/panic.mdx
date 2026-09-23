@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Panic คืออะไร?
 
@@ -41,6 +43,26 @@ fn main() {
 }
 ```
 
+## คอมไพเลอร์พูดว่าอะไร: รูปแบบข้อความ Panic ของ 1.96
+
+ถ้อยคำที่แน่นอนของข้อความ panic ไม่ใช่แค่เรื่องความสวยงาม — มันคือสิ่งที่คุณจะ paste ลงใน bug report หรือ grep หาใน log บน rustc/cargo 1.96 รูปแบบข้อความมี thread id เป็นตัวเลขอยู่ในวงเล็บต่อจากชื่อเธรด:
+
+```rust
+// @expect-panic
+fn main() {
+    let x: Option<i32> = None;
+    let _ = x.unwrap();
+}
+```
+
+```text
+thread 'main' (41674254) panicked at p2.rs:3:15:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+`thread 'main' (<id>) panicked at <file>:<line>:<col>:` คือหัวข้อที่ panic ทุกครั้งพิมพ์ ตามด้วยข้อความ panic ในบรรทัดถัดไป `.unwrap()` บน `None` จะพิมพ์ `called \`Option::unwrap()\` on a \`None\` value` เสมอ — ไม่มีข้อความกำหนดเอง ซึ่งเป็นเหตุผลที่ `.expect()` มีอยู่
+
 ## `.unwrap()` และ `.expect()`
 
 `.unwrap()` บน `Option<T>` หรือ `Result<T, E>` ดึงค่าภายในหากเป็น `Some`/`Ok` และ**panic** หากเป็น `None`/`Err` เป็นทางลัดที่แลกความปลอดภัยกับความกระชับ
@@ -58,6 +80,32 @@ fn main() {
     println!("m = {}", m);
 }
 ```
+
+### ธรรมเนียมข้อความของ `.expect()`
+
+ข้อความ `.expect()` ที่ดีต้องบอก**เหตุผลว่าทำไมค่าคงที่ควรเป็นจริง** ไม่ใช่แค่บอกว่าอะไรล้มเหลว — เพื่อให้ใครก็ตามที่อ่านผลลัพธ์ panic (บ่อยครั้งคือตัวคุณเองในอนาคต ตอนตีสาม) รู้ทันทีว่านี่คือบั๊กจริงหรือเป็นสมมติฐานที่เพิ่งพัง ธรรมเนียมของชุมชน Rust คือเขียนเป็นประโยคที่ระบุค่าคงที่ ในรูป "should be X because Y" หรือ "this X should exist":
+
+```rust
+fn main() {
+    let env_value = std::env::var("PATH");
+    // Bad: restates the operation, tells you nothing you didn't know
+    // env_value.expect("failed to get env var");
+
+    // Good: states the invariant and why it should hold
+    let _path = env_value.expect("PATH should be set by the shell that launched this process");
+    println!("PATH lookup succeeded");
+}
+```
+
+## แนวคิดการตรวจสอบ `unwrap()`
+
+`.unwrap()` และ `.expect()` ทุกตัวในโค้ดเบสคือคำกล่าวอ้างว่า "ตรงนี้ล้มเหลวไม่ได้" ก่อน merge โค้ด — ไม่ว่าจะเป็นของคุณเองหรือของ AI assistant — ให้ grep หาพวกมันและตรวจสอบแต่ละตัวกับคำกล่าวอ้างนั้น:
+
+```bash
+grep -rn 'unwrap()' src/
+```
+
+สำหรับแต่ละจุดที่เจอ ให้ถามว่า *`None`/`Err` เป็นไปไม่ได้จริงๆ ตามทุกอย่างที่คอมไพเลอร์รู้ ณ จุดนี้ หรือมันขึ้นอยู่กับข้อเท็จจริงภายนอก (ไฟล์ที่มีอยู่ การเรียกเครือข่ายที่สำเร็จ) ที่เปลี่ยนแปลงได้?* ถ้าเป็นแบบหลัง มันควรอยู่ฝั่ง `Result` ของ[ตารางตัดสินใจ](/rust/th/error-handling/) ไม่ใช่อยู่หลัง `.unwrap()` `clippy::unwrap_used` (lint ประเภท restriction ปิดโดยค่าเริ่มต้น) สามารถบังคับสิ่งนี้โดยอัตโนมัติใน library crate ได้ — โมดูล `concurrency-testing-cargo` ครอบคลุมการรันมัน
 
 ## เมื่อใดที่การ Panic เหมาะสม?
 
@@ -106,8 +154,125 @@ fn main() {
 
 <Playground code={panicCode} />
 
+## `panic = "abort"` และ `catch_unwind`
+
+โดยค่าเริ่มต้น Rust binary จะ **unwind** เมื่อ panic: มันไต่กลับขึ้นสแต็กการเรียก รัน `Drop` impl ทุกตัวระหว่างทางก่อนที่โปรเซสจะออก คุณสามารถเลือกใช้ `abort` แทนได้ — โปรเซสจะยุติทันที ไม่มีการ unwind และไม่มี destructor รันเลย — โดยตั้งค่า profile ใน `Cargo.toml`:
+
+```toml
+[profile.release]
+panic = "abort"
+```
+
+`abort` ให้ binary ที่เล็กกว่า (ไม่มีตาราง unwinding) และจำเป็นสำหรับบาง embedded target แต่มันหมายความว่าการรับประกันของ `Drop` จะหยุดใช้ได้ทันทีที่ panic เริ่มขึ้น การรันจริงสองครั้งด้านล่างใช้โปรแกรมเดียวกัน — `Guard` ที่ `Drop` ของมันพิมพ์ข้อความ — คอมไพล์ครั้งหนึ่งด้วยกลยุทธ์ `unwind` ค่าเริ่มต้น และอีกครั้งด้วย `panic = "abort"`:
+
+```text
+$ rustc --edition 2024 unwind_drop.rs -o unwind_drop && ./unwind_drop; echo "exit=$?"
+thread 'main' (41688821) panicked at unwind_drop.rs:9:5:
+boom
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+dropping guard
+exit=101
+
+$ cargo build --quiet && ./target/debug/abort-scratch; echo "exit=$?"   # Cargo.toml has panic = "abort"
+thread 'main' (41687919) panicked at src/main.rs:9:5:
+boom
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+exit=134
+```
+
+ภายใต้ `unwind` บรรทัด `dropping guard` จะพิมพ์**ก่อน**ที่โปรเซสจะออกด้วย exit code 101 ภายใต้ `abort` บรรทัดนั้นไม่ถูกพิมพ์เลย และ exit code กลายเป็น 134 (`128 + SIGABRT`) — OS ฆ่าโปรเซสไปแล้ว Rust ไม่มีโอกาสได้รัน destructor ใดๆ เลย
+
+`std::panic::catch_unwind` ให้คุณหยุด unwind กลางทางขึ้นสแต็กแล้วรันต่อได้ — มันทำงานได้กับกลยุทธ์ `unwind` เท่านั้น ไม่เคยทำงานกับ `abort`:
+
+```rust
+fn main() {
+    let result = std::panic::catch_unwind(|| {
+        println!("about to panic");
+        panic!("caught you");
+    });
+    match result {
+        Ok(_) => println!("no panic"),
+        Err(_) => println!("recovered from a panic"),
+    }
+    println!("program continues");
+}
+```
+
+<Callout title="catch_unwind ไม่ใช่ exception handling">
+`catch_unwind` มีไว้เพื่อขอบเขต FFI เป็นหลัก (การ unwind ข้ามขอบเขต `extern "C"` เป็น undefined behavior) และเพื่อแยก panic ในสิ่งต่างๆ เช่น worker ของ thread pool มันไม่ใช่ try/catch แบบทั่วไป: closure ที่ panic อาจทิ้งสถานะที่แชร์ไว้ให้อัปเดตครึ่งเดียว ดังนั้นการกู้คืนจาก panic แล้วรันต่อจะปลอดภัยก็ต่อเมื่อคุณพิสูจน์ได้ว่าไม่มีอะไรถูกทิ้งไว้ในสถานะไม่สอดคล้อง — โดยปกติผ่าน `std::panic::UnwindSafe`
+</Callout>
+
+## `std::process::exit` ก็ข้าม Destructor เช่นกัน
+
+`std::process::exit(code)` ยุติโปรเซสทันที เหมือนกับ `panic = "abort"` ในแง่นี้ทุกประการ: **ไม่มี destructor รันเลย** แม้แต่ค่าที่ยังอยู่ใน scope ของ `main` เพราะไม่มีการ unwind เกิดขึ้นเลย — โปรเซสแค่หยุด
+
+```rust
+// @no-run exits with code 3, not 0 — see the real transcript in prose below
+struct Guard(&'static str);
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        println!("Dropping guard: {}", self.0);
+    }
+}
+
+fn main() {
+    let _g1 = Guard("normal scope end");
+    {
+        let _g2 = Guard("about to exit early");
+        println!("calling process::exit(3)");
+        std::process::exit(3);
+    }
+}
+```
+
+```text
+$ rustc --edition 2024 exit_demo.rs -o exit_demo && ./exit_demo; echo "exit=$?"
+calling process::exit(3)
+exit=3
+```
+
+การรันโค้ดนี้พิมพ์แค่ `calling process::exit(3)` และออกด้วย exit code 3 — ทั้ง `_g1` และ `_g2` ไม่มี `Drop` ตัวไหนถูกรันเลย แม้ `_g1` จะยังอยู่ใน scope อยู่มากก็ตาม ถ้า `Drop` impl มีหน้าที่ flush file buffer, ปล่อย lock, หรือปิด network connection `process::exit` จะข้ามทั้งหมดนั้นแบบเงียบๆ ให้ใช้ `return` ปกติจาก `main` (หรือปล่อยให้จบท้ายฟังก์ชันไปเอง) เมื่อไหร่ก็ตามที่คุณต้องการให้ destructor เหล่านั้นรัน
+
+<Mermaid code={`flowchart TD
+    P[panic! fires] --> S{Panic strategy}
+    S -->|unwind - default| U[Walk stack,\nrun every Drop]
+    U --> T[Thread exits\n(process exits, 101, if main thread)]
+    S -->|abort - Cargo.toml| A[Process terminates\nimmediately, no Drop]
+    A --> X[Exit via SIGABRT, 134]
+    E[std::process::exit] --> A`} title="Unwind เทียบกับ abort เทียบกับ process::exit" />
+
 <Callout title="สงวน panic ไว้สำหรับบั๊กที่ไม่สามารถกู้คืนได้">
 ใช้ `.unwrap()` และ `.expect()` เฉพาะเมื่อ `None` หรือ `Err` จะหมายความว่าโค้ดของคุณมีบั๊ก ไม่ใช่เมื่อความล้มเหลวเป็นส่วนปกติของการทำงานของโปรแกรม สำหรับความล้มเหลวใดๆ ที่มาจากอินพุตผู้ใช้หรือสถานะภายนอก ให้คืนค่า `Result` และปล่อยให้ผู้เรียกตัดสินใจว่าจะทำอะไร
+</Callout>
+
+## แบบจำลองความคิด
+
+Panic คือ Rust ตัดสินใจแทนคุณว่าสิ่งที่ปลอดภัยที่สุดที่จะทำคือหยุดแทนที่จะเดาต่อไป Unwinding คือวิธี "สุภาพ" ในการหยุด — มันให้โอกาสทุกค่าบนสแต็กได้ทำความสะอาดผ่าน `Drop` ก่อนที่เธรดจะจบ `abort` และ `process::exit` คือวิธี "ไม่สุภาพ" — มันหยุด *ทันที* และการทำความสะอาดใดๆ ที่ควรเกิดใน destructor ก็แค่ไม่เกิดขึ้นเลย การเลือก `.unwrap()` ในโค้ดของคุณคือการเลือกเวอร์ชันสุภาพของ "หยุดทันที" การเลือก `process::exit` ที่ไหนก็ตามนอกเหนือจากบรรทัดสุดท้ายของ `main` คือการเลือกเวอร์ชันไม่สุภาพ ซึ่งมักจะไม่ได้ตั้งใจ
+
+## ข้อแลกเปลี่ยน
+
+การ unwind มีต้นทุนขนาด binary (ตาราง unwind) และ overhead รันไทม์เล็กน้อยบน happy path ใน ABI บางแบบ แต่มันรักษาการทำความสะอาดแบบ `Drop` ไว้ และเปิดใช้ `catch_unwind` ที่ขอบเขต FFI หรือ thread pool `abort` เล็กกว่าและจำเป็นสำหรับบาง no-std/embedded target แต่ `Drop` ใดๆ ที่โปรแกรมของคุณพึ่งพาเพื่อความถูกต้อง (flush, ปล่อย lock, ปิด socket) จะหยุดเกิดขึ้นแบบเงียบๆ ทันทีที่คุณเปลี่ยนไปใช้มัน `process::exit` ให้คุณควบคุม exit code ได้แม่นยำจากที่ไหนก็ได้ในโปรแกรม โดยแลกกับพฤติกรรมข้าม `Drop` แบบเงียบๆ เหมือนกับ `abort` ทุกประการ — เรียกใช้เฉพาะเมื่อแน่ใจว่าไม่มีอะไรต้องทำความสะอาดอีกแล้ว
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`.expect("เหตุผลสั้นๆ")` ดีกว่า `.unwrap()` เสมอ"** ดีกว่าจริงก็ต่อเมื่อข้อความบอกค่าคงที่จริงๆ `.expect("failed")` แทบไม่มีประโยชน์มากไปกว่า `.unwrap()` เปล่าๆ — ธรรมเนียมคือ "should be X because Y" ไม่ใช่การพูดซ้ำชื่อการดำเนินการ
+- **"`catch_unwind` ทำให้ panic ปลอดภัยที่จะเพิกเฉย เหมือน try/catch ในภาษาอื่น"** มันเป็นทางออกแคบๆ สำหรับ FFI และการแยก worker ไม่ใช่ control flow ทั่วไป — โค้ดที่ panic อาจทิ้งค่าคงที่ไว้พัง และ `catch_unwind` ไม่ได้ซ่อมแซมอะไรเลย
+- **"`process::exit` เป็นแค่ `return` จาก `main` ที่เร็วกว่า"** มันข้าม destructor ที่ค้างอยู่ทั้งหมดในโปรแกรมทั้งหมด ไม่ใช่แค่ใน `main` — รวมถึง guard, file handle และการปล่อย lock ที่ไหนก็ตามบนสแต็ก ไม่ใช่แค่ในฟังก์ชันที่เรียก
+
+## อ่านโค้ดที่ AI เขียน
+
+AI มักจะเลือกใช้ `.expect("")` ด้วยสตริงว่างหรือใกล้ว่าง หรือพูดซ้ำชื่อการดำเนินการกลับมา เพราะมันผ่าน type checker ได้โดยที่ผู้เขียนไม่ได้คิดจริงๆ ว่าทำไมค่าคงที่ควรเป็นจริง
+
+<SpotTheBug code={`fn get_admin_email(config: &Config) -> String {
+    config.admin_email.clone().expect("")
+}
+`}>
+ข้อความ `.expect("")` ที่ว่างเปล่าให้ข้อมูลไม่มากไปกว่าข้อความ panic ของ `.unwrap()` เปล่าๆ — คุณเสียสิ่งเดียวที่ `.expect()` มีไว้ให้ ที่แย่กว่านั้นคือมันซ่อน*เหตุผล*ว่าทำไม `admin_email` ถูกสมมติว่ามีอยู่เสมอ วิธีแก้ตามธรรมเนียมข้อความในบทนี้คือ `.expect("admin_email should be set because Config::load validates it at startup")` — หรือถ้าฟิลด์นี้ไม่มีอยู่ได้จริงๆ ให้คืนค่า `Result`/`Option` แทนการ panic ตรงนี้เลย
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`.unwrap()`/`.expect()` ทุกตัวคือคำกล่าวอ้างว่าความล้มเหลวเป็นไปไม่ได้ตรงนี้ — เขียนข้อความให้เหมือนคำกล่าวอ้างที่คุณจะปกป้องได้ใน code review และเรียกใช้ `process::exit`/`panic = "abort"` เฉพาะเมื่อคุณแน่ใจจริงๆ ว่าไม่มี destructor ใดในโปรแกรมที่ต้องรัน
 </Callout>
 
 export const quizPanic = [
@@ -119,7 +284,8 @@ export const quizPanic = [
             "โปรแกรม panic และยุติการทำงาน",
             "ฟังก์ชันคืนค่า Err variant"
         ],
-        answer: 2
+        answer: 2,
+        explain: "การเรียก .unwrap() บน None จะ panic เสมอด้วยข้อความคงที่ \"called `Option::unwrap()` on a `None` value\""
     },
     {
         q: "ความแตกต่างระหว่าง .unwrap() และ .expect(msg) คืออะไร?",
@@ -129,7 +295,8 @@ export const quizPanic = [
             ".unwrap() ทำงานกับ Result เท่านั้น; .expect() ทำงานกับ Option เท่านั้น",
             "ไม่มีความแตกต่าง — เป็นชื่อเรียกอื่น"
         ],
-        answer: 1
+        answer: 1,
+        explain: "ทั้งคู่ panic บน None/Err; .expect(msg) ให้คุณกำหนดข้อความที่ปรากฏในผลลัพธ์ panic แทนข้อความทั่วไปที่ตายตัว"
     },
     {
         q: "สถานการณ์ใดที่เป็นการใช้ panic! ที่ถูกต้อง?",
@@ -139,7 +306,19 @@ export const quizPanic = [
             "ค่าคงที่ภายในที่โค้ดรับประกันว่าไม่สามารถถูกละเมิดได้ แต่จริงๆ แล้วถูกละเมิด",
             "JSON ที่ผู้ใช้ให้มาล้มเหลวในการแยกวิเคราะห์"
         ],
-        answer: 2
+        answer: 2,
+        explain: "สามข้อแรกล้วนมาจากโลกภายนอกและควรอยู่ฝั่ง Result ของตารางตัดสินใจ มีแต่ค่าคงที่ภายในที่พังจริงๆ เท่านั้นที่เป็นบั๊กจริงที่ควร panic"
+    },
+    {
+        q: "โปรแกรมนี้ print อะไร และด้วย exit code เท่าไร?\n```rust\nstruct Guard;\nimpl Drop for Guard {\n    fn drop(&mut self) { println!(\"dropping guard\"); }\n}\nfn main() {\n    let _g = Guard;\n    std::process::exit(3);\n}\n```",
+        options: [
+            "\"dropping guard\" แล้วออกด้วย code 3",
+            "ไม่พิมพ์อะไรเลย ออกด้วย code 3",
+            "\"dropping guard\" แล้วออกด้วย code 0",
+            "คอมไพล์ไม่ผ่านเพราะ Guard ไม่เคยถูก drop"
+        ],
+        answer: 1,
+        explain: "std::process::exit ยุติทันทีโดยไม่ unwind ดังนั้น Drop ของ Guard จึงไม่เคยรัน — สังเกตได้แค่ exit code (3) เท่านั้น"
     },
     {
         q: ".unwrap_or(default) ทำอะไรเมื่อ Option เป็น None?",
@@ -149,7 +328,19 @@ export const quizPanic = [
             "แปลง None เป็น Err",
             "ละเลย None และคืนค่า unit ()"
         ],
-        answer: 1
+        answer: 1,
+        explain: ".unwrap_or(default) เป็นฟังก์ชัน total — มันไม่เคย panic เลย จะคืนค่า default ที่ให้มาเสมอเมื่อ Option เป็น None"
+    },
+    {
+        q: "เมื่อเทียบกับกลยุทธ์ panic แบบ unwind ค่าเริ่มต้น อะไรเปลี่ยนไปเมื่อ Cargo.toml ตั้ง `panic = \"abort\"`?",
+        options: [
+            "Panic ถูกแปลงเป็น Result::Err โดยอัตโนมัติ",
+            "Destructor (Drop) ตามสแต็กจะไม่รันอีกต่อไปก่อนที่โปรเซสจะยุติ",
+            "catch_unwind เริ่มทำงานได้น่าเชื่อถือกว่าเดิม",
+            "ไม่มีอะไรเปลี่ยนที่สังเกตได้เลย มันมีผลแค่เวลาคอมไพล์"
+        ],
+        answer: 1,
+        explain: "abort ยุติโปรเซสทันทีเมื่อ panic โดยไม่มีการ unwind สแต็ก ดังนั้น Drop impl ที่ค้างอยู่จะถูกข้ามไปทั้งหมด — และ catch_unwind ก็ใช้งานไม่ได้เลยภายใต้ abort"
     }
 ];
 

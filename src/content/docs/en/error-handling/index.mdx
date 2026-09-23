@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Two Kinds of Errors
 
@@ -60,6 +62,101 @@ fn main() {
 Unlike exceptions in many languages, a `Result<T, E>` is just a regular enum value. The compiler forces you to handle it — you cannot silently ignore a `Result` without an explicit decision. This makes error paths visible and auditable at the type level.
 </Callout>
 
+## Result vs Panic: A Decision Table
+
+The hardest part of writing idiomatic Rust error handling is not the syntax — it is deciding, for each failure mode, whether it is a bug (panic) or an expected outcome (`Result`). Use this table every time you are unsure:
+
+| Question | If yes | If no |
+|---|---|---|
+| Can the failure come from outside your program (files, network, user input, another process)? | `Result` | keep asking |
+| Would continuing after the failure corrupt data or violate an invariant your code promised? | `panic!` | keep asking |
+| Is this a `debug_assert!`/precondition check that should never fire in correct code? | `panic!` | keep asking |
+| Is this library code where the caller, not you, should decide what "handle" means? | `Result` | `Result` (default) |
+
+Reserve `panic!` for the narrow case where continuing is unsafe or meaningless: an index you computed yourself going out of bounds, a `.unwrap()` on a value you just constructed as `Some`, or a violated internal invariant. Everything that can plausibly fail because of the outside world — a file that might not exist, a string that might not parse, a socket that might time out — is a `Result`.
+
+<Mermaid code={`flowchart TD
+    A[Failure can happen] --> B{Caused by external input,\nenvironment, or another party?}
+    B -->|Yes| R[Return Result]
+    B -->|No| C{Continuing would corrupt\nstate or violate an invariant?}
+    C -->|Yes| P[panic!]
+    C -->|No| D{Are you writing\nlibrary code?}
+    D -->|Yes| R
+    D -->|No| R2[Result is still the safe default]`} title="Deciding between panic! and Result" />
+
+## What the Compiler Says: An Ignored Result
+
+`Result` is `#[must_use]` in the standard library, so calling a `Result`-returning function and discarding the value produces a warning by default. This course's snippet harness compiles with `-A warnings` so intentional demos never fail the build — but an explicit `#![deny(unused_must_use)]` at the top of the file overrides that blanket allow, exactly like a stricter Cargo project (`RUSTFLAGS="-D warnings"`) would. The transcript below is from a real `rustc --edition 2024` run of this exact file, without `-A warnings`, so you can see what your own `cargo build` would show:
+
+```rust
+// @skip-verify demonstrates a lint-denied error with no E-code; harness -A warnings
+// would silence the plain warning form, so the real transcript is quoted below instead
+#![deny(unused_must_use)]
+
+fn might_fail() -> Result<i32, String> {
+    Err(String::from("nope"))
+}
+
+fn main() {
+    might_fail();
+    println!("done");
+}
+```
+
+```text
+error: unused `Result` that must be used
+ --> deny_must_use.rs:8:5
+  |
+8 |     might_fail();
+  |     ^^^^^^^^^^^^
+  |
+  = note: this `Result` may be an `Err` variant, which should be handled
+note: the lint level is defined here
+ --> deny_must_use.rs:1:9
+  |
+1 | #![deny(unused_must_use)]
+  |         ^^^^^^^^^^^^^^^
+help: use `let _ = ...` to ignore the resulting value
+  |
+8 |     let _ = might_fail();
+  |     +++++++
+
+error: aborting due to 1 previous error
+```
+
+Without `#![deny(...)]`, a plain `cargo build` still shows this as a *warning* (same message, `warning:` instead of `error:`, exit code 0) — easy to miss in a noisy build log. The `question-mark` and `result` lessons come back to `#[must_use]` in more detail.
+
+## Mental Model
+
+Think of a Rust function's return type as a contract with its caller. `-> T` says "I always produce a `T`." `-> Result<T, E>` says "I might fail in a way you should plan for — here is exactly what the failure looks like, and you must acknowledge it." A `panic!` breaks that contract instead of extending it: it says "the contract itself was violated by a bug, and no return value can fix that, so I am unwinding past you entirely." Reading a function's signature should tell you which of the two you are dealing with before you read a single line of its body.
+
+## Trade-offs
+
+`panic!` is unforgiving but honest — the moment something is wrong, the program stops instead of continuing on bad assumptions, and you get a stack location for free. Its cost is availability: one bad input from an untrusted source can take down a whole process (or, in a server, one request handler at a time if you catch it, which is rarely worth doing). `Result` is composable and lets callers decide policy — retry, fall back, log and continue — but it pushes a real cost onto every caller: they must write a `match`, a `?`, or an explicit `.unwrap()`/`.expect()` that turns the `Result` back into a panic anyway. Choosing `Result` for everything "just in case" makes signatures noisy and pushes decisions onto callers who have no more information than you did.
+
+## Common Misconceptions
+
+- **"Panicking is like throwing an exception, so I should use `Result` for everything to be safe."** Overusing `Result` for things that truly can never fail (parsing a hardcoded literal, indexing a fixed-size array you just built) just moves a fake decision onto every caller. If failure is genuinely impossible, `unwrap()` it and say so in a comment.
+- **"A `Result` that's `Ok` most of the time is basically free."** `Result<T, E>` still costs a branch and, depending on `E`'s size, extra stack space — usually negligible, but not literally free like exceptions-that-never-throw are sometimes assumed to be.
+- **"Rust doesn't have exceptions, so a panic can't happen in production."** It can, and does — an out-of-bounds index, an integer overflow in debug builds, or a third-party crate's own `unwrap()` will all panic in a running service exactly as they would in a test.
+
+## Reading AI-generated code
+
+AI assistants frequently reach for `panic!` (or an `.expect()` with a generic message) the moment a failure comes from outside the program — reading a config file, parsing a request body, opening a socket — because it is the shortest code to type, not because it is the right call for the caller.
+
+<SpotTheBug code={`fn load_config(path: &str) -> Config {
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|_| panic!("config file missing: {}", path));
+    parse_config(&text)
+}
+`}>
+A missing config file is exactly the kind of failure the decision table above sends to `Result`, not `panic!` — it comes from the environment (a user's disk, a deploy that forgot to mount a volume), and the caller may well want to fall back to defaults or print a clean error message instead of crashing the whole process. The fix is `fn load_config(path: &str) -> Result<Config, ConfigError>` with a `?` or explicit `match` at the call site, reserving `panic!` for a truly unreachable invariant inside `parse_config` itself (like a hardcoded default that you constructed and know is valid).
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+If the failure can come from outside your program, return a `Result`; reserve `panic!` for bugs that no caller could reasonably be asked to handle.
+</Callout>
+
 export const quizErrorHandlingIndex = [
     {
         q: "Which Rust construct models a recoverable error?",
@@ -69,7 +166,8 @@ export const quizErrorHandlingIndex = [
             "assert!",
             "unreachable!"
         ],
-        answer: 1
+        answer: 1,
+        explain: "Result<T, E> is a plain enum value the caller must handle; panic!, assert!, and unreachable! all unwind the stack instead of returning a value."
     },
     {
         q: "What does panic! do in Rust?",
@@ -79,7 +177,30 @@ export const quizErrorHandlingIndex = [
             "Unwinds the stack and terminates the current thread",
             "Converts the error into a Result"
         ],
-        answer: 2
+        answer: 2,
+        explain: "panic! unwinds the call stack, running destructors along the way, and terminates the thread (the whole process, in a single-threaded program)."
+    },
+    {
+        q: "According to the decision table, a config file that might not exist on disk should be handled with:",
+        options: [
+            "panic! immediately, since a missing file is always a bug",
+            "Result, since the failure originates outside the program",
+            "unreachable!, since the file is expected to exist",
+            "A silent default value with no indication of failure"
+        ],
+        answer: 1,
+        explain: "Anything that can fail because of the environment — files, network, user input — belongs on the Result side of the table, so the caller can decide how to react."
+    },
+    {
+        q: "What does this print?\n```rust\nfn might_fail() -> Result<i32, String> {\n    Err(String::from(\"nope\"))\n}\nfn main() {\n    might_fail();\n    println!(\"done\");\n}\n```",
+        options: [
+            "It fails to compile",
+            "It panics before printing anything",
+            "It prints \"done\" (with an unused-Result warning under normal build settings)",
+            "It prints \"nope\" then \"done\""
+        ],
+        answer: 2,
+        explain: "Ignoring a Result compiles and runs fine — Result is just a value — but it produces an `unused_must_use` warning under a normal cargo build (silenced only if warnings are explicitly allowed)."
     },
     {
         q: "Why does the Rust compiler force you to handle a Result?",
@@ -89,7 +210,19 @@ export const quizErrorHandlingIndex = [
             "The runtime automatically retries failed operations",
             "Result values are freed immediately if not used"
         ],
-        answer: 1
+        answer: 1,
+        explain: "Result is annotated #[must_use] in the standard library, so the compiler warns (or errors, under -D warnings) whenever the return value is silently dropped."
+    },
+    {
+        q: "Why is returning Result<T, E> for a function that can truly never fail (e.g. parsing a hardcoded numeric literal) a poor default?",
+        options: [
+            "Result<T, E> cannot hold a success value",
+            "It pushes a fake decision onto every caller for a failure that cannot occur",
+            "The compiler rejects Result return types on private functions",
+            "It makes the function unable to use the ? operator"
+        ],
+        answer: 1,
+        explain: "If a failure is genuinely impossible, wrapping the return type in Result just forces every caller to write handling code for a branch that can never be taken."
     }
 ];
 
