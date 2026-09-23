@@ -10,6 +10,120 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
+## ทำไม Lifetimes ถึงมีอยู่
+
+Borrow checker ของ Rust ป้องกัน *dangling reference* — reference ที่ชี้ไปยังหน่วยความจำที่ถูก free ไปแล้ว ในกรณีง่ายๆ compiler สามารถหาเองได้ว่า reference นั้น valid นานแค่ไหน แต่เมื่อฟังก์ชันรับ reference สองตัวและ return ตัวใดตัวหนึ่ง compiler ต้องการความช่วยเหลือ: output ยืมมาจาก input ตัวไหน และนานแค่ไหน?
+
+Lifetime annotation ตอบคำถามนั้น เขียนเป็น `'a` (apostrophe ตามด้วยชื่อสั้นๆ) ภายใน angle bracket
+
+## Lifetime Annotation ใน Function
+
+นี่คือฟังก์ชันที่รับ string slice สองตัวและ return ตัวที่ยาวกว่า return value ยืมมาจากตัวใดตัวหนึ่ง — แต่ตัวไหน? ขึ้นอยู่กับค่า ณ runtime annotation `'a` บอกว่า: "return value มีชีวิตอยู่ *อย่างมากเท่ากับตัวที่สั้นกว่าในสอง input*"
+
+```rust
+fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+    if x.len() > y.len() { x } else { y }
+}
+```
+
+ทั้งสาม reference แชร์ lifetime เดียวกันคือ `'a` compiler ใช้สิ่งนี้เพื่อรับประกันว่า reference ที่ return จะไม่มีชีวิตอยู่นานกว่าข้อมูลที่มันชี้ไป
+
+ถ้าไม่มี annotation นี้ compiler จะปฏิเสธฟังก์ชันนี้ เพราะไม่สามารถกำหนด return lifetime จาก input เพียงอย่างเดียวได้
+
+## ตัวอย่าง Dangling Reference
+
+Lifetime annotation มีอยู่เพื่อจับบั๊กประเภทนี้ ณ compile time นี่คือฟังก์ชันที่พยายาม return reference ไปยังค่าที่สร้างขึ้นภายในฟังก์ชันเอง:
+
+```rust
+// @expect-error E0106
+fn dangle() -> &String {
+    let s = String::from("hello"); // s is created here
+    &s                              // we return a reference to s
+} // s is dropped here -- the reference would dangle
+
+fn main() {}
+```
+
+error *แรก* ที่คุณได้ไม่ได้เกี่ยวกับ dangling เลย — แต่เป็นเพราะ signature ไม่มี lifetime ให้ compiler ใช้งาน:
+
+```text
+error[E0106]: missing lifetime specifier
+ --> src/main.rs:2:16
+  |
+2 | fn dangle() -> &String {
+  |                ^ expected named lifetime parameter
+  |
+  = help: this function's return type contains a borrowed value, but there is no value for it to be borrowed from
+help: consider using the `'static` lifetime, but this is uncommon unless you're returning a borrowed value from a `const` or a `static`
+  |
+2 | fn dangle() -> &'static String {
+  |                 +++++++
+help: instead, you are more likely to want to return an owned value
+  |
+2 - fn dangle() -> &String {
+2 + fn dangle() -> String {
+  |
+```
+
+ถ้าคุณทำตามคำแนะนำแรกของ rustc ตามตัวอักษรโดยเพิ่ม `<'a>` อย่างชัดเจนโดยไม่เปลี่ยนอย่างอื่น error จะเปลี่ยนไป — *ตอนนี้* compiler สามารถพูดถึงปัญหา dangling reference ที่แท้จริงได้แล้ว:
+
+```rust
+// @expect-error E0515
+fn dangle<'a>() -> &'a String {
+    let s = String::from("hello"); // s is created here
+    &s                              // we return a reference to s
+} // s is dropped here -- the reference would dangle
+
+fn main() {}
+```
+
+```text
+error[E0515]: cannot return reference to local variable `s`
+ --> src/main.rs:4:5
+  |
+4 |     &s                              // we return a reference to s
+  |     ^^ returns a reference to data owned by the current function
+```
+
+ไม่มี lifetime annotation ใดแก้ปัญหานี้ได้ — `'a` จะตั้งชื่อได้แค่ lifetime ที่มีอยู่แล้วในฝั่งผู้เรียกเท่านั้น `dangle` ไม่มี input reference ให้ `'a` ยืมมาจาก จึงไม่มีอะไรให้ตั้งชื่อได้อย่างถูกต้อง ทางแก้ที่แท้จริง ตามที่ rustc แนะนำในข้อที่สอง คือ return `String` แบบ owned แทนที่จะเป็น reference
+
+## Lifetime Annotation ใน Structs
+
+ถ้า struct เก็บ reference คุณต้อง annotate lifetime เพื่อให้ compiler รู้ว่า struct ไม่สามารถมีชีวิตอยู่นานกว่าข้อมูลที่มัน borrow:
+
+```rust
+struct Excerpt<'a> {
+    text: &'a str,
+}
+```
+
+นี่บอกว่า "`Excerpt` ไม่สามารถมีชีวิตอยู่นานกว่า string ที่มัน borrow มา" compiler บังคับใช้การรับประกันนี้โดยอัตโนมัติ
+
+## กฎ Lifetime Elision สามข้อ
+
+ในหลาย pattern ที่พบบ่อย Rust สามารถอนุมาน lifetime โดยอัตโนมัติด้วย elision rule สามข้อ ทำให้คุณไม่ต้องเขียน annotation ทุกครั้ง:
+
+1. **แต่ละ reference parameter ได้ lifetime ของตัวเอง** `fn foo(x: &str, y: &str)` กลายเป็น `fn foo<'a, 'b>(x: &'a str, y: &'b str)`
+2. **ถ้ามี input reference แค่ตัวเดียว lifetime ของมันจะถูกกำหนดให้ output reference ทุกตัว** `fn foo(x: &str) -> &str` กลายเป็น `fn foo<'a>(x: &'a str) -> &'a str`
+3. **ถ้า parameter ตัวหนึ่งคือ `&self` หรือ `&mut self` lifetime ของมันจะถูกกำหนดให้ output reference ทุกตัว**
+
+เมื่อกฎทั้งสามใช้ได้ครบ ไม่จำเป็นต้องมี annotation เมื่อกฎเหล่านั้นไม่สามารถกำหนด output lifetime ได้ครบถ้วน (เช่นใน `longest`) คุณต้อง annotate อย่างชัดเจน
+
+## Lifetime `'static`
+
+`'static` คือ lifetime พิเศษที่มีชื่อ หมายความว่า "valid ตลอดระยะเวลาของโปรแกรม" คุณเคยเห็นมันมาแล้วโดยไม่รู้ตัว: string literal ทุกตัวคือ `&'static str` เพราะ literal ถูกฝังตรงเข้าไปใน binary ที่ compile แล้วและไม่เคยถูก free
+
+```rust
+let s: &'static str = "I have a static lifetime.";
+```
+
+`'static` ปรากฏในสองสถานการณ์ที่ต่างกันมาก และควรแยกให้ออก:
+
+- **Reference ไปยังข้อมูล static แท้จริง** — string literal และค่าใน `static` item — เป็น `'static` โดยไม่มีค่าใช้จ่ายใดๆ เพราะข้อมูลนั้นมีชีวิตอยู่ตลอดทั้งโปรแกรมจริงๆ
+- **`T: 'static` เป็น trait bound** (พบบ่อยบน generic parameter โดยเฉพาะกับ `Box<dyn Trait + 'static>` หรือตอน spawn thread) หมายความว่า "type นี้ไม่มี reference ที่ไม่ใช่ `'static` อยู่ข้างใน" — owned type ส่วนใหญ่ (`String`, `Vec<T>`, `i32`) ผ่านเงื่อนไขนี้โดยอัตโนมัติ เพราะมันเป็นเจ้าของข้อมูลแทนที่จะยืมมัน มันไม่ได้หมายความว่า "มีชีวิตอยู่ตลอดไป" สำหรับ owned value — มันหมายความว่า value นั้นไม่ได้แอบยืมข้อมูลจากที่ที่อาจหายไปได้
+
+การหยิบ `'static` มาใช้เพื่อทำให้ lifetime error เงียบลงเป็นสัญชาตญาณที่พบบ่อยแต่มักผิด — มันแทบไม่เคยแก้ปัญหา dangling reference ที่แท้จริง (อย่างที่ตัวอย่าง `dangle` ข้างบนแสดง คำแนะนำ `'static` ของ rustc เองก็ไม่ได้แก้อะไรจริงๆ) และบ่อยครั้งความหมายที่แท้จริงคือโค้ดควรเป็นเจ้าของข้อมูลแทนที่จะยืมมัน
+
 export const lifetimesCode = `// A function with a lifetime annotation:
 // the returned reference lives at least as long as the shorter of x or y.
 fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
@@ -41,6 +155,12 @@ fn main() {
     let excerpt = Excerpt { text: first_sentence };
     println!("excerpt: {}", excerpt.announce());
 }`;
+
+<Playground code={lifetimesCode} />
+
+<Callout title="Lifetimes มีผลเฉพาะ compile time — อธิบายความถูกต้องของ reference">
+Lifetime annotation ไม่ได้เปลี่ยนระยะเวลาที่ value มีชีวิตอยู่ในหน่วยความจำ มันเป็นเพียงกลไกระดับ compile time ที่บอก borrow checker ว่า lifetime ของ reference หลายตัวสัมพันธ์กันอย่างไร ณ runtime ไม่มีข้อมูล lifetime หลงเหลืออยู่เลย — มันถูกลบทิ้งหลังจาก compiler ตรวจสอบเสร็จ
+</Callout>
 
 export const quizLifetimes = [
     {
@@ -84,70 +204,6 @@ export const quizLifetimes = [
         answer: 0,
     },
 ];
-
-## Lifetimes คืออะไร
-
-**Lifetime** คือแนวคิดที่บอก compiler ว่า reference จะยังคง valid อยู่นานแค่ไหน ใน Rust ทุก reference มี lifetime แต่ในหลายกรณี compiler สามารถอนุมานได้เองโดยไม่ต้องเขียนอย่างชัดเจน
-
-จุดประสงค์หลักคือการป้องกัน *dangling reference* — situation ที่ reference ชี้ไปยังหน่วยความจำที่ถูก free ไปแล้ว
-
-<Callout title="Lifetimes มีผลเฉพาะ compile time — อธิบายความถูกต้องของ reference">
-Lifetime annotation ไม่ได้เปลี่ยนระยะเวลาที่ value มีชีวิตอยู่ เป็นเพียงข้อมูลสำหรับ borrow checker เพื่อตรวจสอบว่า reference ทั้งหมดถูกต้อง ณ compile time ไม่มีผลใดๆ ต่อ runtime performance หรือ memory layout
-</Callout>
-
-## Lifetime Annotation Syntax
-
-Lifetime parameter เขียนด้วย apostrophe ตามด้วยชื่อ เช่น `'a`, `'b` และต้องประกาศใน angle bracket เหมือน generic:
-
-```rust
-fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
-    if x.len() > y.len() { x } else { y }
-}
-```
-
-`'a` ที่นี่หมายความว่า "return value มีชีวิตอยู่อย่างน้อยนานเท่ากับ reference ที่สั้นกว่าระหว่าง `x` และ `y`"
-
-## Lifetimes ใน Structs
-
-เมื่อ struct เก็บ reference จะต้องมี lifetime annotation:
-
-```rust
-struct Excerpt<'a> {
-    text: &'a str,
-}
-```
-
-นี่บอก compiler ว่า instance ของ `Excerpt` ต้องมีชีวิตอยู่ไม่นานกว่า `text` ที่ชี้ไป
-
-## Lifetime Elision
-
-ในหลายกรณีทั่วไป Rust มี *elision rules* ที่ช่วยให้คุณละ lifetime annotation ได้ เช่น:
-
-```rust
-// คุณเขียนแบบนี้:
-fn first_word(s: &str) -> &str { ... }
-
-// Compiler เห็นเป็นแบบนี้:
-fn first_word<'a>(s: &'a str) -> &'a str { ... }
-```
-
-Elision rules ครอบคลุมกรณีที่พบบ่อยที่สุด ทำให้ code สะอาดขึ้นโดยไม่สูญเสียความปลอดภัย
-
-## `'static` Lifetime
-
-`'static` คือ lifetime พิเศษที่หมายความว่า reference มีชีวิตอยู่ตลอด duration ของ program:
-
-```rust
-let s: &'static str = "I have a static lifetime.";
-```
-
-String literal ทุกอันมี `'static` lifetime เพราะถูก embed อยู่ใน binary ของ program
-
-## ลองเล่น
-
-Playground ด้านล่างแสดง function `longest` พร้อม lifetime annotation และ struct `Excerpt` ที่เก็บ reference — ลองดูว่า borrow checker รับประกันความถูกต้องของ reference อย่างไร
-
-<Playground code={lifetimesCode} />
 
 <Quiz client:visible id="traits-generics/lifetimes" questions={quizLifetimes} />
 

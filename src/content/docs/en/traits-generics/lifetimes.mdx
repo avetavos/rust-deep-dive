@@ -32,17 +32,60 @@ Without the annotation, the compiler would reject this function: it cannot deter
 
 ## A Dangling Reference Example
 
-Lifetime annotations exist precisely to catch this class of bug at compile time:
+Lifetime annotations exist precisely to catch this class of bug at compile time. Here is a function that tries to return a reference to a value it created locally:
 
 ```rust
-// This does NOT compile — the compiler prevents the dangling reference.
-// fn dangle() -> &String {
-//     let s = String::from("hello"); // s is created here
-//     &s                             // we return a reference to s
-// } // s is dropped here — the reference would dangle
+// @expect-error E0106
+fn dangle() -> &String {
+    let s = String::from("hello"); // s is created here
+    &s                              // we return a reference to s
+} // s is dropped here -- the reference would dangle
+
+fn main() {}
 ```
 
-Rust rejects the code above before it ever runs.
+The *first* error you get is not about dangling at all — it's that the signature has no lifetime for the compiler to work with:
+
+```text
+error[E0106]: missing lifetime specifier
+ --> src/main.rs:2:16
+  |
+2 | fn dangle() -> &String {
+  |                ^ expected named lifetime parameter
+  |
+  = help: this function's return type contains a borrowed value, but there is no value for it to be borrowed from
+help: consider using the `'static` lifetime, but this is uncommon unless you're returning a borrowed value from a `const` or a `static`
+  |
+2 | fn dangle() -> &'static String {
+  |                 +++++++
+help: instead, you are more likely to want to return an owned value
+  |
+2 - fn dangle() -> &String {
+2 + fn dangle() -> String {
+  |
+```
+
+If you take rustc's first suggestion literally and add an explicit `<'a>` without changing anything else, the error changes — *now* the compiler is able to talk about the actual dangling-reference problem:
+
+```rust
+// @expect-error E0515
+fn dangle<'a>() -> &'a String {
+    let s = String::from("hello"); // s is created here
+    &s                              // we return a reference to s
+} // s is dropped here -- the reference would dangle
+
+fn main() {}
+```
+
+```text
+error[E0515]: cannot return reference to local variable `s`
+ --> src/main.rs:4:5
+  |
+4 |     &s                              // we return a reference to s
+  |     ^^ returns a reference to data owned by the current function
+```
+
+No lifetime annotation can fix this — `'a` can only ever name a lifetime that already exists somewhere in the caller. `dangle` has no input reference to borrow `'a` from, so there is nothing valid to name. The real fix, as rustc's own second suggestion said, is to return an owned `String` instead of a reference.
 
 ## Lifetime Annotations in Structs
 
@@ -65,6 +108,21 @@ In many common patterns Rust can infer lifetimes automatically using three elisi
 3. **If one of the parameters is `&self` or `&mut self`, its lifetime is assigned to all output references.**
 
 When all three rules apply, no annotation is needed. When they do not fully determine the output lifetime (as in `longest`), you must annotate explicitly.
+
+## The `'static` Lifetime
+
+`'static` is a special, named lifetime meaning "valid for the entire duration of the program." You've already seen it without the name: every string literal is `&'static str`, because literals are baked directly into the compiled binary and are never freed.
+
+```rust
+let s: &'static str = "I have a static lifetime.";
+```
+
+`'static` shows up in two very different situations, and it's worth telling them apart:
+
+- **References to genuinely static data** — string literals, and values in a `static` item — are `'static` for free, at no cost, because that data really does live for the whole program.
+- **`T: 'static` as a trait bound** (common on generic parameters, especially with `Box<dyn Trait + 'static>` or when spawning threads) means "this type contains no non-`'static` references" — most owned types (`String`, `Vec<T>`, `i32`) satisfy this trivially, since they own their data rather than borrowing it. It does **not** mean "lives forever" for an owned value; it means the value isn't secretly borrowing from something that could go away.
+
+Reaching for `'static` to silence a lifetime error is a common but usually wrong instinct — it rarely fixes a genuine dangling-reference problem (as the `dangle` example above shows, rustc's own `'static` suggestion does not actually solve anything), and more often means the code should own its data instead of borrowing it.
 
 export const lifetimesCode = `// A function with a lifetime annotation:
 // the returned reference lives at least as long as the shorter of x or y.

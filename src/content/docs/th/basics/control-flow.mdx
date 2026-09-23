@@ -51,7 +51,7 @@ fn main() {
     let result = loop {
         counter += 1;
         if counter == 5 {
-            break counter * 2; // loop ประเมินเป็นค่านี้
+            break counter * 2; // the loop evaluates to this value
         }
     };
     println!("result = {}", result); // 10
@@ -91,7 +91,7 @@ fn main() {
     }
     println!();
 
-    // วนผ่าน array
+    // Iterating over an array
     let fruits = ["apple", "banana", "cherry"];
     for fruit in fruits {
         print!("{} ", fruit);

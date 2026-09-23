@@ -49,6 +49,10 @@ match divide(10.0, 2.0) {
 เมื่อคุณสนใจแค่กรณี `Some` `if let` กระชับกว่า:
 
 ```rust
+fn divide(a: f64, b: f64) -> Option<f64> {
+    if b == 0.0 { None } else { Some(a / b) }
+}
+
 if let Some(value) = divide(10.0, 2.0) {
     println!("Got: {}", value);
 }

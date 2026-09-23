@@ -19,14 +19,37 @@ Every Rust value has exactly one owner. When you assign a value to another varia
 Types that own heap memory — like `String`, `Vec<i32>`, or `Box<i32>` — do **not** implement `Copy`. When you assign one to another variable, the value is **moved**: the original binding becomes invalid.
 
 ```rust
+// @expect-error E0382
 fn main() {
     let s1 = String::from("hello");
     let s2 = s1; // s1 is moved into s2
 
-    // println!("{}", s1); // ERROR: s1 was moved
+    println!("{}", s1); // ERROR: s1 was moved
     println!("{}", s2);   // fine
 }
 ```
+
+Using `s1` after the move is a compile-time error:
+
+```text
+error[E0382]: borrow of moved value: `s1`
+ --> src/main.rs:6:20
+  |
+3 |     let s1 = String::from("hello");
+  |         -- move occurs because `s1` has type `String`, which does not implement the `Copy` trait
+4 |     let s2 = s1; // s1 is moved into s2
+  |              -- value moved here
+5 |
+6 |     println!("{}", s1); // ERROR: s1 was moved
+  |                    ^^ value borrowed here after move
+  |
+help: consider cloning the value if the performance cost is acceptable
+  |
+4 |     let s2 = s1.clone(); // s1 is moved into s2
+  |                ++++++++
+```
+
+The compiler's own suggested fix is `.clone()` — and that is exactly the trap: reaching for `.clone()` every time the borrow checker complains is the single most common "smell" in AI-generated Rust. It silences the error, but it often means the code should have borrowed (`&s1`) instead of moving in the first place. Treat `.clone()` as a deliberate, explicit deep copy for when you truly need one — not as a reflex to make an error go away.
 
 The same rule applies when you pass a value into a function:
 

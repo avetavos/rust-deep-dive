@@ -19,14 +19,37 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 Type ที่เป็นเจ้าของหน่วยความจำบน heap — อย่างเช่น `String`, `Vec<i32>` หรือ `Box<i32>` — จะ **ไม่** implement `Copy` เมื่อคุณ assign ตัวหนึ่งไปยังอีกตัวแปรหนึ่ง ค่านั้นจะถูก **moved**: binding เดิมจะใช้งานไม่ได้
 
 ```rust
+// @expect-error E0382
 fn main() {
     let s1 = String::from("hello");
     let s2 = s1; // s1 is moved into s2
 
-    // println!("{}", s1); // ERROR: s1 was moved
+    println!("{}", s1); // ERROR: s1 was moved
     println!("{}", s2);   // fine
 }
 ```
+
+การใช้ `s1` หลังจากถูก move ไปแล้วคือ compile-time error:
+
+```text
+error[E0382]: borrow of moved value: `s1`
+ --> src/main.rs:6:20
+  |
+3 |     let s1 = String::from("hello");
+  |         -- move occurs because `s1` has type `String`, which does not implement the `Copy` trait
+4 |     let s2 = s1; // s1 is moved into s2
+  |              -- value moved here
+5 |
+6 |     println!("{}", s1); // ERROR: s1 was moved
+  |                    ^^ value borrowed here after move
+  |
+help: consider cloning the value if the performance cost is acceptable
+  |
+4 |     let s2 = s1.clone(); // s1 is moved into s2
+  |                ++++++++
+```
+
+ทางแก้ที่คอมไพเลอร์แนะนำเองคือ `.clone()` — และนั่นคือกับดัก: การหยิบ `.clone()` มาใช้ทุกครั้งที่ borrow checker ฟ้อง คือ "smell" ที่พบบ่อยที่สุดในโค้ด Rust ที่ AI เขียน มันทำให้ error หายไปก็จริง แต่บ่อยครั้งความหมายที่แท้จริงคือโค้ดควร borrow (`&s1`) แทนที่จะ move ตั้งแต่แรก ใช้ `.clone()` เมื่อคุณต้องการ deep copy จริงๆ อย่างตั้งใจ — ไม่ใช่เป็นปฏิกิริยาอัตโนมัติเพื่อทำให้ error หายไป
 
 กฎเดียวกันนี้ใช้เมื่อคุณส่งค่าเข้าไปในฟังก์ชัน:
 

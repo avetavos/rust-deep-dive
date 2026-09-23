@@ -101,6 +101,10 @@ Traits are like interfaces: any type can implement a trait, regardless of where 
 Use `impl TraitName for TypeName` to fulfill a trait contract:
 
 ```rust
+trait Greet {
+    fn hello(&self) -> String;
+}
+
 struct Dog {
     name: String,
 }
@@ -115,6 +119,20 @@ impl Greet for Dog {
 Once `Dog` implements `Greet`, you can call `.hello()` on any `Dog` value:
 
 ```rust
+trait Greet {
+    fn hello(&self) -> String;
+}
+
+struct Dog {
+    name: String,
+}
+
+impl Greet for Dog {
+    fn hello(&self) -> String {
+        format!("Woof! I'm {}.", self.name)
+    }
+}
+
 let d = Dog { name: String::from("Rex") };
 println!("{}", d.hello()); // Woof! I'm Rex.
 ```
@@ -141,6 +159,7 @@ trait Shape {
 Trait methods are called with the usual dot syntax, as long as the trait is in scope. If multiple traits provide the same method name, you can use fully qualified syntax to disambiguate:
 
 ```rust
+// @skip-verify signature only -- illustrates fully-qualified syntax, not a full example
 <Circle as Shape>::area(&c)
 ```
 
@@ -151,6 +170,10 @@ In practice, the dot syntax works in the vast majority of cases.
 You can accept any type that implements a trait using `impl TraitName` in a function parameter:
 
 ```rust
+trait Shape {
+    fn area(&self) -> f64;
+}
+
 fn print_area(shape: &impl Shape) {
     println!("Area: {:.2}", shape.area());
 }

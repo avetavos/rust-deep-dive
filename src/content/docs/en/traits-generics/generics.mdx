@@ -129,6 +129,11 @@ struct Pair<T> {
 When you instantiate it, the compiler infers `T` from the values you provide:
 
 ```rust
+struct Pair<T> {
+    first: T,
+    second: T,
+}
+
 let p = Pair { first: 5, second: 10 }; // T inferred as i32
 ```
 
@@ -137,6 +142,11 @@ let p = Pair { first: 5, second: 10 }; // T inferred as i32
 To add methods to a generic struct, repeat the type parameter in the `impl` line:
 
 ```rust
+struct Pair<T> {
+    first: T,
+    second: T,
+}
+
 impl<T: std::fmt::Display + PartialOrd> Pair<T> {
     fn larger(&self) -> &T {
         if self.first > self.second { &self.first } else { &self.second }
@@ -152,13 +162,22 @@ Inline bounds work well for one or two constraints. When a signature grows long,
 
 ```rust
 // Inline bounds
-fn notify<T: Clone + std::fmt::Debug>(item: T) { ... }
+fn notify<T: Clone + std::fmt::Debug>(item: T) {
+    println!("{:?}", item.clone());
+}
 
 // Equivalent where clause
-fn notify<T>(item: T)
+fn notify_where<T>(item: T)
 where
     T: Clone + std::fmt::Debug,
-{ ... }
+{
+    println!("{:?}", item.clone());
+}
+
+fn main() {
+    notify(1);
+    notify_where("same bound, different syntax");
+}
 ```
 
 Both forms are identical to the compiler; choose whichever is clearer.

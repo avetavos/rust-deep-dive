@@ -60,6 +60,8 @@ fn max_of_two(a: i32, b: i32) -> i32 {
 }
 ```
 
+The `describe` function in the playground below returns `&'static str`: a reference to a string literal, which is baked into the binary and lives for the entire program, so the compiler gives it the special `'static` lifetime — you'll see `'static` and other lifetimes properly in the Traits & Generics module.
+
 ### The Unit Type
 
 Functions that do not return a meaningful value implicitly return `()` (the unit type). The signature `fn foo()` is shorthand for `fn foo() -> ()`. The unit type is similar to `void` in other languages but is a real type with exactly one value: `()`.

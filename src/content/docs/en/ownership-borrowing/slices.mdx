@@ -69,6 +69,50 @@ fn main() {
 }
 ```
 
+### Byte Indices, Not Character Indices
+
+`&s[..n]` slices by **byte** offset, not by character. That is invisible with ASCII, where every character is one byte — but Rust strings are UTF-8, and a non-ASCII character like a Thai vowel or an emoji can take two, three, or four bytes. Slicing at a byte offset that lands in the *middle* of one of those multi-byte characters does not truncate or approximate anything — it **panics**.
+
+```rust
+// @expect-panic
+fn main() {
+    let s = "สวัสดี";
+    let oops = &s[1..]; // byte 1 is inside the first character, not a boundary
+    println!("{oops}");
+}
+```
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:4:18:
+start byte index 1 is not a char boundary; it is inside 'ส' (bytes 0..3 of string)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+`ส` (the first character of "สวัสดี") is 3 bytes wide, so byte index 1 falls inside it — there is no valid `char` boundary there. The fix is to stop thinking in byte offsets and use one of the character-aware APIs instead:
+
+```rust
+fn main() {
+    let s = "สวัสดี";
+
+    // chars() iterates by Unicode scalar value, never by byte
+    let first_char: Option<char> = s.chars().next();
+    println!("first char: {:?}", first_char);
+
+    // char_indices() pairs each char with its byte offset — always a valid boundary
+    if let Some((idx, ch)) = s.char_indices().nth(1) {
+        println!("second char {:?} starts at byte {}", ch, idx);
+    }
+
+    // is_char_boundary() lets you check before slicing by byte offset
+    let idx = 1;
+    if s.is_char_boundary(idx) {
+        println!("{}", &s[idx..]);
+    } else {
+        println!("byte {idx} is not a char boundary — cannot slice there");
+    }
+}
+```
+
 ### Slices Prevent Dangling Indices
 
 Without slices, you might store an index into a string and then modify the string — leaving the index pointing to meaningless data. With a string slice, the borrow checker ensures the slice cannot outlive the data it references.

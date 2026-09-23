@@ -52,7 +52,7 @@ fn main() {
 
 <Playground code={indexCode} />
 
-export const indexQuiz = [
+export const quizIndex = [
     {
         q: 'keyword ใดที่ใช้ประกาศ named struct ใน Rust?',
         options: ['type', 'struct', 'class', 'record'],
@@ -70,6 +70,6 @@ export const indexQuiz = [
     },
 ];
 
-<Quiz client:visible id="structs-enums-matching/index" questions={indexQuiz} />
+<Quiz client:visible id="structs-enums-matching/index" questions={quizIndex} />
 
 <ProgressTracker client:visible id="structs-enums-matching/index" />

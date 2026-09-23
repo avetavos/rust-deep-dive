@@ -15,11 +15,29 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 When you declare a variable with `let`, it is **immutable** — you cannot assign to it a second time. This is not a limitation; it is a feature. Immutability by default means the compiler can catch unintended mutations and reason about your code more precisely.
 
 ```rust
+// @expect-error E0384
 fn main() {
     let x = 5;
-    // x = 6; // error[E0384]: cannot assign twice to immutable variable `x`
+    x = 6;
     println!("x = {}", x);
 }
+```
+
+Attempting to reassign an immutable binding is a compile-time error, not a warning:
+
+```text
+error[E0384]: cannot assign twice to immutable variable `x`
+ --> src/main.rs:4:5
+  |
+3 |     let x = 5;
+  |         - first assignment to `x`
+4 |     x = 6;
+  |     ^^^^^ cannot assign twice to immutable variable
+  |
+help: consider making this binding mutable
+  |
+3 |     let mut x = 5;
+  |         +++
 ```
 
 To allow mutation, add `mut` after `let`:

@@ -39,15 +39,25 @@ borrow checker บังคับ invariant ข้อเดียว:
 กฎนี้ป้องกัน **data races** ตอน compile time data race เกิดขึ้นเมื่อ thread ตั้งแต่สองตัวขึ้นไปเข้าถึงหน่วยความจำเดียวกันพร้อมกัน และอย่างน้อยหนึ่งการเข้าถึงเป็นการเขียน ด้วยการทำให้การเข้าถึงแบบ mutable พร้อมกันกลายเป็น compile error Rust จึงกำจัดบั๊กประเภท data race ทั้งหมดออกไป — แม้ในโค้ดแบบ single-threaded กฎเดียวกันนี้ก็ช่วยให้ตรรกะถูกต้องสมเหตุสมผล
 
 ```rust
-// THIS DOES NOT COMPILE — shown for teaching only:
-//
-// fn main() {
-//     let mut s = String::from("hello");
-//     let r1 = &s;       // shared borrow
-//     let r2 = &mut s;   // error[E0502]: cannot borrow `s` as mutable
-//                        // because it is also borrowed as immutable
-//     println!("{} {}", r1, r2);
-// }
+// @expect-error E0502
+fn main() {
+    let mut s = String::from("hello");
+    let r1 = &s;     // shared borrow
+    let r2 = &mut s; // ERROR: s is already borrowed as immutable
+    println!("{} {}", r1, r2);
+}
+```
+
+```text
+error[E0502]: cannot borrow `s` as mutable because it is also borrowed as immutable
+ --> src/main.rs:5:14
+  |
+4 |     let r1 = &s;     // shared borrow
+  |              -- immutable borrow occurs here
+5 |     let r2 = &mut s; // ERROR: s is already borrowed as immutable
+  |              ^^^^^^ mutable borrow occurs here
+6 |     println!("{} {}", r1, r2);
+  |                       -- immutable borrow later used here
 ```
 
 ### Non-Lexical Lifetimes (NLL)

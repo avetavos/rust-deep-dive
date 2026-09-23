@@ -57,7 +57,7 @@ fn main() {
     let point: (i32, f64, bool) = (1, 2.5, false);
     println!("{} {} {}", point.0, point.1, point.2);
 
-    // Destructuring tuple
+    // Destructuring a tuple
     let (a, b, c) = point;
     println!("a={}, b={}, c={}", a, b, c);
 }
@@ -84,13 +84,54 @@ fn main() {
 
 ```rust
 fn main() {
-    let n = 42;         // อนุมานเป็น i32
-    let f = 1.5;        // อนุมานเป็น f64
-    let s = "hello";    // อนุมานเป็น &str
+    let n = 42;         // inferred as i32
+    let f = 1.5;        // inferred as f64
+    let s = "hello";    // inferred as &str
 
-    // Suffix syntax บังคับให้ใช้ numeric type เฉพาะ
+    // Suffix syntax forces a specific numeric type
     let byte = 255_u8;
     println!("{} {} {} {}", n, f, s, byte);
+}
+```
+
+### Cast ด้วย `as`, Truncation และ Overflow
+
+`as` แปลงระหว่าง numeric type ต่างๆ การ cast ไปยัง integer type ที่เล็กกว่าจะ **truncate**: เก็บเฉพาะ bit ลำดับต่ำ ดังนั้นค่าที่ใส่ไม่พอดีจะกลายเป็นตัวเลขอื่นแบบเงียบๆ แทนที่จะ error
+
+```rust
+fn main() {
+    let big: i32 = 300;
+    let truncated = big as u8; // keeps only the low 8 bits
+    println!("truncated = {truncated}"); // 44, not 300
+}
+```
+
+การคำนวณปกติ (`+`, `-`, `*`) เป็นคนละเรื่อง: มัน **ไม่** truncate แต่จะตรวจสอบแทน ใน debug build การคำนวณที่ผลลัพธ์จริงไม่พอดีกับ type จะ panic แทนที่จะ wrap แบบเงียบๆ:
+
+```rust
+// @expect-panic
+fn main() {
+    let x: u8 = std::hint::black_box(250);
+    let sum = x + 10; // 260 does not fit in a u8
+    println!("sum = {sum}");
+}
+```
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:4:15:
+attempt to add with overflow
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+
+release build (`cargo build --release`) ปิด overflow check เป็นค่าเริ่มต้นและ **wrap** แบบเงียบๆ แทนที่จะ panic — การพึ่งพาความแตกต่างนี้คือบั๊กที่รอวันโผล่ตอน production เท่านั้น ใช้ method ที่ชัดเจนแทนการพึ่ง behavior โดยนัย: `wrapping_add` wrap โดยตั้งใจ, `checked_add` return `Option<u8>`, และ `saturating_add` clamp ไปที่ค่าสูงสุดของ type
+
+```rust
+fn main() {
+    let x: u8 = std::hint::black_box(250);
+    println!("wrapping = {}", x.wrapping_add(10));  // 4
+    println!("checked  = {:?}", x.checked_add(10)); // None
+    println!("saturating = {}", x.saturating_add(10)); // 255
 }
 ```
 

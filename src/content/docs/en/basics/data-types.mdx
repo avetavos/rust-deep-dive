@@ -94,6 +94,47 @@ fn main() {
 }
 ```
 
+### Casting with `as`, Truncation, and Overflow
+
+`as` converts between numeric types. Casting to a smaller integer type **truncates**: it keeps only the low-order bits, so a value that does not fit silently becomes a different number instead of erroring.
+
+```rust
+fn main() {
+    let big: i32 = 300;
+    let truncated = big as u8; // keeps only the low 8 bits
+    println!("truncated = {truncated}"); // 44, not 300
+}
+```
+
+Plain arithmetic (`+`, `-`, `*`) is a different story: it does **not** truncate, it checks. In a debug build, an operation whose true result does not fit in the type panics instead of silently wrapping:
+
+```rust
+// @expect-panic
+fn main() {
+    let x: u8 = std::hint::black_box(250);
+    let sum = x + 10; // 260 does not fit in a u8
+    println!("sum = {sum}");
+}
+```
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:4:15:
+attempt to add with overflow
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+
+A release build (`cargo build --release`) turns overflow checks off by default and silently **wraps** instead of panicking — relying on that difference is a bug waiting to surface only in production. Say what you mean instead with the explicit methods: `wrapping_add` wraps on purpose, `checked_add` returns `Option<u8>`, and `saturating_add` clamps to the type's max value.
+
+```rust
+fn main() {
+    let x: u8 = std::hint::black_box(250);
+    println!("wrapping = {}", x.wrapping_add(10));  // 4
+    println!("checked  = {:?}", x.checked_add(10)); // None
+    println!("saturating = {}", x.saturating_add(10)); // 255
+}
+```
+
 export const dataTypesCode = `fn main() {
     // Scalar types
     let n: i32 = -42;

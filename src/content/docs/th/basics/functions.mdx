@@ -31,13 +31,13 @@ fn add(a: i32, b: i32) -> i32 {
 
 ```rust
 fn main() {
-    // นี่คือ statement — ไม่ผลิตค่า
+    // This is a statement — no value produced
     let y = 6;
 
-    // นี่คือ expression block — ผลิตค่า 12
+    // This is an expression block — produces 12
     let z = {
         let x = 3;
-        x * 4  // ไม่มี semicolon — นี่คือค่าของ block
+        x * 4  // no semicolon — this is the block's value
     };
 
     println!("y={}, z={}", y, z);
@@ -52,11 +52,11 @@ expression สุดท้ายใน function body ที่เขียน **
 
 ```rust
 fn square(n: i32) -> i32 {
-    n * n  // return เพราะไม่มี semicolon
+    n * n  // returned because it has no semicolon
 }
 
 fn max_of_two(a: i32, b: i32) -> i32 {
-    if a > b { a } else { b }  // if เป็น expression
+    if a > b { a } else { b }  // if is an expression
 }
 ```
 
@@ -66,10 +66,12 @@ fn max_of_two(a: i32, b: i32) -> i32 {
 
 ```rust
 fn greet(name: &str) {
-    // return () โดยอัตโนมัติ
+    // implicitly returns ()
     println!("Hello, {}!", name);
 }
 ```
+
+ฟังก์ชัน `describe` ใน playground ด้านล่าง return `&'static str`: reference ไปยัง string literal ที่ถูกฝังไว้ใน binary และมีอายุตลอดทั้งโปรแกรม คอมไพเลอร์จึงให้ lifetime พิเศษ `'static` กับมัน — คุณจะได้เจอ `'static` และ lifetime อื่นๆ อย่างละเอียดในโมดูล Traits & Generics
 
 export const functionsCode = `fn add(a: i32, b: i32) -> i32 {
     a + b   // trailing expression -- no semicolon -- is the return value

@@ -44,6 +44,12 @@ enum Shape {
 You construct a variant by calling it like a function:
 
 ```rust
+enum Shape {
+    Circle(f64),
+    Rectangle(f64, f64),
+    Triangle(f64, f64, f64),
+}
+
 let c = Shape::Circle(3.0);
 let r = Shape::Rectangle(4.0, 5.0);
 ```
@@ -63,6 +69,12 @@ enum Message {
 You can add methods to enums the same way you add them to structs — with an `impl` block and a `match` inside:
 
 ```rust
+enum Shape {
+    Circle(f64),
+    Rectangle(f64, f64),
+    Triangle(f64, f64, f64),
+}
+
 impl Shape {
     fn name(&self) -> &str {
         match self {

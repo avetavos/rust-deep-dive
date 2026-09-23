@@ -19,27 +19,77 @@ struct Point {
     x: f64,
     y: f64,
 }
+
+let p = Point { x: 3.0, y: 4.0 };
 ```
 
 You create an instance by providing values for every field.
 
-```rust
-let p = Point { x: 3.0, y: 4.0 };
-```
-
 ## Field Access
 
 Access fields with dot notation: `p.x`, `p.y`. Fields are private to the module by default; prefix them with `pub` to expose them.
+
+## Deriving Debug
+
+You cannot `println!("{}", p)` a struct — there is no default human-readable format. Add `#[derive(Debug)]` above the struct to opt into the `{:?}` debug format instead, which is what you reach for while developing.
+
+```rust
+fn main() {
+    #[derive(Debug)]
+    struct Point { x: i32, y: i32 }
+
+    let p = Point { x: 1, y: 2 };
+    println!("{:?}", p); // Point { x: 1, y: 2 }
+}
+```
 
 ## Struct Update Syntax
 
 When you want a new instance that shares most fields with an existing one, use the `..` update syntax:
 
 ```rust
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+let p = Point { x: 3.0, y: 4.0 };
 let p2 = Point { x: 10.0, ..p };
 ```
 
-This copies the remaining fields (`y` in this case) from `p`. Note that fields implementing `Copy` are copied; fields that are `Move`-only are moved.
+This copies the remaining fields (`y` in this case) from `p`. Note that fields implementing `Copy` are copied; fields that are `Move`-only are **moved out of** the original.
+
+That last point matters: if any field taken from `..base` is not `Copy`, `base` is left **partially moved** — you can no longer use `base` as a whole (for example, in a `{:?}` debug print), even though the fields you didn't take are technically still there.
+
+```rust
+// @expect-error E0382
+#[derive(Debug)]
+struct Point {
+    x: i32,
+    name: String,
+}
+
+fn main() {
+    let p1 = Point { x: 1, name: String::from("origin") };
+    let p2 = Point { x: 10, ..p1 }; // p1.name is moved into p2
+
+    println!("{:?}", p1); // ERROR: p1.name was moved out
+    println!("{:?}", p2);
+}
+```
+
+```text
+error[E0382]: borrow of partially moved value: `p1`
+  --> src/main.rs:12:22
+   |
+10 |     let p2 = Point { x: 10, ..p1 }; // p1.name is moved into p2
+   |              --------------------- value partially moved here
+11 |
+12 |     println!("{:?}", p1); // ERROR: p1.name was moved out
+   |                      ^^ value borrowed here after partial move
+   |
+   = note: partial move occurs because `p1.name` has type `String`, which does not implement the `Copy` trait
+```
 
 ## Methods
 
@@ -54,6 +104,11 @@ Most methods use `&self` (read-only) or `&mut self` (read-write). Use `self` onl
 </Callout>
 
 ```rust
+struct Point {
+    x: f64,
+    y: f64,
+}
+
 impl Point {
     fn distance_from_origin(&self) -> f64 {
         (self.x * self.x + self.y * self.y).sqrt()
@@ -66,6 +121,11 @@ impl Point {
 Functions inside `impl` that do not take a `self` parameter are called *associated functions*. They are called with `::` syntax. The conventional name for a constructor is `new`:
 
 ```rust
+struct Point {
+    x: f64,
+    y: f64,
+}
+
 impl Point {
     fn new(x: f64, y: f64) -> Self {
         Point { x, y }

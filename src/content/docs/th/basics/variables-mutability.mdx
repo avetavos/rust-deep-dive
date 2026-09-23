@@ -15,11 +15,29 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 เมื่อประกาศตัวแปรด้วย `let` ตัวแปรนั้นจะ **immutable** — คุณกำหนดค่าให้ใหม่ไม่ได้ นี่ไม่ใช่ข้อจำกัด แต่คือคุณสมบัติที่ตั้งใจออกแบบมา ความ immutable โดยค่าเริ่มต้นช่วยให้คอมไพเลอร์ตรวจจับการเปลี่ยนแปลงที่ไม่ได้ตั้งใจและวิเคราะห์โค้ดได้แม่นยำกว่า
 
 ```rust
+// @expect-error E0384
 fn main() {
     let x = 5;
-    // x = 6; // error[E0384]: cannot assign twice to immutable variable `x`
+    x = 6;
     println!("x = {}", x);
 }
+```
+
+การกำหนดค่าใหม่ให้ binding ที่เป็น immutable คือ compile-time error ไม่ใช่แค่ warning:
+
+```text
+error[E0384]: cannot assign twice to immutable variable `x`
+ --> src/main.rs:4:5
+  |
+3 |     let x = 5;
+  |         - first assignment to `x`
+4 |     x = 6;
+  |     ^^^^^ cannot assign twice to immutable variable
+  |
+help: consider making this binding mutable
+  |
+3 |     let mut x = 5;
+  |         +++
 ```
 
 เพื่ออนุญาตให้เปลี่ยนค่าได้ ให้เพิ่ม `mut` หลัง `let`:
@@ -27,7 +45,7 @@ fn main() {
 ```rust
 fn main() {
     let mut y = 10;
-    y = 20;  // อนุญาตเพราะ y เป็น mut
+    y = 20;  // allowed because y is mut
     println!("y = {}", y);
 }
 ```
@@ -39,13 +57,13 @@ Shadowing แตกต่างจาก mutation คุณ **ประกาศ
 ```rust
 fn main() {
     let z = 3;
-    let z = z * 2;   // shadow z ตัวก่อนหน้า
-    let z = z + 1;   // shadow อีกครั้ง
+    let z = z * 2;   // shadows the previous z
+    let z = z + 1;   // shadows again
     println!("z = {}", z); // 7
 
-    // Shadowing เปลี่ยน type ได้
+    // Shadowing can change the type
     let word = "hello";
-    let word = word.len(); // shadow ด้วย usize
+    let word = word.len(); // shadow with a usize
     println!("len = {}", word);
 }
 ```

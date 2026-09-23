@@ -95,23 +95,29 @@ export const quizGenerics = [
 
 ## Generic Functions
 
-ลองนึกภาพว่าคุณต้องหาค่าที่ใหญ่ที่สุดใน slice สำหรับ integer คุณเขียน `largest_i32` สำหรับ char คุณเขียน `largest_char` — body เหมือนกันทุกอย่างแต่ต่าง type Generics แก้ปัญหานี้โดยให้คุณใช้ **type parameter** แทน concrete type:
+แทนที่จะเขียน `largest_i32`, `largest_f64` และ `largest_char` แยกกันเป็นฟังก์ชันคนละตัว generics ให้คุณเขียนเพียงตัวเดียว:
 
 ```rust
 fn largest<T: PartialOrd>(list: &[T]) -> &T {
-    // ...
+    let mut biggest = &list[0];
+    for item in list {
+        if item > biggest {
+            biggest = item;
+        }
+    }
+    biggest
 }
 ```
 
-ตัว `<T: PartialOrd>` อ่านว่า "สำหรับ type ใดก็ตาม `T` ที่ implement `PartialOrd`" Trait bound `PartialOrd` บอก compiler ว่า `T` รองรับการเปรียบเทียบด้วย `>`
+ส่วน `<T: PartialOrd>` ประกาศ **type parameter** ชื่อ `T` พร้อม **trait bound** trait bound `PartialOrd` หมายความว่า "ฟังก์ชันนี้รับ type ใดก็ได้ที่รองรับ operator `>` และ `<`" ถ้าไม่มี bound นี้ compiler จะปฏิเสธการเปรียบเทียบ `item > biggest` เพราะไม่ใช่ทุก type ที่เปรียบเทียบกันได้
 
 <Callout title="Generics ถูก monomorphize — zero runtime cost">
-เมื่อคุณเรียก `largest(&numbers)` โดยที่ `numbers` เป็น `Vec<i32>` compiler จะสร้าง version เฉพาะของ function สำหรับ `i32` ไม่มี overhead ณ runtime ไม่มีการตรวจสอบ type ขณะรัน — ทุกอย่างเกิดขึ้น ณ compile time
+Compiler จะสร้าง copy เฉพาะของฟังก์ชันสำหรับแต่ละ concrete type ที่คุณใช้ — หนึ่งชุดสำหรับ `i32` หนึ่งชุดสำหรับ `char` และอื่นๆ กระบวนการนี้เรียกว่า monomorphization machine code ที่ได้เหมือนกับที่คุณเขียนมือแยกสำหรับแต่ละ type ทุกประการ ดังนั้น generics จึงไม่มี overhead ณ runtime
 </Callout>
 
 ## Generic Structs
 
-คุณสามารถทำให้ struct เป็น generic ได้เช่นกัน ทำให้ field ทำงานกับ type ใดก็ได้:
+Struct ก็ทำเป็น parameterized ได้เช่นกัน `Pair<T>` เก็บค่าสอง type `T` เดียวกัน:
 
 ```rust
 struct Pair<T> {
@@ -120,13 +126,27 @@ struct Pair<T> {
 }
 ```
 
-`Pair<i32>` เก็บ integer สองอัน `Pair<String>` เก็บ String สองอัน เป็นต้น
-
-## Trait Bounds บน impl Blocks
-
-เมื่อคุณต้องการ implement method สำหรับ generic struct ด้วย constraint บางอย่าง:
+เมื่อคุณสร้าง instance compiler จะอนุมาน `T` จากค่าที่คุณให้:
 
 ```rust
+struct Pair<T> {
+    first: T,
+    second: T,
+}
+
+let p = Pair { first: 5, second: 10 }; // T inferred as i32
+```
+
+## `impl` Blocks สำหรับ Generic Structs
+
+การเพิ่ม method ให้ generic struct ต้องระบุ type parameter ซ้ำในบรรทัด `impl`:
+
+```rust
+struct Pair<T> {
+    first: T,
+    second: T,
+}
+
 impl<T: std::fmt::Display + PartialOrd> Pair<T> {
     fn larger(&self) -> &T {
         if self.first > self.second { &self.first } else { &self.second }
@@ -134,26 +154,47 @@ impl<T: std::fmt::Display + PartialOrd> Pair<T> {
 }
 ```
 
-`T: Display + PartialOrd` บอกว่า method `larger` มีให้เฉพาะ `Pair<T>` ที่ `T` รองรับทั้ง formatting และการเปรียบเทียบ
+ที่นี่ `T` ต้อง implement ทั้ง `Display` (สำหรับ printing) และ `PartialOrd` (สำหรับเปรียบเทียบ) คุณสามารถจำกัด method ให้แคบกว่าที่ struct เองต้องการได้ — `Pair<T>` มีอยู่ได้สำหรับ `T` ใดก็ตาม แต่ `larger` จะใช้ได้เฉพาะตอนที่ `T` เปรียบเทียบกันได้
 
-## Where Clauses
+## Trait Bounds และ `where` Clauses
 
-เมื่อ trait bound ยาวหรือซับซ้อน คุณสามารถย้ายไปไว้ใน `where` clause เพื่อให้อ่านง่ายขึ้น:
+Bound แบบ inline ใช้ได้ดีเมื่อมีข้อจำกัดแค่หนึ่งหรือสองอย่าง เมื่อ signature ยาวขึ้น `where` clause ช่วยให้อ่านง่ายขึ้น:
 
 ```rust
-fn notify<T>(item: &T)
+// Inline bounds
+fn notify<T: Clone + std::fmt::Debug>(item: T) {
+    println!("{:?}", item.clone());
+}
+
+// Equivalent where clause
+fn notify_where<T>(item: T)
 where
-    T: std::fmt::Display + Clone,
+    T: Clone + std::fmt::Debug,
 {
-    println!("{}", item);
+    println!("{:?}", item.clone());
+}
+
+fn main() {
+    notify(1);
+    notify_where("same bound, different syntax");
 }
 ```
 
-ทั้งสอง syntax ทำงานเหมือนกันทุกประการ — `where` เป็นแค่ทางเลือกที่อ่านง่ายกว่าสำหรับ bound ที่ซับซ้อน
+ทั้งสองรูปแบบเหมือนกันทุกประการสำหรับ compiler เลือกแบบที่ชัดเจนกว่า
+
+## Multiple Type Parameters
+
+คุณไม่ได้ถูกจำกัดให้มี type parameter เดียว ฟังก์ชันหนึ่งรับได้สองตัวหรือมากกว่า:
+
+```rust
+fn zip_display<A: std::fmt::Display, B: std::fmt::Display>(a: A, b: B) {
+    println!("{} + {}", a, b);
+}
+```
 
 ## ลองเล่น
 
-Playground ด้านล่างแสดง `largest` function แบบ generic, struct `Pair<T>` และ method ที่มี compound trait bound
+Playground แสดงฟังก์ชัน `largest` แบบ generic ที่ทำงานได้ทั้งกับ integer และ character บวกกับ struct `Pair<T>` แบบ generic ที่มี method ถูกจำกัดด้วย trait bound ให้เปรียบเทียบและแสดงผลได้
 
 <Playground code={genericsCode} />
 

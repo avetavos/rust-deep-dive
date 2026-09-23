@@ -37,6 +37,8 @@ enum Coin {
     Quarter(String),
 }
 
+let coin = Coin::Quarter(String::from("Texas"));
+
 match coin {
     Coin::Penny           => println!("Penny"),
     Coin::Quarter(state)  => println!("Quarter from {}", state),
@@ -50,11 +52,13 @@ match coin {
 Pattern สามารถจับคู่ช่วงของจำนวนเต็มด้วย `..=`:
 
 ```rust
-match score {
+let score = 85;
+let grade = match score {
     90..=100 => "A",
     80..=89  => "B",
     _        => "C or below",
-}
+};
+println!("{}", grade); // B
 ```
 
 ## Wildcard `_`
@@ -79,6 +83,7 @@ if let Some(t) = temperature {
 **Guard** คือเงื่อนไข `if` พิเศษบน match arm ที่จำกัดค่าที่ arm จะรับ:
 
 ```rust
+let number = 5;
 match number {
     n if n < 0 => println!("negative: {}", n),
     0          => println!("zero"),
@@ -89,8 +94,77 @@ match number {
 Guard ทำงานหลังจาก structural pattern ตรงกันแล้ว ดังนั้น binding (`n`) จึงใช้ได้ภายในเงื่อนไข guard
 
 <Callout title="match ต้องครอบคลุมทุกกรณี">
-Rust กำหนดให้ `match` expression ครอบคลุมทุกค่าที่เป็นไปได้ของประเภทที่จับคู่ หากคุณพลาดกรณีใด คอมไพเลอร์จะส่ง error — ไม่ใช่แค่ warning Pattern `_` เป็นวิธีมาตรฐานในการครอบคลุมกรณีที่เหลือ การรับประกันนี้หมายความว่า `match` บน enum จะไม่มีวันเงียบๆ ข้าม variant ใหม่ที่เพิ่มเข้ามาทีหลัง
+Rust กำหนดให้ `match` expression ครอบคลุมทุกค่าที่เป็นไปได้ของประเภทที่จับคู่ หากคุณพลาดกรณีใด คอมไพเลอร์จะส่ง error — ไม่ใช่แค่ warning
 </Callout>
+
+การไม่ใส่ variant ใดเลยคือ compile error ไม่ใช่แค่ warning:
+
+```rust
+// @expect-error E0004
+enum Coin {
+    Penny,
+    Quarter(String),
+}
+
+fn value(coin: Coin) -> u32 {
+    match coin {
+        Coin::Penny => 1,
+    }
+}
+
+fn main() {}
+```
+
+```text
+error[E0004]: non-exhaustive patterns: `Coin::Quarter(_)` not covered
+  --> src/main.rs:8:11
+   |
+ 8 |     match coin {
+   |           ^^^^ pattern `Coin::Quarter(_)` not covered
+   |
+note: `Coin` defined here
+  --> src/main.rs:2:6
+   |
+ 2 | enum Coin {
+   |      ^^^^
+ 3 |     Penny,
+ 4 |     Quarter(String),
+   |     ------- not covered
+   = note: the matched value is of type `Coin`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+   |
+ 9 ~         Coin::Penny => 1,
+10 ~         Coin::Quarter(_) => todo!(),
+   |
+```
+
+### Wildcard `_` ทำลายการรับประกันนี้
+
+การรับประกัน "ลืม case ไม่ได้" นั้นเป็นจริงก็ต่อเมื่อทุก variant ถูก match **ด้วยชื่อ** เท่านั้น Pattern `_` เองก็เป็น pattern ที่ถูกต้อง และมันครอบคลุมทุก variant ที่ arm อื่นไม่ได้จัดการไว้แบบเงียบๆ — รวมถึง variant ที่เพิ่มเข้ามาทีหลังด้วย คอมไพเลอร์เตือนคุณไม่ได้ เพราะในมุมมองของมันไม่มีอะไรขาดหายไป: `_` ก็ถือว่า match แล้ว
+
+```rust
+enum Coin {
+    Penny,
+    Nickel,
+    Quarter, // added after value_in_cents() was written and reviewed
+}
+
+fn value_in_cents(coin: &Coin) -> u32 {
+    match coin {
+        Coin::Penny => 1,
+        Coin::Nickel => 5,
+        _ => 0, // "handles" every future variant -- including Quarter, worth 25
+    }
+}
+
+fn main() {
+    for coin in [Coin::Penny, Coin::Nickel, Coin::Quarter] {
+        println!("{}", value_in_cents(&coin));
+    }
+}
+```
+
+โค้ดนี้ compile ผ่านสะอาด — ไม่มี error ไม่มี warning — และพิมพ์ `1`, `5`, `0` ทั้งที่ `Quarter` ควรมีค่า 25 เซนต์ แต่ไม่มีอะไรบอกว่าต้องอัปเดต `value_in_cents` ตอนเพิ่ม variant นี้เข้ามา `_` เงียบๆ ดูดซับมันไปและ return คำตอบที่ผิด ถ้าคุณต้องการการรับประกันแบบ "variant ใหม่ต้องถูกจัดการที่ไหนสักแห่ง" ให้ match ทุก variant ด้วยชื่อ แล้วใส่ `_` เฉพาะตอนที่ "กรณีอื่นๆ ทั้งหมด" คือ behavior ที่ตั้งใจจริงๆ ไม่ใช่ปฏิกิริยาอัตโนมัติ
 
 export const patternMatchingCode = `#[derive(Debug)]
 enum Coin {

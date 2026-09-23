@@ -35,15 +35,21 @@ let heading = Direction::North;
 
 ```rust
 enum Shape {
-    Circle(f64),               // รัศมี
-    Rectangle(f64, f64),       // กว้าง, สูง
-    Triangle(f64, f64, f64),   // สามด้าน
+    Circle(f64),               // radius
+    Rectangle(f64, f64),       // width, height
+    Triangle(f64, f64, f64),   // three sides
 }
 ```
 
 คุณสร้าง variant โดยเรียกใช้เหมือนฟังก์ชัน:
 
 ```rust
+enum Shape {
+    Circle(f64),
+    Rectangle(f64, f64),
+    Triangle(f64, f64, f64),
+}
+
 let c = Shape::Circle(3.0);
 let r = Shape::Rectangle(4.0, 5.0);
 ```
@@ -63,6 +69,12 @@ enum Message {
 คุณสามารถเพิ่ม method ให้กับ enum ได้เช่นเดียวกับที่เพิ่มให้กับ struct — ด้วยบล็อก `impl` และ `match` ข้างใน:
 
 ```rust
+enum Shape {
+    Circle(f64),
+    Rectangle(f64, f64),
+    Triangle(f64, f64, f64),
+}
+
 impl Shape {
     fn name(&self) -> &str {
         match self {

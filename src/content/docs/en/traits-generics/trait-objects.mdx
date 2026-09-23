@@ -25,6 +25,11 @@ When you write `dyn Animal`, you are asking Rust to use dynamic dispatch. Becaus
 - `Box<dyn Trait>` — an owned trait object stored on the heap
 
 ```rust
+trait Animal {
+    fn sound(&self) -> &str;
+    fn name(&self) -> &str;
+}
+
 fn make_sound(animal: &dyn Animal) {
     println!("{} says: {}", animal.name(), animal.sound());
 }
@@ -37,6 +42,21 @@ This function accepts *any* type that implements `Animal` — you do not need to
 The most powerful use case for trait objects is storing values of different concrete types together in a `Vec` or other collection. With generics alone this is impossible — a `Vec<T>` can only hold one concrete type at a time.
 
 ```rust
+trait Animal {
+    fn sound(&self) -> &str;
+    fn name(&self) -> &str;
+}
+struct Dog;
+struct Cat;
+impl Animal for Dog {
+    fn sound(&self) -> &str { "Woof" }
+    fn name(&self) -> &str { "Dog" }
+}
+impl Animal for Cat {
+    fn sound(&self) -> &str { "Meow" }
+    fn name(&self) -> &str { "Cat" }
+}
+
 let animals: Vec<Box<dyn Animal>> = vec![
     Box::new(Dog),
     Box::new(Cat),
@@ -46,14 +66,120 @@ let animals: Vec<Box<dyn Animal>> = vec![
 
 Each element is a `Box<dyn Animal>` — an owned pointer to some type that implements `Animal`. The vtable stored alongside each value ensures the right `sound()` and `name()` implementations are called.
 
-## Trait Objects and Object Safety
+## `impl Trait` vs `dyn Trait`
 
-Not every trait can be used as a `dyn Trait`. A trait is *object-safe* if:
+Both `&impl Animal` and `&dyn Animal` accept "some type that implements `Animal`" as a function parameter, but they compile very differently:
+
+```rust
+trait Animal {
+    fn sound(&self) -> &str;
+}
+struct Dog;
+impl Animal for Dog { fn sound(&self) -> &str { "Woof" } }
+
+// Static dispatch -- compiler generates specialized code per concrete type
+fn notify_static(item: &impl Animal) {
+    println!("{}", item.sound());
+}
+
+// Dynamic dispatch -- resolved at runtime via vtable
+fn notify_dyn(item: &dyn Animal) {
+    println!("{}", item.sound());
+}
+
+fn main() {
+    notify_static(&Dog);
+    notify_dyn(&Dog);
+}
+```
+
+`&impl Animal` is shorthand for a generic type parameter (`fn notify_static<T: Animal>(item: &T)`) — the compiler monomorphizes it, just like the generics you saw in the previous lesson. `&dyn Animal` is a trait object — one function, dispatched through a vtable at runtime. Use `impl Trait` when you know the type at compile time and want maximum performance; use `dyn Trait` when you need runtime flexibility, such as storing mixed types in a `Vec` or returning different types from different branches.
+
+## Trait Objects and Dyn Compatibility
+
+Not every trait can be used as a `dyn Trait`. A trait is **dyn compatible** if, roughly:
 
 1. It has no methods that return `Self`.
 2. It has no generic type parameters on its methods.
 
-The standard library traits `Display`, `Debug`, and `Iterator` are object-safe. Traits like `Clone` (which returns `Self`) are not.
+(Older material — including some of Rust's own history — calls this *object safety*; current rustc uses the term *dyn compatible* / *dyn compatibility* in its diagnostics, so that's what this lesson uses.)
+
+The standard library traits `Display`, `Debug`, and `Iterator` are dyn compatible. Traits like `Clone` (whose `clone` method returns `Self`) are not — trying to use one as `&dyn Trait` is a compile error:
+
+```rust
+// @expect-error E0038
+trait Animal {
+    fn sound(&self) -> &str;
+    fn clone_animal(&self) -> Self; // returns Self -- not dyn compatible
+}
+
+struct Dog;
+
+impl Animal for Dog {
+    fn sound(&self) -> &str { "Woof" }
+    fn clone_animal(&self) -> Self { Dog }
+}
+
+fn make_sound(animal: &dyn Animal) {
+    println!("{}", animal.sound());
+}
+
+fn main() {
+    make_sound(&Dog);
+}
+```
+
+```text
+error[E0038]: the trait `Animal` is not dyn compatible
+  --> src/main.rs:14:24
+   |
+14 | fn make_sound(animal: &dyn Animal) {
+   |                        ^^^^^^^^^^ `Animal` is not dyn compatible
+   |
+note: for a trait to be dyn compatible it needs to allow building a vtable
+      for more information, visit <https://doc.rust-lang.org/reference/items/traits.html#dyn-compatibility>
+  --> src/main.rs:4:31
+   |
+ 2 | trait Animal {
+   |       ------ this trait is not dyn compatible...
+ 3 |     fn sound(&self) -> &str;
+ 4 |     fn clone_animal(&self) -> Self; // returns Self -- not dyn compatible
+   |                               ^^^^ ...because method `clone_animal` references the `Self` type in its return type
+   = help: consider moving `clone_animal` to another trait
+   = help: only type `Dog` implements `Animal`; consider using it directly instead.
+```
+
+Note the exact wording: rustc says "is not dyn compatible" — it never says "object safety" or "object-safe" anywhere in the diagnostic.
+
+### The `where Self: Sized` Escape Hatch
+
+You don't have to give up on the whole trait just because one method is not dyn compatible. Adding a `where Self: Sized` bound to that one method removes it from the vtable requirement — the method is simply unavailable through `dyn Trait`, but the trait itself becomes dyn compatible again, and the method still works when called on a concrete, statically-known type:
+
+```rust
+trait Animal {
+    fn sound(&self) -> &str;
+    fn clone_animal(&self) -> Self
+    where
+        Self: Sized; // excluded from the vtable -- only callable when Self is statically known
+}
+
+struct Dog;
+
+impl Animal for Dog {
+    fn sound(&self) -> &str { "Woof" }
+    fn clone_animal(&self) -> Self { Dog }
+}
+
+fn make_sound(animal: &dyn Animal) {
+    println!("{}", animal.sound());
+}
+
+fn main() {
+    make_sound(&Dog);            // fine: dyn dispatch only needs sound()
+    let d2 = Dog.clone_animal(); // fine: called on the concrete type, not through dyn
+    make_sound(&d2);
+}
+```
 
 ## When to Use Each
 

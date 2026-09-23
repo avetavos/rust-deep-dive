@@ -69,6 +69,50 @@ fn main() {
 }
 ```
 
+### Byte Index ไม่ใช่ Character Index
+
+`&s[..n]` slice ด้วย offset ที่นับเป็น **byte** ไม่ใช่ character สิ่งนี้มองไม่เห็นตอนใช้ ASCII เพราะแต่ละตัวอักษรใช้ 1 byte — แต่ Rust string เป็น UTF-8 และตัวอักษรที่ไม่ใช่ ASCII เช่นสระภาษาไทยหรือ emoji อาจใช้ 2, 3 หรือ 4 byte การ slice ที่ byte offset ซึ่งตกอยู่กลาง character หลาย byte ตัวใดตัวหนึ่งจะไม่ตัดหรือประมาณค่าใดๆ — มันจะ **panic**
+
+```rust
+// @expect-panic
+fn main() {
+    let s = "สวัสดี";
+    let oops = &s[1..]; // byte 1 is inside the first character, not a boundary
+    println!("{oops}");
+}
+```
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:4:18:
+start byte index 1 is not a char boundary; it is inside 'ส' (bytes 0..3 of string)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+`ส` (ตัวอักษรแรกของ "สวัสดี") กว้าง 3 byte ดังนั้น byte index 1 จึงตกอยู่กลางตัวมัน — ไม่มี `char` boundary ที่ตรงนั้น ทางแก้คือเลิกคิดเป็น byte offset แล้วใช้ API ที่รู้จัก character แทน:
+
+```rust
+fn main() {
+    let s = "สวัสดี";
+
+    // chars() iterates by Unicode scalar value, never by byte
+    let first_char: Option<char> = s.chars().next();
+    println!("first char: {:?}", first_char);
+
+    // char_indices() pairs each char with its byte offset — always a valid boundary
+    if let Some((idx, ch)) = s.char_indices().nth(1) {
+        println!("second char {:?} starts at byte {}", ch, idx);
+    }
+
+    // is_char_boundary() lets you check before slicing by byte offset
+    let idx = 1;
+    if s.is_char_boundary(idx) {
+        println!("{}", &s[idx..]);
+    } else {
+        println!("byte {idx} is not a char boundary — cannot slice there");
+    }
+}
+```
+
 ### Slice ป้องกัน Dangling Index
 
 หากไม่มี slice คุณอาจเก็บ index เข้าไปใน string แล้วแก้ไข string นั้น — ทำให้ index ชี้ไปยังข้อมูลที่ไม่มีความหมาย ด้วย string slice borrow checker จะรับประกันว่า slice ไม่สามารถมีอายุยืนกว่าข้อมูลที่อ้างถึงได้

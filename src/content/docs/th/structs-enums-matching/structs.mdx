@@ -12,87 +12,143 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## การกำหนด Struct
 
-**Struct** รวม field ที่เกี่ยวข้องกันไว้ภายใต้ประเภทชื่อเดียว คุณประกาศด้วยคีย์เวิร์ด `struct` ตามด้วยชื่อประเภทและรายการ field ที่มีชื่อพร้อมประเภทของแต่ละ field
+Struct รวม field ที่เกี่ยวข้องกันไว้ภายใต้ประเภทชื่อเดียว แต่ละ field มีชื่อและ type ของตัวเอง
 
 ```rust
-struct Rectangle {
-    width: f64,
-    height: f64,
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+let p = Point { x: 3.0, y: 4.0 };
+```
+
+คุณสร้าง instance โดยระบุค่าสำหรับทุก field
+
+## การเข้าถึง Field
+
+เข้าถึง field ด้วย dot notation: `p.x`, `p.y` โดยค่าเริ่มต้น field จะ private ต่อ module นั้น ใส่ `pub` นำหน้าเพื่อเปิดให้เข้าถึงจากภายนอก
+
+## Deriving Debug
+
+คุณไม่สามารถ `println!("{}", p)` struct ได้ — ไม่มี format ที่มนุษย์อ่านได้เป็นค่าเริ่มต้น เพิ่ม `#[derive(Debug)]` เหนือ struct เพื่อเปิดใช้ format `{:?}` แทน ซึ่งเป็นสิ่งที่คุณใช้บ่อยระหว่างพัฒนา
+
+```rust
+fn main() {
+    #[derive(Debug)]
+    struct Point { x: i32, y: i32 }
+
+    let p = Point { x: 1, y: 2 };
+    println!("{:?}", p); // Point { x: 1, y: 2 }
 }
 ```
 
-คุณสร้าง instance โดยระบุค่าสำหรับทุก field:
+## Struct Update Syntax
+
+เมื่อต้องการ instance ใหม่ที่แชร์ field ส่วนใหญ่กับ instance ที่มีอยู่ ใช้ syntax `..` สำหรับ update:
 
 ```rust
-let rect = Rectangle { width: 5.0, height: 3.0 };
-println!("{}", rect.width); // เข้าถึง field ด้วย dot notation
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+let p = Point { x: 3.0, y: 4.0 };
+let p2 = Point { x: 10.0, ..p };
 ```
 
-### การ Derive Debug
+โค้ดนี้คัดลอก field ที่เหลือ (`y` ในกรณีนี้) มาจาก `p` field ที่ implement `Copy` จะถูกคัดลอก ส่วน field ที่เป็น `Move`-only จะถูก **move ออกจาก** ต้นฉบับ
 
-เพิ่ม `#[derive(Debug)]` เหนือ struct เพื่อเปิดใช้งานการฟอร์แมต `{:?}` อัตโนมัติ ซึ่งจำเป็นสำหรับการแสดงผล struct ในระหว่างการพัฒนา
+ประเด็นสุดท้ายนี้สำคัญ: ถ้า field ใดที่นำมาจาก `..base` ไม่ใช่ `Copy` แล้ว `base` จะกลายเป็น **partially moved** — คุณใช้ `base` ทั้งก้อนไม่ได้อีก (เช่น ใน debug print แบบ `{:?}`) แม้ว่า field ที่คุณไม่ได้เอาไปจะยังอยู่ก็ตาม
 
 ```rust
+// @expect-error E0382
 #[derive(Debug)]
-struct Point { x: i32, y: i32 }
+struct Point {
+    x: i32,
+    name: String,
+}
 
-let p = Point { x: 1, y: 2 };
-println!("{:?}", p);  // Point { x: 1, y: 2 }
+fn main() {
+    let p1 = Point { x: 1, name: String::from("origin") };
+    let p2 = Point { x: 10, ..p1 }; // p1.name is moved into p2
+
+    println!("{:?}", p1); // ERROR: p1.name was moved out
+    println!("{:?}", p2);
+}
 ```
 
-### Struct Update Syntax
-
-เมื่อต้องการ instance ใหม่ที่แชร์ field ส่วนใหญ่กับ instance ที่มีอยู่ ใช้ `..existing` เพื่อเติม field ที่เหลือ:
-
-```rust
-let p1 = Point { x: 1, y: 2 };
-let p2 = Point { x: 10, ..p1 }; // y คัดลอกมาจาก p1
+```text
+error[E0382]: borrow of partially moved value: `p1`
+  --> src/main.rs:12:22
+   |
+10 |     let p2 = Point { x: 10, ..p1 }; // p1.name is moved into p2
+   |              --------------------- value partially moved here
+11 |
+12 |     println!("{:?}", p1); // ERROR: p1.name was moved out
+   |                      ^^ value borrowed here after partial move
+   |
+   = note: partial move occurs because `p1.name` has type `String`, which does not implement the `Copy` trait
 ```
 
-## การเพิ่ม Method ด้วย `impl`
+## Methods
 
-บล็อก `impl` ใช้แนบฟังก์ชันเข้ากับ struct Method ที่ทำงานกับ instance จะรับ `self` เป็น parameter แรก
+เพิ่มพฤติกรรมให้ struct ในบล็อก `impl` แต่ละ method รับ receiver เป็น parameter แรก
+
+<Callout title="Methods รับ self, &self หรือ &mut self">
+- `self` — method รับความเป็นเจ้าของ instance นั้น (consume มัน)
+- `&self` — method ยืม instance แบบ immutable อ่าน field ได้แต่แก้ไขไม่ได้
+- `&mut self` — method ยืม instance แบบ mutable อ่านและแก้ไข field ได้
+
+Method ส่วนใหญ่ใช้ `&self` (อ่านอย่างเดียว) หรือ `&mut self` (อ่าน-เขียน) ใช้ `self` เฉพาะเมื่อคุณตั้งใจจะ consume ค่านั้นจริงๆ เช่นใน builder pattern
+</Callout>
 
 ```rust
-impl Rectangle {
-    fn area(&self) -> f64 {
-        self.width * self.height
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+impl Point {
+    fn distance_from_origin(&self) -> f64 {
+        (self.x * self.x + self.y * self.y).sqrt()
     }
 }
 ```
 
-รูปแบบของ `self` ทั้งสาม:
+## Associated Functions (รูปแบบ `new`)
 
-- `self` — รับความเป็นเจ้าของ (consume ค่านั้น)
-- `&self` — ยืมแบบ immutable (อ่านอย่างเดียว พบบ่อยที่สุด)
-- `&mut self` — ยืมแบบ mutable (อนุญาตให้แก้ไข)
-
-### Associated Functions (รูปแบบ `Self::new`)
-
-ฟังก์ชันในบล็อก `impl` ที่**ไม่**รับ `self` เรียกว่า *associated functions* เรียกใช้ด้วย syntax `::` รูปแบบ `new` เป็น constructor ที่ใช้กันตามแบบแผนใน Rust:
+ฟังก์ชันในบล็อก `impl` ที่**ไม่**รับ parameter `self` เรียกว่า *associated functions* เรียกใช้ด้วย syntax `::` ชื่อตามแบบแผนสำหรับ constructor คือ `new`:
 
 ```rust
-impl Rectangle {
-    fn new(width: f64, height: f64) -> Self {
-        Rectangle { width, height }
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+impl Point {
+    fn new(x: f64, y: f64) -> Self {
+        Point { x, y }
     }
 }
 
-let r = Rectangle::new(5.0, 3.0);
+let p = Point::new(1.0, 2.0);
 ```
 
-`Self` เป็น alias ของประเภทที่กำลัง implement (`Rectangle` ในที่นี้)
+`Self` ภายในบล็อก `impl` คือ alias ของประเภทที่กำลัง implement
 
 ## Tuple Structs
 
-**Tuple struct** มี field ที่ไม่มีชื่อ เป็นตำแหน่ง มีประโยชน์เป็น type-safe wrapper รอบ primitive:
+Tuple struct ตั้งชื่อให้กับลำดับ field ที่ไม่มีชื่อ มีประโยชน์เป็น wrapper แบบ type-safe ที่เบา:
 
 ```rust
-struct Color(u8, u8, u8);   // RGB
+struct Color(u8, u8, u8);
 
 let red = Color(255, 0, 0);
-println!("{}", red.0); // เข้าถึงด้วย index
+println!("{}", red.0); // access by index
 ```
+
+ต่างจาก tuple ธรรมดา `Color` และ `Point` ที่มี field type เดียวกันคือคนละ type — คอมไพเลอร์จะปฏิเสธการนำมาปนกัน
 
 export const structsCode = `#[derive(Debug)]
 struct Rectangle {
@@ -136,10 +192,6 @@ fn main() {
 
 <Playground code={structsCode} />
 
-<Callout title="Methods รับ self, &self หรือ &mut self">
-การเลือก receiver ที่ถูกต้องมีความสำคัญ ใช้ `&self` เมื่อ method ต้องการแค่อ่าน field ใช้ `&mut self` เมื่อต้องการแก้ไข ใช้ `self` (owned) เฉพาะเมื่อ method ควร consume instance นั้น — พบได้น้อยแต่เป็น idiomatic สำหรับ builder pattern
-</Callout>
-
 export const structsQuiz = [
     {
         q: 'ควรใช้ receiver type ใดสำหรับ method ที่ต้องการแค่อ่าน field ของ struct?',
@@ -147,13 +199,23 @@ export const structsQuiz = [
         answer: 1,
     },
     {
-        q: 'ชื่อตามแบบแผนของ associated function ที่สร้าง instance ใหม่ของ struct คืออะไร?',
-        options: ['create', 'build', 'new', 'init'],
+        q: 'เรียก associated function ชื่อ new บน struct ชื่อ Rectangle อย่างไร?',
+        options: [
+            'Rectangle.new()',
+            'Rectangle->new()',
+            'Rectangle::new()',
+            'new Rectangle()',
+        ],
         answer: 2,
     },
     {
-        q: 'ควรใช้รูปแบบ self ใดสำหรับ method ที่ต้องการแค่อ่าน field ของ struct?',
-        options: ['self', '&mut self', '&self', 'Self'],
+        q: 'อะไรที่ทำให้ tuple struct ต่างจาก tuple ธรรมดา?',
+        options: [
+            'Tuple struct เก็บได้เฉพาะ primitive type',
+            'Tuple struct ต้องเป็น public เสมอ',
+            'Tuple struct เป็น type ที่มีชื่อแยกต่างหาก ดังนั้น tuple struct สองตัวที่มี field type เดียวกันจึงใช้แทนกันไม่ได้',
+            'Tuple struct derive Debug ไม่ได้',
+        ],
         answer: 2,
     },
 ];

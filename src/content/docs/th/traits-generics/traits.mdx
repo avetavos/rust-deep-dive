@@ -101,6 +101,10 @@ Traits คล้ายกับ interface: type ใดก็ได้สาม�
 ใช้ `impl TraitName for TypeName` เพื่อปฏิบัติตาม trait contract:
 
 ```rust
+trait Greet {
+    fn hello(&self) -> String;
+}
+
 struct Dog {
     name: String,
 }
@@ -115,6 +119,20 @@ impl Greet for Dog {
 เมื่อ `Dog` implement `Greet` แล้ว คุณสามารถเรียก `.hello()` บน `Dog` value ใดก็ได้:
 
 ```rust
+trait Greet {
+    fn hello(&self) -> String;
+}
+
+struct Dog {
+    name: String,
+}
+
+impl Greet for Dog {
+    fn hello(&self) -> String {
+        format!("Woof! I'm {}.", self.name)
+    }
+}
+
 let d = Dog { name: String::from("Rex") };
 println!("{}", d.hello()); // Woof! I'm Rex.
 ```
@@ -141,6 +159,7 @@ trait Shape {
 Trait method ถูกเรียกด้วย dot syntax ปกติ ตราบเท่าที่ trait อยู่ใน scope หาก trait หลายอันมี method ชื่อเดียวกัน คุณสามารถใช้ fully qualified syntax เพื่อแยกแยะ:
 
 ```rust
+// @skip-verify signature only -- illustrates fully-qualified syntax, not a full example
 <Circle as Shape>::area(&c)
 ```
 
@@ -151,6 +170,10 @@ Trait method ถูกเรียกด้วย dot syntax ปกติ ตร
 คุณสามารถรับ type ใดก็ตามที่ implement trait โดยใช้ `impl TraitName` ใน function parameter:
 
 ```rust
+trait Shape {
+    fn area(&self) -> f64;
+}
+
 fn print_area(shape: &impl Shape) {
     println!("Area: {:.2}", shape.area());
 }
