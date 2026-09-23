@@ -1,0 +1,508 @@
+---
+title: 'The Borrow Checker Model'
+description: 'Region และ liveness แทนที่ scope, ทำไม E0502 ถึงเกิดกับโค้ดที่ "ดูปลอดภัย", ปัญหา borrow struct ทั้งก้อนเทียบกับ field, closure capture แบบแยกส่วน, ขีดจำกัดของ NLL, unsafe และ Miri'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+คุณเคยเจอ `E0502`, `E0499`, two-phase borrow และ NLL ในโมดูล Ownership & Borrowing มาแล้ว บทนี้ลงลึกไปอีกชั้น: ไม่ใช่แค่ error พวกนี้คืออะไร แต่คือ model จริง — region และ liveness บน MIR — ที่ตัดสินว่ามันเกิดขึ้นเมื่อไหร่ รวมถึงกรณีที่ model นั้นปฏิเสธโค้ดที่มนุษย์จะเรียกว่าปลอดภัยชัดเจน
+
+## Region เป็นเรื่อง Liveness ไม่ใช่ Lexical Scope
+
+Rust ก่อน NLL ผูก lifetime ของ borrow เข้ากับ scope แบบ *lexical* — บล็อก `{ }` ที่ล้อมรอบมัน จบแค่นั้น ตั้งแต่ Rust 2018 lifetime ของ borrow คือ **region**: เซตของจุดในโปรแกรมที่ borrow นั้นยังคง *live* จริง ๆ (แปลว่า: อาจถูกใช้อีกในภายหลังบาง path) ซึ่งอาจไม่ต่อเนื่องกัน คำนวณโดยตรงจาก control-flow graph ไม่ใช่จากการซ้อนของวงเล็บปีกกา
+
+```rust
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let last = v.last(); // borrow starts here
+    if false {
+        println!("last was {:?}", last); // if this branch ran, the borrow would need to be live here
+    }
+    // on every path, last's last possible use was inside the `if` above -- the region ends here
+    v.push(4); // fine: no live borrow of v remains by this point
+}
+```
+
+โค้ดนี้ compile ผ่านแม้ `let` ของ `last` กับการใช้มันเพียงครั้งเดียวจะห่างกันในเชิง lexical มาก ครอบคลุมบล็อก `if`: region ที่คำนวณให้ borrow ของ `last` จบทันทีหลัง `if` นั้น บนทุก path ผ่าน function เพราะนั่นคือจุดสุดท้ายจริง ๆ ที่มันอาจถูกอ่านได้ นี่คือความหมายของ "non-lexical" เป๊ะ ๆ — region ติดตาม liveness จริง ซึ่งอาจจบเร็วกว่า (หรือต้องขยายทีหลังกว่า) ที่บล็อกที่ล้อมรอบจะบอกใบ้ไว้
+
+## สิ่งที่ Compiler บอก: Borrow ที่ "ดูปลอดภัย" แต่ไม่ใช่
+
+การวิเคราะห์ liveness ทำงานบนโครงสร้าง control-flow ของโค้ด ไม่ใช่บนว่ามนุษย์ที่อ่านโค้ดจะพิสูจน์ทางจิตใจได้ไหมว่า branch หนึ่งตายแล้ว ย้ายการอ่านเดียวกันไปไว้ *หลัง* การ mutate แล้วภาพทั้งหมดกลับด้านทันที แม้ branch `if false` จะไม่มีวันรันตอน runtime เลยก็ตาม:
+
+```rust
+// @expect-error E0502
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let last = v.last();
+    v.push(4);
+    if false {
+        println!("last was {:?}", last);
+    }
+}
+```
+
+```text
+error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable
+ --> src/main.rs:4:5
+  |
+3 |     let last = v.last();
+  |                - immutable borrow occurs here
+4 |     v.push(4);
+  |     ^^^^^^^^^ mutable borrow occurs here
+5 |     if false {
+6 |         println!("last was {:?}", last);
+  |                                   ---- immutable borrow later used here
+
+error: aborting due to 1 previous error
+```
+
+สำหรับมนุษย์ `if false { ... }` คือ dead code ดังนั้น `last` จึง "ชัดเจน" ว่าไม่เคยถูกอ่านจริง ๆ และ `v.push(4)` ข้างบนมันดูปลอดภัยสมบูรณ์ borrow checker รันก่อนที่การให้เหตุผลแบบ constant-condition นั้นจะถูกนำมาใช้เลย — มันเห็น branch ที่ `last` ถูกใช้ ถือว่า branch นั้น reachable เพื่อวัตถุประสงค์ borrow-checking และดังนั้นจึงต้องการให้ borrow ของ `last` ยังคงถูกต้องอยู่ ณ จุดของ `v.push(4)` ซึ่งมันไม่ใช่อีกต่อไปแล้ว นี่คือแก่นของ "borrow checker ปฏิเสธโปรแกรมที่มนุษย์พิสูจน์ได้ว่าโอเค" — มันไม่ผิด มันแค่ conservative มากกว่าที่มนุษย์ที่ให้เหตุผลแบบเลือกเฉพาะ branch ที่สำคัญจะทำ
+
+## Two-Phase Borrow และ Reborrow ทบทวนสั้น ๆ
+
+โมดูล Ownership & Borrowing ครอบคลุมกลไกสองอย่างที่ผ่อน exclusivity แบบเข้มงวดโดยไม่ทำให้มันอ่อนลง: **two-phase borrow** ทำให้ `v.push(v.len())` compile ผ่านด้วยการถือว่า `&mut v` ที่ `.push` ต้องการเป็นแค่ *การจอง* (มีพฤติกรรมเหมือน shared borrow) ในขณะที่ argument ของมันยังคำนวณอยู่ กลายเป็น exclusive เต็มตัวก็ต่อเมื่อ call เกิดขึ้นจริงเท่านั้น; **reborrow** ทำให้ `&mut T` ถูก borrow-ชั่วคราวออกไปแล้วยังใช้ต่อได้อีก ทั้งแบบชัดเจน (`&mut *r`) และแบบซ่อนอยู่ที่ทุก function call boundary ทั้งสองเป็นการปรับแต่ง model แบบ region-based เดียวกัน — มันไม่ได้เพิ่มกฎใหม่ มันแค่คำนวณ region ที่ *แคบและแม่นยำกว่า* ที่การวิเคราะห์แบบหยาบ ๆ "borrow อยู่จนกว่าการกล่าวถึงตัวแปรของมันครั้งสุดท้ายทาง syntax" จะทำได้
+
+## Borrow Struct ทั้งก้อนเทียบกับ Field เดียว
+
+การเรียก method อย่าง `self.count()` borrow *ทั้งหมด* ของ `self` ในมุมมองของคอมไพเลอร์ — แม้ body ของ `count` จะอ่านแค่ field เดียวก็ตาม — เพราะคอมไพเลอร์เห็นแค่ signature ของ method (`&self`) ไม่ใช่ implementation ของมัน ตอนตรวจ call site นี่กลายเป็นความขัดแย้งจริง ๆ ทันทีที่ `&mut` borrow ของ field เจาะจงหนึ่งยังมีชีวิตอยู่ข้าม call นั้น:
+
+```rust
+// @expect-error E0502
+struct Cart {
+    items: Vec<String>,
+}
+
+impl Cart {
+    fn count(&self) -> usize {
+        self.items.len()
+    }
+
+    fn add_placeholder(&mut self) {
+        let items = &mut self.items;
+        items.push(format!("item #{}", self.count()));
+    }
+}
+
+fn main() {
+    let mut cart = Cart { items: vec![] };
+    cart.add_placeholder();
+    println!("{:?}", cart.items);
+}
+```
+
+```text
+error[E0502]: cannot borrow `*self` as immutable because it is also borrowed as mutable
+  --> src/main.rs:12:40
+   |
+11 |         let items = &mut self.items;
+   |                     --------------- mutable borrow occurs here
+12 |         items.push(format!("item #{}", self.count()));
+   |               ----                     ^^^^ immutable borrow occurs here
+   |               |
+   |               mutable borrow later used by call
+
+error: aborting due to 1 previous error
+```
+
+น่าสนใจว่า `self.items.push(format!("item #{}", self.count()))` เขียนเป็น expression เดียว (ไม่มี `let items = &mut self.items;` แยกบรรทัด) จะ compile ผ่านจริง ๆ — two-phase borrow ขยายไปไกลกว่ากรณี `v.push(v.len())` ธรรมดา โดยจอง `&mut self.items` ระดับ field ไว้ในขณะที่ `self.count()`'s `&self` รัน แล้วเปิด exclusive จริง ๆ ก็ต่อเมื่อ `.push` ถูกเรียกจริงเท่านั้น เวอร์ชันข้างบนล้มเหลวเพราะการ assign `&mut self.items` ให้ `items` แยกบรรทัดของมันเองเปิดใช้งาน borrow นั้นเต็มตัวทันที ไม่เหลือช่วงเวลาการจองให้การอ่านทีหลังของ `self.count()` มาแชร์ได้ ทางแก้ เมื่อมันขัดแย้งกันจริง ๆ คือ **split borrow** จริง ๆ: คำนวณอะไรก็ตามที่ต้องการ `&self` *ก่อน* ที่จะเอา `&mut` บน field เจาะจงนั้น เพื่อไม่ให้ borrow ทั้งสองซ้อนกันในเวลาเลย:
+
+```rust
+struct Cart {
+    items: Vec<String>,
+}
+
+impl Cart {
+    fn count(&self) -> usize {
+        self.items.len()
+    }
+
+    fn add_placeholder(&mut self) {
+        let n = self.count(); // &self borrow ends here, before &mut self.items starts
+        let items = &mut self.items;
+        items.push(format!("item #{}", n));
+    }
+}
+
+fn main() {
+    let mut cart = Cart { items: vec![] };
+    cart.add_placeholder();
+    cart.add_placeholder();
+    println!("{:?}", cart.items);
+}
+```
+
+```text
+["item #0", "item #1"]
+```
+
+## Closure Capture Field แบบแยกส่วน (2021+)
+
+ก่อน Rust 2021 closure ที่ capture `p.x` จะ capture `p` *ทั้งหมด* ทำให้ closure สองตัวที่ทำงานกับ field คนละตัวของ struct เดียวกันขัดแย้งกันเหมือน borrow ที่ซ้อนทับกันเป๊ะ ตั้งแต่ edition 2021 closure ใช้ **precise capture**: มัน capture แค่ field ที่มันใช้จริงเท่านั้น ดังนั้นการเข้าถึง field ที่แยกกันจริง ๆ จาก closure คนละตัวจึงไม่ขัดแย้งกันเลยอีกต่อไป:
+
+```rust
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() {
+    let mut p = Point { x: 0, y: 0 };
+
+    let mut bump_x = || p.x += 1; // captures only p.x, not all of p
+    let mut bump_y = || p.y += 1; // captures only p.y -- disjoint from p.x
+
+    bump_x();
+    bump_y();
+    bump_x();
+
+    println!("x = {}, y = {}", p.x, p.y);
+}
+```
+
+```text
+x = 2, y = 1
+```
+
+นี่คือแนวคิดเดียวกันกับทางแก้ split-borrow ข้างบน แค่คอมไพเลอร์ทำให้อัตโนมัติสำหรับ closure โดยเฉพาะ: region ที่คำนวณให้ capture ของ closure แต่ละตัวมีขนาดเท่ากับ field ที่มันแตะจริงเท่านั้น ไม่ใช่ struct ทั้งก้อนที่มันบังเอิญอยู่ข้างใน
+
+## ขีดจำกัดของ NLL: การ Return Borrow แบบมีเงื่อนไข
+
+NLL กับ precise capture จัดการได้เยอะ แต่มันไม่ใช่ทางแก้ที่สมบูรณ์สำหรับ "region ของ borrow นี้จำเป็นต้องรวมจุดนี้จริง ๆ ไหม" กรณีคลาสสิกที่ยังล้มเหลวอยู่ทุกวันนี้คือการ return borrow แบบมีเงื่อนไขแล้วอยากจะ borrow ค่าเดิมอีกครั้งบน path ที่ไม่ได้ return มัน:
+
+```rust
+// @expect-error E0502
+use std::collections::HashMap;
+
+fn get_or_insert<'a>(map: &'a mut HashMap<i32, String>, key: i32) -> &'a String {
+    if let Some(v) = map.get(&key) {
+        return v;
+    }
+    map.insert(key, "default".to_string());
+    map.get(&key).unwrap()
+}
+
+fn main() {
+    let mut map = HashMap::new();
+    println!("{}", get_or_insert(&mut map, 1));
+}
+```
+
+```text
+error[E0502]: cannot borrow `*map` as mutable because it is also borrowed as immutable
+ --> src/main.rs:7:5
+  |
+3 | fn get_or_insert<'a>(map: &'a mut HashMap<i32, String>, key: i32) -> &'a String {
+  |                  -- lifetime `'a` defined here
+4 |     if let Some(v) = map.get(&key) {
+  |                      --- immutable borrow occurs here
+5 |         return v;
+  |                - returning this value requires that `*map` is borrowed for `'a`
+6 |     }
+7 |     map.insert(key, "default".to_string());
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+
+error: aborting due to 1 previous error
+```
+
+มนุษย์มองเห็นว่าถ้า execution ไปถึง `map.insert` แปลว่า branch `if let` *ไม่* ถูกเลือก ดังนั้น `v` ไม่เคยถูกสร้างขึ้นเลยและไม่มีอะไรเหลือถูก borrow อยู่ borrow checker ปัจจุบัน (ที่อิงกับ NLL) แสดง "region ของ borrow นี้ไม่รวม branch อื่นที่เจาะจงนี้" ได้ไม่แม่นยำพอที่จะยอมรับสิ่งนั้น — มันผูก borrow จาก `map.get(&key)` เข้ากับ lifetime `'a` แบบ conservative เพราะ return type บอกว่าค่าที่ borrow มาจาก `map` อาจไหลออกจาก function ผ่าน branch นั้นได้ และเมื่อผูกมันกับ `'a` แล้ว มันก็ไม่มีวิธีบอกด้วยว่า "ยกเว้นตอนที่ branch อื่นเป็นตัวที่รันจริง" **Polonius** คือ analysis สำหรับตรวจสอบ borrow แบบใหม่ที่กำลังพัฒนามานาน อิงกับ model แบบ logic ที่แม่นยำกว่าของ borrow ซึ่งออกแบบมาเพื่อยอมรับกรณีแบบนี้โดยเฉพาะ — แต่มันยังไม่ใช่ checker แบบ default ทางแก้เชิงปฏิบัติวันนี้คือ `entry` ซึ่งเลี่ยงรูปร่างทั้งหมดของปัญหาแทนที่จะพยายามโน้มน้าว checker ปัจจุบัน:
+
+```rust
+use std::collections::HashMap;
+
+fn get_or_insert<'a>(map: &'a mut HashMap<i32, String>, key: i32) -> &'a String {
+    map.entry(key).or_insert_with(|| "default".to_string())
+}
+
+fn main() {
+    let mut map = HashMap::new();
+    println!("{}", get_or_insert(&mut map, 1));
+    println!("{}", get_or_insert(&mut map, 1));
+}
+```
+
+```text
+default
+default
+```
+
+## `unsafe` และ Raw Pointer: อะไรที่ปิด อะไรที่ไม่ปิด
+
+`unsafe` **ไม่ได้** ปิด borrow checker, การตรวจ move หรือ type checking เลย — ทุกกฎที่บทนี้และโมดูล Ownership & Borrowing ครอบคลุมยังคงใช้ได้ข้างใน `unsafe` block สิ่งที่ `unsafe` ปลดล็อกจริง ๆ คือรายการ operation เล็ก ๆ คงที่ที่คอมไพเลอร์พิสูจน์ความปลอดภัยด้วยตัวเองไม่ได้: dereference raw pointer (`*const T` / `*mut T`), เรียก `unsafe fn` อีกตัว, mutate `static`, เข้าถึง field ของ union และ implement `unsafe trait` การเขียน `unsafe` คือคำสัญญาว่า *คุณ* ตรวจสอบเงื่อนไขที่คอมไพเลอร์ตรวจไม่ได้แล้ว — ไม่ใช่วิธีทำให้คอมไพเลอร์หยุดตรวจทุกอย่างที่เหลือ
+
+Raw pointer (`*const T`, `*mut T`) ถูกสร้างได้อย่างอิสระในโค้ด safe — การเอา raw pointer จาก reference ไม่เคยต้องการ `unsafe` เลย — แต่การ *ใช้* มัน (dereference มัน) ต้องการ เพราะพอดีคอมไพเลอร์ไม่สามารถ track ได้อีกต่อไปว่ามันถูกต้อง, align และไม่ dangling แบบที่มัน track `&T`/`&mut T`
+
+ตั้งแต่ edition 2024 แม้แต่โค้ด *ข้างใน* `unsafe fn` ก็ต้องห่อ operation ที่ unsafe จริง ๆ ของมันด้วย `unsafe` block ที่ชัดเจน — การอยู่ข้างใน `unsafe fn` ไม่ทำให้ body ทั้งหมดของมัน unsafe โดยปริยายอีกต่อไป:
+
+```rust
+unsafe fn read_at(ptr: *const i32) -> i32 {
+    *ptr
+}
+
+fn main() {
+    let x = 5;
+    let p = &x as *const i32;
+    unsafe {
+        println!("{}", read_at(p));
+    }
+}
+```
+
+```text
+warning[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+ --> src/main.rs:2:5
+  |
+2 |     *ptr
+  |     ^^^^ dereference of raw pointer
+  |
+  = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+ --> src/main.rs:1:1
+  |
+1 | unsafe fn read_at(ptr: *const i32) -> i32 {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+  = note: `#[warn(unsafe_op_in_unsafe_fn)]` (part of `#[warn(rust_2024_compatibility)]`) on by default
+```
+
+นี่คือ warning โดย default ไม่ใช่ hard error — แต่ `#![deny(unsafe_op_in_unsafe_fn)]` (ที่ production crate หลายตัวเปิดใช้) เปลี่ยนมันให้เป็น error ได้ ประเด็นของการเปลี่ยนแปลงใน 2024 คือ "function ทั้งตัวนี้ unsafe" เคยซ่อนไว้ว่าบรรทัดไหนข้างในมันจริง ๆ ที่ผู้เรียกต้องระวัง การบังคับให้มี `unsafe { }` ที่ชัดเจนข้างในทำให้สิ่งนั้นมองเห็นได้แม้แต่ข้างใน `unsafe fn`:
+
+```rust
+unsafe fn read_at(ptr: *const i32) -> i32 {
+    unsafe { *ptr } // explicit unsafe block inside the unsafe fn, required since edition 2024
+}
+
+fn main() {
+    let x = 5;
+    let p = &x as *const i32;
+    let value = unsafe { read_at(p) };
+    println!("{}", value);
+}
+```
+
+```text
+5
+```
+
+## Miri: จับสิ่งที่ Type System จับไม่ได้
+
+โค้ด `unsafe` ที่ละเมิดข้อผูกพันด้านความปลอดภัยของมันไม่จำเป็นต้อง crash, panic หรือเกิด compile error เลยด้วยซ้ำ — เหตุผลทั้งหมดที่มันต้องการคำสัญญาที่มนุษย์ตรวจสอบเองคือคอมไพเลอร์ไม่มีทางตรวจจับการละเมิดนั้นได้ด้วยตัวเอง **Miri** (`cargo +nightly miri run`) คือ interpreter ที่รันโปรแกรมของคุณในขณะที่ track กฎ aliasing แบบเดียวกัน (Stacked Borrows) ที่คอมไพเลอร์สมมติว่าโค้ด `unsafe` ยึดถืออยู่ และรายงาน **Undefined Behavior** ทันทีที่กฎเหล่านั้นถูกละเมิดจริง ๆ — แม้ output ปกติของโปรแกรมจะดูโอเคสมบูรณ์ก็ตาม:
+
+```rust
+// @skip-verify nightly-only: requires `cargo +nightly miri run`, not a plain rustc compile
+fn main() {
+    let mut x = 5i32;
+    let ptr1: *mut i32 = &mut x;
+    let ptr2: *mut i32 = &mut x;
+    unsafe {
+        *ptr1 = 10;
+        *ptr2 = 20; // aliasing violation: two live &mut-derived pointers writing to the same place
+        println!("{}", *ptr1);
+    }
+}
+```
+
+Compile และรันปกติด้วย `rustc` ธรรมดา โปรแกรมนี้ print `20` และจบสำเร็จ — ไม่มีอะไรในพฤติกรรมของมันที่ดูผิดเลย รันภายใต้ Miri (`cargo +nightly miri run`) โปรแกรมเดียวกันถูกปฏิเสธทันที:
+
+```text
+error: Undefined Behavior: attempting a write access using <538> at alloc206[0x0], but that tag does not exist in the borrow stack for this location
+ --> src/main.rs:6:9
+  |
+6 |         *ptr1 = 10;
+  |         ^^^^^^^^^^ this error occurs as part of an access at alloc206[0x0..0x4]
+  |
+  = help: this indicates a potential bug in the program: it performed an invalid operation, but the Stacked Borrows rules it violated are still experimental
+  = help: see https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/stacked-borrows.md for further information
+help: <538> was created by a SharedReadWrite retag at offsets [0x0..0x4]
+ --> src/main.rs:3:26
+  |
+3 |     let ptr1: *mut i32 = &mut x;
+  |                          ^^^^^^
+help: <538> was later invalidated at offsets [0x0..0x4] by a Unique retag
+ --> src/main.rs:4:26
+  |
+4 |     let ptr2: *mut i32 = &mut x;
+  |                          ^^^^^^
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+error: aborting due to 1 previous error
+```
+
+`ptr1` กับ `ptr2` เป็น raw pointer อิสระสองตัวที่มาจากการ borrow `&mut x` แยกกันสองครั้ง — สร้างได้ตามกฎหมาย แต่การเขียนผ่าน `ptr1` หลังจาก borrow ที่มาจาก `&mut` ของ `ptr2` เริ่มไปแล้วทำให้สิทธิ์ exclusive access ของ `ptr1` เป็นโมฆะ ภายใต้ aliasing model เดียวกันที่ borrow checker บังคับใช้กับ reference ธรรมดา `unsafe` ทำให้โค้ดนี้เลี่ยงการที่คอมไพเลอร์จับมันได้ตอน compile time; Miri จับมันได้ตอน "run time" ใน interpreter ที่มีต้นทุนช้าลงจริง แต่ track กฎเดียวกันเป๊ะที่ `unsafe` ปกติต้องยึดถือด้วยมือ นี่คือเหตุผลตรง ๆ ว่าทำไมโค้ด `unsafe` ควรมีขนาดเล็ก ถูกรีวิวอย่างระมัดระวัง และรันภายใต้ Miri เมื่อทำได้จริง — ความเงียบของคอมไพเลอร์ไม่เหมือนกับความถูกต้องเมื่อคุณอยู่ข้างใน `unsafe` block
+
+export const borrowCheckerCode = `struct Cart {
+    items: Vec<String>,
+}
+
+impl Cart {
+    fn count(&self) -> usize {
+        self.items.len()
+    }
+
+    fn add_placeholder(&mut self) {
+        let n = self.count(); // &self borrow ends here, before &mut self.items starts
+        let items = &mut self.items;
+        items.push(format!("item #{}", n));
+    }
+}
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() {
+    let mut cart = Cart { items: vec![] };
+    cart.add_placeholder();
+    cart.add_placeholder();
+    println!("{:?}", cart.items);
+
+    let mut p = Point { x: 0, y: 0 };
+    let mut bump_x = || p.x += 1; // captures only p.x
+    let mut bump_y = || p.y += 1; // captures only p.y -- disjoint, no conflict
+    bump_x();
+    bump_y();
+    bump_x();
+    println!("x = {}, y = {}", p.x, p.y);
+}`;
+
+<Playground code={borrowCheckerCode} />
+
+<Callout title="Region ถูกคำนวณจาก liveness ไม่ใช่จากสิ่งที่มนุษย์พิสูจน์เรื่องโค้ดได้">
+borrow checker ถามคำถามเดียวเกี่ยวกับ borrow ทุกตัว: บน path ใด ๆ ผ่าน control-flow graph borrow นี้อาจถูกอ่านอีกในภายหลังไหม มันตอบแบบ conservative และเป็นกลไก ซึ่งเป็นเหตุผลตรง ๆ ว่าทำไมมันบางครั้งปฏิเสธโค้ดที่มนุษย์มองเห็นว่าโอเค (branch `if false` ที่ตายจริง ๆ) และเป็นเหตุผลตรง ๆ ว่าทำไม Polonius ถึงมีอยู่เพื่อตอบคำถามนั้นให้แม่นยำกว่านี้ในที่สุด สำหรับกรณีที่ NLL ยัง conservative ผิดอยู่
+</Callout>
+
+## Mental Model
+
+ลองนึกภาพ borrow checker กำลังรัน liveness analysis บน control-flow graph เดียวกับที่คอมไพเลอร์สร้างไว้แล้วสำหรับ optimization อื่น ๆ: สำหรับ borrow ทุกตัว มันถามว่า "เริ่มจากที่ borrow นี้ถูกสร้าง มี path ไหนผ่านส่วนที่เหลือของ function ที่มันถูกอ่านอีกไหม" และเซตของจุดที่ "ใช่" นั้น *คือ* region ของ borrow — ไม่มีอะไรเกี่ยวกับวงเล็บปีกกาหรือการซ้อนแบบ lexical เข้ามาเกี่ยวข้องโดยตรงเลย Two-phase borrow กับ precise closure capture เป็นกลไก liveness เดียวกันที่คำนวณ region ที่แคบและแม่นยำกว่าที่การวิเคราะห์แบบหยาบจะทำได้ Polonius เป็น algorithm ที่ต่างไปโดยสิ้นเชิง (อิงกับการอนุมานทาง logic แบบ Datalog บน fact ชุดเดียวกัน) ที่มุ่งตอบคำถาม liveness เดียวกันด้วยความแม่นยำมากกว่าที่ approach แบบ graph-based ของ NLL ในปัจจุบันทำได้ สำหรับรูปร่างเฉพาะ (เช่นการ return แบบมีเงื่อนไข) ที่ NLL ยัง conservative ผิดอยู่
+
+## Trade-offs
+
+Model แบบ liveness-based อนุญาตมากกว่า model แบบ lexical-scope เดิมที่มันแทนที่อย่างมาก (two-phase borrow, reborrow และ precise closure capture ล้วนมีอยู่เพราะมัน) แลกกับการที่สร้าง mental model แบบเต็มรูปแบบยากกว่า "borrow อยู่จนกว่าวงเล็บปีกกาที่ล้อมรอบมันจะจบ" — ตัวอย่าง `if false` ข้างบนคือกรณีที่ intuition เรื่อง "dead code ที่ชัดเจน" กับ algorithm แบบ conservative จริง ๆ แยกทางกันพอดี `unsafe` แลกการรับประกันของคอมไพเลอร์กับความรับผิดชอบด้วยมือบน operation ชุดเล็ก ๆ ที่เจาะจง — ต้นทุนจริงเมื่อความรับผิดชอบนั้นถูกปฏิบัติอย่างไม่ระมัดระวัง ซึ่งเป็นช่องว่างที่ Miri มีอยู่เพื่อตรวจสอบพอดี
+
+## Common Misconceptions
+
+- **"Borrow checker ตามโครงสร้าง lexical block เดียวกับการ scope ตัวแปร"** ตั้งแต่ NLL (2018) ไม่ใช่แบบนั้นแล้ว — region ของ borrow ถูกคำนวณจาก liveness จริงบน control-flow graph ซึ่งเป็นเหตุผลว่าทำไมมันถึงจบเร็วกว่าวงเล็บปิดของบล็อกได้ (borrow ส่วนใหญ่) หรือในหลักการ ทำไม checker ที่แม่นยำกว่าอย่าง Polonius สักวันหนึ่งอาจให้ region ของ borrow บางตัวไม่รวม branch ที่ unreachable-in-practice เฉพาะเจาะจงที่ NLL ยังรวมไว้แบบ conservative
+- **"ถ้า borrow checker ปฏิเสธโค้ดของฉัน โค้ดของฉันต้อง unsafe จริง ๆ แน่ ๆ"** ไม่จำเป็นเสมอไป — NLL เป็นการประมาณที่ sound แต่ไม่สมบูรณ์ ทั้งตัวอย่าง `if false` และตัวอย่าง `get_or_insert` ต่างเป็นโปรแกรมที่ memory-safe จริง ๆ ที่มนุษย์ตรวจสอบด้วยตาได้ แต่ถูกปฏิเสธเพราะ analysis ปัจจุบันพิสูจน์ได้ไม่แม่นยำเท่ามนุษย์ (ยัง)
+- **"`unsafe` ปิด borrow checker สำหรับโค้ดข้างใน block"** มันไม่แตะ borrow checking, การตรวจ move หรือ type checking เลยแม้แต่น้อย — มันแค่อนุญาต operation ชุดเล็ก ๆ คงที่ที่เจาะจง (dereference raw pointer, เรียก `unsafe fn` และอื่น ๆ อีกไม่กี่อย่าง) ซึ่งแต่ละอย่างยังต้องผ่านทุกกฎธรรมดาที่เหลือใน function เหมือนเดิม
+- **"ถ้าโค้ด `unsafe` compile ผ่านและรันได้โดยไม่ crash แปลว่ามันถูกต้อง"** โปรแกรมสามารถทำ Undefined Behavior จริง ๆ ได้ — การละเมิด aliasing, use-after-free — แล้วยัง print ผลลัพธ์ที่ดูสมเหตุสมผลในการรันครั้งหนึ่ง บน platform หนึ่ง ด้วย compiler version หนึ่งได้ Miri มีอยู่พอดีเพราะ "มันรันได้ปกติ" ไม่ใช่หลักฐานความถูกต้องสำหรับโค้ด `unsafe` แบบที่มันเป็นสำหรับโค้ด safe
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างบางครั้งเอื้อมไปหยิบ raw pointer เพื่อเลี่ยง borrow-checker error ที่มันไม่เข้าใจ ห่อ operation ไว้ใน `unsafe` เพื่อทำให้ error หายไป — โดยไม่เช็คว่ารูปแบบการเข้าถึงที่ borrow checker กำลังคัดค้านอยู่นั้นปลอดภัยจริง ๆ ไหมเมื่อการตรวจสอบของคอมไพเลอร์หายไปแล้ว
+
+<SpotTheBug code={`fn split_and_mutate(v: &mut Vec<i32>, mid: usize) -> (*mut i32, *mut i32) {
+    let ptr = v.as_mut_ptr();
+    // "raw pointers dodge the borrow checker's aliasing complaint" -- AI-added comment
+    unsafe {
+        (ptr, ptr.add(mid))
+    }
+}
+
+fn main() {
+    let mut v = vec![1, 2, 3, 4, 5, 6];
+    let (a, b) = split_and_mutate(&mut v, 3);
+    unsafe {
+        *a += 100; // both a and b alias the same underlying Vec buffer
+        *b += 100; // writing through both is exactly the aliasing violation Stacked Borrows forbids
+        println!("{} {}", *a, *b);
+    }
+}
+`}>
+โค้ดนี้ compile ผ่าน และตอนรันด้วย `rustc` ปกติมันยัง print คู่ตัวเลขที่ดูสมเหตุสมผล -- ไม่มี panic ไม่มี crash ไม่มีอาการผิดปกติให้เห็นเลย มันยังคงเป็น Undefined Behavior: raw pointer ทั้งสองตัวมาจาก borrow `&mut v` *ตัวเดียวกัน* และการเขียนผ่านตัวหนึ่งหลังจากอีกตัวถูกใช้แล้วทำให้สิทธิ์ exclusive access ของตัวแรกเป็นโมฆะภายใต้ Stacked Borrows เหมือนกับตัวอย่าง raw pointer สองตัวที่มาจาก `&mut` ก่อนหน้านี้ในบทเป๊ะ `unsafe` เอาความสามารถของคอมไพเลอร์ในการจับปัญหา aliasing ตอน compile time ออกไป มันไม่ได้ทำให้ aliasing ที่อยู่ข้างใต้ปลอดภัยขึ้นเลย และกรอบความคิดของ comment ("เลี่ยงคำคัดค้าน") ปฏิบัติต่อการคัดค้านของ borrow checker เหมือนเป็นอุปสรรค ไม่ใช่สัญญาณจริงเกี่ยวกับรูปแบบการเข้าถึง การรันโค้ดนี้ภายใต้ Miri (`cargo +nightly miri run`) จะรายงานการละเมิด Stacked Borrows แบบเดียวกับที่แสดงไว้ก่อนหน้าในบทนี้ ทางแก้จริงคือ `split_at_mut` ซึ่งเป็น safe API ของ standard library เองสำหรับความต้องการ "สอง view แบบ mutable ที่แยกกันเข้าไปใน slice เดียว" นี้พอดี — มันทำ raw-pointer trick แบบเดียวกันข้างในตัวมันเอง แต่หลังจากตรวจสอบว่าจุดแบ่งอยู่ในขอบเขตแล้วเท่านั้น และมันคืน `&mut [T]` slice แบบ safe กลับมาแทน raw pointer ที่ผู้เรียกต้องให้เหตุผลด้วยมือ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Borrow checker คำนวณ region จาก liveness จริงบน control-flow graph ไม่ใช่ lexical scope หรือการอ่านของมนุษย์ว่า branch ไหนสำคัญ — ซึ่งเป็นเหตุผลตรง ๆ ว่าทำไมมันบางครั้งปฏิเสธโค้ดที่ดูปลอดภัย (conservative, sound) และทำไม `unsafe` ที่เอาการตรวจสอบออกสำหรับ operation เจาะจงหนึ่งจึงเป็นคำสัญญาว่าคุณยึดกฎด้วยตัวเองแล้ว ไม่ใช่หลักฐานว่าคุณทำจริง
+</Callout>
+
+export const quizBorrowCheckerModel = [
+    {
+        q: "ทำไมโค้ดนี้ compile ผ่าน แม้การประกาศ last กับการใช้มันจะห่างกันมากในเชิง lexical ครอบคลุมบล็อก if?\n```rust\nfn main() {\n    let mut v = vec![1, 2, 3];\n    let last = v.last();\n    if false {\n        println!(\"{:?}\", last);\n    }\n    v.push(4);\n}\n```",
+        options: [
+            "ไม่ compile ผ่าน -- นี่เป็นคำถามหลอก",
+            "NLL คำนวณ region ของ borrow จาก liveness จริง ไม่ใช่ lexical scope บนทุก path ผ่าน function นี้ การใช้ last ครั้งสุดท้ายที่เป็นไปได้อยู่ข้างในบล็อก if ดังนั้น region จึงจบตรงนั้น ก่อน v.push(4)",
+            "บล็อก if false ถูกลบออกโดยคอมไพเลอร์ก่อนที่ borrow checking จะรัน",
+            "vec![1, 2, 3] เป็น Copy ดังนั้นจึงไม่มี borrow เกิดขึ้นเลย"
+        ],
+        answer: 1,
+        explain: "Region ถูกคำนวณจาก liveness จริงบน control-flow graph ไม่ใช่การซ้อนของวงเล็บ last ถูกใช้แค่ข้างในบล็อก if บนทุก path ดังนั้น region ของมัน (และ borrow) จึงจบตรงนั้น ก่อนวงเล็บปิดของบล็อกด้วยซ้ำ และก่อน v.push(4)"
+    },
+    {
+        q: "การย้ายการอ่าน last ไปหลัง v.push(4) (ยังอยู่ข้างในบล็อก if false) ทำให้เกิด compile error ทำไมทั้งที่ branch นี้ไม่เคยรันเลย?",
+        options: [
+            "if false เป็น syntax error ใน Rust",
+            "Borrow checker ไม่ประเมินว่าเงื่อนไขเป็น constant-false ก่อนตรวจ liveness -- มันถือว่า branch นั้น reachable เพื่อวัตถุประสงค์ borrow-checking ดังนั้น borrow ของ last ต้องยังคงถูกต้อง ณ จุดนั้น ซึ่งขัดแย้งกับ v.push(4) ก่อนหน้า",
+            "vec![1, 2, 3] mutate ข้างใน if statement ไม่ได้",
+            "last ต้องประกาศด้วย mut ถึงจะใช้ข้างใน conditional ได้"
+        ],
+        answer: 1,
+        explain: "Liveness analysis ของ borrow checker ไม่ได้ special-case เงื่อนไขที่เป็น false ตามตัวอักษร -- มันถูกออกแบบให้ conservative โดยถือว่า branch ใด ๆ ที่อ่าน borrow เป็นเหตุผลว่า borrow นั้นต้องยังคง live อยู่ ณ จุดนั้น"
+    },
+    {
+        q: "ทำไม self.count() ถึงขัดแย้งกับ borrow let items = &mut self.items; ที่เพิ่งเอาไปก่อนหน้ามัน ทั้งที่ count() อ่านแค่ self.items เท่านั้น?",
+        options: [
+            "count() แอบ mutate self.items ข้างในอยู่",
+            "คอมไพเลอร์เช็ค call กับ signature ของ count() (&self ที่ borrow self ทั้งหมด) ไม่ใช่ implementation ของมัน -- ดังนั้นมันเห็นไม่ได้ว่ามีแค่ field เดียวที่ถูกอ่านจริง ๆ",
+            "Vec<String> ไม่ implement Clone",
+            "คู่นี้เป็น compile error เสมอ ไม่มีทางแก้ที่ถูกต้อง"
+        ],
+        answer: 1,
+        explain: "การตรวจ borrow ที่ call site ดูแค่ signature ของ callee &self แปลว่า \"borrow self ทั้งหมด\" เท่าที่การตรวจ borrow ของผู้เรียกเกี่ยวข้อง ไม่ว่า body ของ method จะแตะอะไรจริง ๆ ก็ตาม"
+    },
+    {
+        q: "อะไรเปลี่ยนไปเกี่ยวกับ closure ที่ capture field ของ struct ใน Rust 2021?",
+        options: [
+            "Closure จะ capture field ของ struct ไม่ได้อีกต่อไปเลย",
+            "Closure เปลี่ยนจากการ capture ทั้งตัวแปรไปเป็น capture แบบเจาะจงต่อ field -- closure สองตัวที่ทำงานกับ field ที่แยกกันจริง ๆ ของ struct เดียวกันไม่ขัดแย้งกันอีกต่อไป",
+            "Closure ตอนนี้ capture แบบ by reference เสมอ ไม่เคย by value",
+            "Field ของ struct ต้องเป็น public ถึงจะถูก capture โดย closure ได้"
+        ],
+        answer: 1,
+        explain: "ก่อน 2021 closure ที่ใช้ p.x capture p ทั้งหมด ตั้งแต่ 2021 precise capture แปลว่ามัน capture แค่ p.x ดังนั้น closure ตัวที่สองที่ capture แค่ p.y (field ที่แยกกัน) จึงไม่ขัดแย้งกันอีกต่อไป"
+    },
+    {
+        q: "ทำไม function get_or_insert ที่ใช้ if let Some(v) = map.get(&key) { return v; } ถึง compile ไม่ผ่าน ทั้งที่มนุษย์มองเห็นว่า insert รันแค่ตอนที่ v ไม่เคยถูกสร้างขึ้นเลย?",
+        options: [
+            "HashMap::get กับ HashMap::insert อยู่ใน function เดียวกันไม่ได้",
+            "Borrow checking แบบ NLL ปัจจุบันผูก borrow จาก map.get เข้ากับ return lifetime 'a ของ function และแสดง \"ยกเว้นบน branch ที่ไม่ได้ return อะไร\" ได้ไม่แม่นยำพอ -- Polonius ถูกออกแบบมาเพื่อจัดการกรณีนี้โดยเฉพาะในที่สุด",
+            "Function นี้ขาด lifetime annotation ไปทั้งหมด",
+            "map.insert ต้องการให้ map ไม่ถูก borrow อยู่เลยตลอดทั้ง function เสมอ"
+        ],
+        answer: 1,
+        explain: "เพราะ lifetime ของ reference ที่ return ถูกผูกกับ 'a ของ function เอง NLL จึงถือว่า borrow จาก map.get(&key) ยังเกี่ยวข้องอยู่แบบ conservative แม้บน path ที่ branch if let ไม่ได้ถูกเลือก entry() เลี่ยงรูปร่างทั้งหมดของปัญหาไปเลย"
+    },
+    {
+        q: "`unsafe` ปิดอะไรจริง ๆ ใน Rust?",
+        options: [
+            "Borrow checker, การตรวจ move และ type checking สำหรับทั้ง unsafe block",
+            "ไม่มีอะไรเลย -- unsafe block ทำงานเหมือนโค้ด safe ทุกประการ",
+            "ไม่มีการตรวจสอบไหนที่ unsafe ทำงานควบคู่ไปด้วยเลย -- มันแค่อนุญาต operation ชุดเล็ก ๆ คงที่ที่ปกติถูกห้าม (เช่น dereference raw pointer) ในขณะที่ borrow checking, การตรวจ move และ type checking ยังใช้ทั้งหมด",
+            "แค่การตรวจ integer overflow เท่านั้น"
+        ],
+        answer: 2,
+        explain: "unsafe ปลดล็อก operation เฉพาะที่คอมไพเลอร์พิสูจน์เองไม่ได้ (dereference raw pointer, เรียก unsafe fn, mutate static เป็นต้น) -- มันไม่ปิดการตรวจสอบตอน compile time ปกติอื่น ๆ ที่เหลือในโค้ดเลย"
+    },
+    {
+        q: "โปรแกรมที่ใช้ raw pointer สองตัวที่มาจาก &mut borrow แยกกันของตัวแปรเดียวกัน compile, รัน และ print ผลลัพธ์ที่ดูสมเหตุสมผลภายใต้ rustc ธรรมดา Miri รายงานอะไร?",
+        options: [
+            "ผลลัพธ์เดียวกัน เพราะ Miri ตรวจแค่ compile error เท่านั้น",
+            "Undefined Behavior -- การเขียนผ่าน pointer ตัวหนึ่งหลังจาก borrow ที่มาจาก &mut ของอีกตัวเริ่มไปแล้วละเมิด aliasing model แบบ Stacked Borrows แม้ว่าจะไม่มีอะไร crash ตอนรันปกติเลยก็ตาม",
+            "Borrow-checker error แบบเดียวกับที่ rustc จะแสดงตอน compile time",
+            "ไม่มีอะไรเลย -- Miri ตรวจจับปัญหาที่ไม่ทำให้ crash ไม่ได้"
+        ],
+        answer: 1,
+        explain: "Miri interpret โปรแกรมในขณะที่ track กฎ aliasing เดียวกันที่โค้ด unsafe ควรจะยึดถือ และรายงาน UB ทันทีที่มันถูกละเมิด -- ไม่ว่า output ที่มองเห็นได้ของโปรแกรมจะดูโอเคหรือไม่ ซึ่งบ่อยครั้งมันก็ดูโอเค"
+    }
+];
+
+<Quiz client:visible id="runtime-internals/borrow-checker-model" questions={quizBorrowCheckerModel} />
+
+<ProgressTracker client:visible id="runtime-internals/borrow-checker-model" />

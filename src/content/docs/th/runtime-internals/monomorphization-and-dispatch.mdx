@@ -1,0 +1,438 @@
+---
+title: 'Monomorphization & Dispatch'
+description: '"zero-cost" หมายความว่าอะไรและวัดออกมาเป็นอะไรจริง ๆ: หนึ่ง copy ที่ compile แล้วต่อ concrete type, vtable, inline hint และตัวอย่าง assembly จริงที่เทียบ call แบบ monomorphized กับ call แบบ dyn'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+โมดูล Traits & Generics แนะนำ static dispatch (generic) กับ dynamic dispatch (`dyn Trait`) และ trade-off พื้นฐานของมันไปแล้ว บทนี้พิสูจน์กลไกที่อยู่ข้างใต้โดยตรง — หนึ่ง copy ที่ compile แล้วต่อ type, vtable จริง และตัวอย่าง assembly จริงที่แสดงว่าแต่ละกลยุทธ์มีต้นทุนเท่าไหร่จริง ๆ
+
+## หนึ่ง Copy ต่อ Type: Monomorphization
+
+Generic function อย่าง `fn identity<T>(x: T) -> T` ไม่ได้ถูก compile แค่ครั้งเดียว สำหรับทุก `T` ที่แยกกันที่มันถูกเรียกใช้จริง คอมไพเลอร์ generate copy แยกต่างหากที่เป็น concrete เต็มรูปแบบ — นี่คือ **monomorphization** และแต่ละ copy ถูก compile และ optimize แยกจากกันโดยสมบูรณ์ เหมือนกับว่าคุณเขียน `identity_i32` กับ `identity_i64` ด้วยมือเอง
+
+คุณสังเกตสิ่งนี้ได้โดยตรง: สอง instantiation ที่ monomorphize แล้วของ generic function เดียวกันเป็น function item ที่ต่างกันจริง ๆ ในสายตาของ type system ไม่ใช่โค้ดเดียวกันที่สวมข้อมูลต่างกัน
+
+## สิ่งที่ Compiler บอก: สอง Instantiation คือสอง Type ที่ต่างกัน
+
+```rust
+// @expect-error E0308
+fn identity<T>(x: T) -> T {
+    x
+}
+
+fn main() {
+    let mixed = [identity::<i32>, identity::<i64>];
+    println!("{:?}", mixed);
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> src/main.rs:8:36
+  |
+8 |     let mixed = [identity::<i32>, identity::<i64>];
+  |                                   ^^^^^^^^^^^^^^^ expected `i32`, found `i64`
+  |
+  = note: expected fn item `fn(i32) -> i32 {identity::<i32>}`
+             found fn item `fn(i64) -> i64 {identity::<i64>}`
+
+error: aborting due to 1 previous error
+```
+
+`identity::<i32>` กับ `identity::<i64>` ไม่ใช่ค่าเดียวกันที่ห่อรอบข้อมูลต่างกัน — พวกมันเป็น type ที่แยกกันจริง ๆ (type `fn item` หนึ่งต่อ instantiation ที่ monomorphize แล้วแต่ละตัว) ซึ่งเป็นสิ่งที่คุณคาดหวังพอดีถ้าคอมไพเลอร์ generate สอง function ที่แยกกันจริง ๆ เพราะมันทำแบบนั้นจริง ๆ นี่ยังเป็นหลักฐานตรง ๆ ที่ตรวจสอบได้ว่า generic มีต้นทุน indirection เป็นศูนย์: ไม่มี `identity` function ที่แชร์กันตัวเดียวที่ถูก lookup ตอน runtime สำหรับ call ทั้งสองเลย — call site แต่ละตัวถูก compile ให้เรียก function ที่เจาะจงและ concrete ของตัวมันเอง
+
+คุณยังเปรียบเทียบ address จริงของมันได้ เมื่อ coerce เป็น function pointer ธรรมดา (`fn(T) -> T` ซึ่งลบว่ามันมาจาก instantiation แบบไหน เหมือนกับที่ `dyn Trait` ลบ concrete type ทิ้ง):
+
+```rust
+fn identity<T>(x: T) -> T {
+    x
+}
+
+fn main() {
+    let f_i32: fn(i32) -> i32 = identity::<i32>;
+    let f_f64: fn(f64) -> f64 = identity::<f64>;
+    println!("f_i32 as usize == f_f64 as usize? {}", f_i32 as usize == f_f64 as usize);
+    println!("f_i32(5) = {}", f_i32(5));
+    println!("f_f64(2.5) = {}", f_f64(2.5));
+}
+```
+
+```text
+f_i32 as usize == f_f64 as usize? false
+f_i32(5) = 5
+f_f64(2.5) = 2.5
+```
+
+Instantiation ที่ต่างกันสองตัวของ generic function ตัวเดียวกันเป๊ะไปลงที่ address ที่ต่างกันใน binary ที่ compile แล้ว — หลักฐานตรง ๆ ว่าพวกมันเป็นสอง copy ของ machine code ที่แยกกันจริง ๆ ไม่ใช่ function เดียวที่แชร์กันแล้ว branch ตาม type tag ตอน runtime
+
+## ขนาดโค้ด: ต้นทุนอีกด้านของ Monomorphization
+
+หนึ่ง copy ต่อ type คือสิ่งที่ทำให้ generic call ไม่มีต้นทุน dispatch ตอน runtime เลยพอดี — และก็เป็นสิ่งที่ทำให้มันมีต้นทุนขนาดโค้ดที่ compile แล้วพอดีเหมือนกัน Generic function ที่ถูกเรียกด้วย 20 type ที่ต่างกัน generate โค้ด machine code 20 copy ใน binary สุดท้าย แม้ว่า copy ส่วนใหญ่จะเกือบเหมือนกันก็ตาม สิ่งนี้มองไม่เห็นจาก source (คุณเขียน function แค่ครั้งเดียว) และง่ายที่จะหลุดสายตาในโค้ดเบสที่มี generic helper เล็ก ๆ เยอะ แต่ละตัวถูก instantiate ข้ามหลาย type — `cargo bloat` (cargo subcommand แยกต่างหากที่ใช้กันแพร่หลาย) มีอยู่พอดีเพื่อแสดงว่า copy ที่ monomorphize แล้วของ function ไหนกินพื้นที่จริงใน release binary เพราะคอมไพเลอร์เองไม่แสดงสิ่งนี้ให้เห็นโดย default
+
+## Dynamic Dispatch: Vtable จริง ที่วัดได้
+
+`dyn Trait` เลือก trade ตรงข้าม: function ที่แชร์กันตัวเดียว resolve ผ่าน vtable lookup ตอน runtime แทนที่จะเป็น copy ที่ compile แยกต่อ type
+
+<Mermaid code={`flowchart LR
+    subgraph FatPointer["&dyn Speak (data ptr + vtable ptr)"]
+        Data["data pointer"]
+        VtablePtr["vtable pointer"]
+    end
+    Data --> Value["Dog value"]
+    VtablePtr --> Vtable["Dog's Speak vtable"]
+    Vtable --> Slot["speak fn pointer slot"]
+    Slot -->|indirect call| DogSpeak["Dog::speak"]`} title="Call แบบ dyn Trait: สอง load (data, vtable) แล้วตามด้วยหนึ่ง indirect call ผ่าน vtable slot" />
+
+บท smart-pointers ของโมดูล Ownership & Borrowing กับบท memory-layout ของโมดูลนี้วัด `&dyn Trait` ได้ 16 byte ไปแล้ว (fat pointer: data pointer + vtable pointer) เทียบกับ 8 สำหรับ `&T` pointer พิเศษนั้นคือสิ่งที่ call แบบ `dyn Trait` ต้อง load และกระโดดผ่านพอดี และมันมองเห็นได้โดยตรงใน assembly ที่ compile แล้ว
+
+## สิ่งที่ Compiler Generate จริง ๆ: การเปรียบเทียบ `--emit=asm` จริง
+
+การ compile โปรแกรมนี้ด้วย optimization (`rustc -O --emit=asm`) แล้วดู assembly AArch64 ที่ generate ให้ `main` แสดงว่า dispatch strategy ทั้งสองสร้างโค้ดที่ต่างกันเชิงโครงสร้าง ไม่ใช่แค่ต่างกันในทางทฤษฎี:
+
+```rust
+use std::hint::black_box;
+
+trait Speak {
+    fn speak(&self) -> i32;
+}
+
+struct Dog;
+impl Speak for Dog {
+    fn speak(&self) -> i32 { 1 }
+}
+
+struct Cat;
+impl Speak for Cat {
+    fn speak(&self) -> i32 { 2 }
+}
+
+#[inline(never)]
+fn call_generic<T: Speak>(x: &T) -> i32 {
+    x.speak()
+}
+
+#[inline(never)]
+fn call_dyn(x: &dyn Speak) -> i32 {
+    x.speak()
+}
+
+fn main() {
+    let d = Dog;
+    let c = Cat;
+    println!("{}", call_generic(black_box(&d)));
+    let obj: &dyn Speak = if std::env::args().count() > 100 { &c } else { &d };
+    println!("{}", call_dyn(black_box(obj)));
+}
+```
+
+```text
+1
+1
+```
+
+Assembly ที่ generate ให้ call `call_generic::<Dog>` แบบ monomorphized ใน `main` ไม่มี call instruction เลยแม้แต่ตัวเดียว:
+
+```text
+	mov	w8, #1
+	str	w8, [sp, #32]
+```
+
+แม้ `call_generic` จะถูก mark `#[inline(never)]` และ argument ของมันถูกห่อด้วย `black_box` (เพื่อหยุดคอมไพเลอร์ไม่ให้ constant-fold ตาม *ค่า* ที่มันถูกเรียกด้วย) optimizer ก็ยังมองทะลุ call แบบ monomorphized ได้: `Dog::speak` return `1` เสมอไม่มีเงื่อนไข `call_generic::<Dog>` ไม่ทำอะไรนอกจากเรียกมัน และเพราะคอมไพเลอร์รู้ concrete type ที่ call site นี้ มันจึงไล่ตาม chain นั้นได้ทั้งหมดและแทนที่ call ทั้งหมดด้วย constant `1` ตอน compile time
+
+Call แบบ `dyn` ในทางกลับกัน compile ออกมาเป็น indirect call จริง ๆ ที่คอมไพเลอร์ *มองทะลุไม่ได้* เพราะมันไม่รู้ตอน compile time ว่า `speak` ของ concrete type ไหนจะรันจริง:
+
+```text
+	ldr	x1, [x8, #24]
+	bl	__ZN4main8call_dyn17he0bc89168f5fae1cE
+```
+
+และ body ที่ compile แล้วทั้งหมดของ `call_dyn` คือแค่หนึ่ง instruction เป๊ะ:
+
+```text
+__ZN4main8call_dyn17he0bc89168f5fae1cE:
+	br	x1
+```
+
+`ldr x1, [x8, #24]` คือ vtable lookup — load function pointer ของ `speak` ออกมาจาก vtable ที่ offset คงที่ เข้าไปใน register `x1` งานทั้งหมดของ `call_dyn` จากนั้นคือ `br x1`: กระโดดไปยัง address ที่บังเอิญอยู่ใน register นั้น นี่คือต้นทุนทั้งหมด ตามตัวอักษร ของ dynamic dispatch: หนึ่ง memory load บวกหนึ่ง indirect jump ที่ optimizer ไม่มีทาง resolve ล่วงหน้าได้ — และที่สำคัญไม่แพ้กัน มันคือ boundary ที่ทึบแสงที่ปิดกั้นการ constant-fold ข้าม function แบบที่ call แบบ monomorphized ข้างบนได้มาฟรี ๆ
+
+## `#[inline]` และ `#[inline(never)]`
+
+`#[inline]` เป็น *hint* ไม่ใช่คำสั่งเด็ดขาด — มันขอให้คอมไพเลอร์พิจารณา inline function ที่ call site ของมัน (มีประโยชน์หลักกับ function เล็ก ๆ ที่ประกาศใน crate หนึ่งแล้วถูกเรียกจากอีก crate หนึ่ง ที่คอมไพเลอร์อาจไม่พิจารณาให้เอง) แต่คอมไพเลอร์มีสิทธิ์เพิกเฉยมันเสมอ `#[inline(always)]` เป็นคำขอที่แข็งแรงกว่ามาก ใกล้กับคำสั่งเด็ดขาด และ `#[inline(never)]` คือสิ่งที่บทนี้ใช้ข้างบนเพื่อบังคับให้ function `call_dyn` ที่ตั้งชื่อไว้จริงมีอยู่ใน output แทนที่จะปล่อยให้คอมไพเลอร์พับมันหายไป — มีประโยชน์พอดีสำหรับการวัดแบบนี้ และบางครั้งสำหรับ build ที่คำนึงถึงขนาดโค้ดที่ function ที่ไม่ค่อย hot ไม่ควรถูก duplicate เข้าไปในทุก caller ทั้งสอง attribute ไม่เปลี่ยน *สิ่งที่* รัน มีผลแค่ว่าคอมไพเลอร์จะ duplicate target ของ call site แบบ inline หรือเก็บมันไว้เป็น function ที่เรียกได้แยกต่างหาก
+
+## Enum Dispatch: ตัวเลือกที่สาม
+
+Generic กับ `dyn Trait` ไม่ใช่วิธีเดียวที่จะรันโค้ดต่างกันสำหรับ type ต่างกัน — เมื่อเซตของ concrete type ทั้งหมดคงที่และรู้อยู่แล้ว `enum` พร้อม `match` เป็นตัวเลือกที่สามที่เลี่ยง trade-off นี้ไปทั้งหมด:
+
+```rust
+trait Speak {
+    fn speak(&self) -> i32;
+}
+
+struct Dog;
+impl Speak for Dog {
+    fn speak(&self) -> i32 { 1 }
+}
+struct Cat;
+impl Speak for Cat {
+    fn speak(&self) -> i32 { 2 }
+}
+
+enum Animal {
+    Dog(Dog),
+    Cat(Cat),
+}
+
+impl Animal {
+    fn speak(&self) -> i32 {
+        match self {
+            Animal::Dog(d) => d.speak(),
+            Animal::Cat(c) => c.speak(),
+        }
+    }
+}
+
+fn main() {
+    let animals = vec![Animal::Dog(Dog), Animal::Cat(Cat)];
+    for a in &animals {
+        println!("{}", a.speak());
+    }
+}
+```
+
+```text
+1
+2
+```
+
+`Animal` เป็น concrete type เดียว (ไม่ต้อง monomorphization ไม่ต้อง duplicate โค้ด) และ `match` compile เป็น direct jump ตาม discriminant — ไม่มี vtable ไม่มี indirect call ผ่าน pointer ที่คอมไพเลอร์มองไม่ทะลุ ต้นทุนคือ การเพิ่ม type ที่ implement `Speak` ตัวใหม่แปลว่าต้องเพิ่ม `Animal` variant ใหม่และอัปเดตทุก `match` บนมัน (ซึ่งคอมไพเลอร์จะชี้ให้คุณเห็นเอง เพราะ `match` ต้อง exhaustive) — trade-off แบบ closed-set-เทียบ-open-set เดียวกันกับที่โมดูล Traits & Generics ครอบคลุมตอนเลือกระหว่าง `Box<dyn Trait>`, enum และ generic
+
+## `impl Trait` ใน Return Position คือ Static Dispatch
+
+`fn make_speaker() -> impl Speak` ดูคล้ายกับ `-> Box<dyn Speak>` เมื่อมองผ่าน ๆ แต่มัน compile ต่างกันโดยสิ้นเชิง: `impl Trait` ใน return position หมายถึง "concrete type เดียวที่เจาะจง ตัดสินโดย body ของ function เอง ที่ผู้เรียกไม่ต้องตั้งชื่อ" — คอมไพเลอร์รู้ concrete type ที่แน่นอนที่ทุก call site เหมือนกับ generic parameter เป๊ะ ดังนั้นจึงไม่มี vtable และไม่มี dynamic dispatch เข้ามาเกี่ยวข้องเลย
+
+```rust
+trait Speak {
+    fn speak(&self) -> i32;
+}
+
+struct Dog;
+impl Speak for Dog {
+    fn speak(&self) -> i32 { 1 }
+}
+
+fn make_speaker() -> impl Speak {
+    Dog // concrete type baked into the return type at compile time -- this is static dispatch
+}
+
+fn main() {
+    println!("{}", make_speaker().speak());
+}
+```
+
+```text
+1
+```
+
+นี่คือเหตุผลว่าทำไม `impl Trait` ใน return position ถึง return concrete type ต่างกันจากแต่ละ branch ไม่ได้ (`if`/`else` ที่ return `Dog` ใน arm หนึ่งและ `Cat` ในอีก arm เป็น compile error) — ประเด็นทั้งหมดคือคอมไพเลอร์ resolve concrete type เดียวให้ function ตอน compile time เหมือนกับที่มัน resolve generic parameter
+
+export const monomorphizationCode = `use std::hint::black_box;
+
+trait Speak {
+    fn speak(&self) -> i32;
+}
+
+struct Dog;
+impl Speak for Dog {
+    fn speak(&self) -> i32 { 1 }
+}
+
+struct Cat;
+impl Speak for Cat {
+    fn speak(&self) -> i32 { 2 }
+}
+
+fn call_generic<T: Speak>(x: &T) -> i32 {
+    x.speak()
+}
+
+fn call_dyn(x: &dyn Speak) -> i32 {
+    x.speak()
+}
+
+enum Animal {
+    Dog(Dog),
+    Cat(Cat),
+}
+
+impl Animal {
+    fn speak(&self) -> i32 {
+        match self {
+            Animal::Dog(d) => d.speak(),
+            Animal::Cat(c) => c.speak(),
+        }
+    }
+}
+
+fn main() {
+    let d = Dog;
+    let c = Cat;
+
+    println!("static dispatch (generic): {}", call_generic(black_box(&d)));
+    println!("dynamic dispatch (dyn):    {}", call_dyn(black_box(&c as &dyn Speak)));
+
+    let animals = vec![Animal::Dog(Dog), Animal::Cat(Cat)];
+    for a in &animals {
+        println!("enum dispatch:             {}", a.speak());
+    }
+
+    println!("&dyn Speak is {} bytes, &Dog is {} bytes",
+        std::mem::size_of::<&dyn Speak>(), std::mem::size_of::<&Dog>());
+}`;
+
+<Playground code={monomorphizationCode} />
+
+<Callout title="Zero-cost คือสิ่งที่วัดได้ ไม่ใช่สิ่งที่สมมติเอาเอง">
+'Zero-cost abstraction' สำหรับ generic แปลว่า call ที่ compile แล้วแยกไม่ออกจากโค้ดที่เขียนมือเฉพาะ type -- พิสูจน์ได้จริง เพราะ optimizer constant-fold มันได้ตรง ๆ dyn Trait เป็น trade ที่ต่างออกไปและตั้งใจ: function ที่แชร์กันตัวเดียวกับต้นทุนต่อ call ที่จริงและวัดได้ (หนึ่ง load, หนึ่ง indirect jump) แลกกับสิ่งที่ monomorphization ทำไม่ได้ -- เก็บ concrete type ที่ต่างกันจริง ๆ ไว้ด้วยกันตอน runtime
+</Callout>
+
+## Mental Model
+
+ลองคิดว่า generic function เป็นสูตรอาหารที่คอมไพเลอร์คัดลอกและปรับให้เฉพาะเจาะจงด้วยมือ ครั้งละหนึ่งชุดวัตถุดิบที่มันเคยถูกขอให้ทำอาหารด้วย — พอถึงเวลาเข้าเตาอบ (compile แล้ว) ไม่มี "การ lookup สูตร" เหลืออยู่เลย มีแค่คำสั่งที่เจาะจงของอาหารจานนั้นจานเดียว ซึ่งเป็นเหตุผลว่าทำไม optimizer ถึง simplify มันได้ดุดันเท่ากับที่คุณเขียนอาหารจานนั้นด้วยมือเอง Call แบบ `dyn Trait` ตรงข้ามกัน: ครัวเดียว (function ที่ compile แล้วตัวเดียว) ที่รับคำสั่งจากการ์ด (vtable) ที่ยื่นให้ที่ประตู แล้วดูการ์ดนั้นใหม่ทุกครั้ง เพราะพอดีมันไม่มีทางรู้ล่วงหน้าว่ามันจะถูกขอให้ทำจานไหนต่อไป
+
+## Trade-offs
+
+Monomorphization โปร่งใสต่อทุก optimization pass ในภายหลัง — inlining, constant folding, การวิเคราะห์ข้าม function ที่ตัวอย่าง assembly ของบทนี้แสดงให้เห็นตรง ๆ — แลกกับ code หนึ่ง copy ที่ compile แล้วต่อ concrete type ซึ่งขยายขนาด binary ได้จริงในโค้ดเบสที่ใช้ generic เยอะ `dyn Trait` จำกัดขนาดโค้ดไว้ที่ function ที่แชร์กันตัวเดียวไม่ว่าจะมีกี่ type ที่ implement trait นั้น และเป็นตัวเลือกเดียวที่ให้ concrete type ที่ต่างกันจริง ๆ อยู่ด้วยกันในหนึ่ง collection ได้ แลกกับ indirection ตอน runtime หนึ่งครั้งต่อ call และ optimization boundary ที่แข็งที่คอมไพเลอร์มองทะลุไม่ได้ Enum dispatch เลี่ยงต้นทุนทั้งสองแบบเมื่อเซตของ type ทั้งหมดคงที่และรู้อยู่แล้ว แลกกับความจำเป็นต้องอัปเดต enum (และ match ของมัน) ทุกครั้งที่เพิ่ม type ใหม่
+
+## Common Misconceptions
+
+- **"`#[inline(never)]` ทำให้ function ไม่ปรากฏเป็น copy แยกใน binary เลย"** มันหยุดคอมไพเลอร์ไม่ให้ copy โค้ดของ function นั้นเข้าไปใน caller ของมัน บังคับให้มันยังคงเป็น function เดียวที่แยกและเรียกได้ใน output — ซึ่งเป็นเหตุผลว่าทำไมบทนี้ถึงใช้มันเพื่อบังคับให้ `call_dyn` ปรากฏเป็น symbol ที่ตรวจสอบได้แทนที่จะถูกพับหายไป
+- **"Zero-cost abstraction แปลว่าไม่มีต้นทุนเลยจริง ๆ ในทุกส่วนของระบบ"** สำหรับ generic มันแปลว่าไม่มีต้นทุน dispatch ตอน runtime และโค้ดที่แยกไม่ออกจากโค้ดที่ specialize มือ — ต้นทุนที่มีอยู่จริง (ขนาดโค้ดที่ compile แล้ว หนึ่ง copy ต่อ type) ปรากฏใน binary ไม่ใช่ที่พฤติกรรมตอน runtime ของ call site
+- **"`dyn Trait` ช้ากว่าอย่างมีนัยสำคัญในทางปฏิบัติเสมอ"** ต้นทุนที่วัดได้คือหนึ่ง memory load และหนึ่ง indirect jump ต่อ call — จริงและไม่ใช่ศูนย์ แต่บ่อยครั้งไม่สำคัญเมื่อเทียบกับสิ่งที่ method ทำจริง ๆ; สิ่งที่เสียไปที่สำคัญกว่ามักเป็นการปิดกั้น optimization ข้าม function (inlining, constant folding) ที่การเปรียบเทียบ assembly ของบทนี้แสดงให้เห็นตรง ๆ ซึ่งสำคัญที่สุดสำหรับ method เล็ก ๆ ที่ hot มาก
+- **"`impl Trait` ใน return position ทำงานเหมือน `dyn Trait` -- ผู้เรียกได้ค่าที่อาจเป็น implementor ตัวไหนก็ได้"** ตรงข้ามเลย: `impl Trait` ใน return position resolve เป็น concrete type เดียวเสมอต่อ function ตัดสินโดย body ของ function เองทั้งหมด โดยไม่มี dynamic dispatch เข้ามาเกี่ยวข้องเลย — คอมไพเลอร์แค่ไม่บังคับให้ผู้เรียกเขียนชื่อของ concrete type ออกมา
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างบางครั้งเอื้อมไปหยิบ `Box<dyn Trait>` เป็นค่าเริ่มต้นทุกครั้งที่ function ต้อง "return บางอย่างที่ implement trait" แม้ว่า function นั้นจะ return แค่ concrete type เดียวเสมอ — ทิ้งความสามารถของคอมไพเลอร์ในการ devirtualize, inline และ constant-fold ไปโดยไม่ได้ความยืดหยุ่นอะไรกลับมาจริง ๆ
+
+<SpotTheBug code={`trait Shape {
+    fn area(&self) -> f64;
+}
+
+struct Square {
+    side: f64,
+}
+
+impl Shape for Square {
+    fn area(&self) -> f64 {
+        self.side * self.side
+    }
+}
+
+// "Box<dyn Shape> so callers can treat the return value generically" -- AI-added comment
+fn make_unit_square() -> Box<dyn Shape> {
+    Box::new(Square { side: 1.0 })
+}
+
+fn main() {
+    let s = make_unit_square();
+    println!("{}", s.area());
+}
+`}>
+โค้ดนี้ compile ผ่านและรันได้ถูกต้อง print `1` ออกมา และเข้าใจได้ง่ายว่าทำไมมันถึงรอดจากการรีวิว: ไม่มีอะไรผิดเลยจริง ๆ แต่ `make_unit_square` สร้างแค่ `Square` เท่านั้นเสมอ -- ไม่มี branch ไม่มี configuration ไม่มีกรณีไหนที่มันอาจ return concrete type อื่น `Box<dyn Shape>` จ่ายเงินให้ heap allocation และ vtable indirection ทุกครั้งที่เรียก `.area()` แลกกับความยืดหยุ่น ("callers can treat the return value generically") ที่ไม่เคยถูกใช้จริงเลย: ผู้เรียกทุกคนได้รับ concrete type เดียวกันเป๊ะทุกครั้ง `fn make_unit_square() -> impl Shape` return ค่าเดียวกันเป๊ะด้วยโค้ดที่เรียกเหมือนกันเป๊ะที่ทุก call site แต่ไม่มี dynamic dispatch ไม่มี heap allocation เลย และ return type ถูกรู้เต็มที่และ inline ได้ที่ทุก call site `Box<dyn Shape>` คุ้มค่ากับต้นทุนของมันทันทีที่ `Shape` concrete ตัวที่สองอาจถูก return จาก branch หรือ configuration อื่นได้ -- จนกว่าจะถึงตอนนั้น มันแค่จ่ายเงินให้ความสามารถที่ยังไม่มีอยู่จริง
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Monomorphization ให้ call site ของ generic แต่ละตัวมี copy ของโค้ดที่ concrete และ optimize ได้เต็มที่เป็นของตัวเอง -- โปร่งใสต่อ optimizer อย่างพิสูจน์ได้ -- ในขณะที่ dyn Trait เก็บ function ที่แชร์กันตัวเดียวไว้หลัง vtable indirection จริงที่วัดได้ที่ optimizer มองทะลุไม่ได้เลย เลือกตามว่าคุณต้องเก็บ concrete type ที่ต่างกันไว้ด้วยกันจริงไหม ไม่ใช่เลือกโดย default
+</Callout>
+
+export const quizMonomorphizationAndDispatch = [
+    {
+        q: "ทำไมโค้ดนี้ compile ไม่ผ่าน?\n```rust\nfn identity<T>(x: T) -> T { x }\nfn main() {\n    let mixed = [identity::<i32>, identity::<i64>];\n}\n```",
+        options: [
+            "Array เก็บ function item ไม่ได้เลย",
+            "error[E0308]: identity::<i32> กับ identity::<i64> เป็น fn item type ที่ต่างกันจริง ๆ -- หนึ่ง copy ที่ compile แล้วและ concrete ต่อ instantiation ที่ monomorphize แล้ว ไม่ใช่ function เดียวกันที่มีข้อมูลต่างกัน",
+            "identity ขาด trait bound",
+            "i32 กับ i64 อยู่ในโปรแกรมเดียวกันไม่ได้"
+        ],
+        answer: 1,
+        explain: "Monomorphization สร้าง type ที่แยกกัน (และ function ที่ compile แล้วแยกกัน) ต่อ instantiation identity::<i32> กับ identity::<i64> ต่างกันในสายตาของ type system เท่ากับ function ที่ไม่เกี่ยวข้องกันสองตัวเลย"
+    },
+    {
+        q: "การเปรียบเทียบ `identity::<i32> as usize == identity::<f64> as usize` (หลัง coerce ทั้งคู่เป็น fn pointer ธรรมดา) พิสูจน์อะไร?",
+        options: [
+            "ไม่มีอะไรเลย -- fn pointer เปรียบเทียบกันไม่ได้",
+            "ว่า instantiation ที่ monomorphize แล้วสองตัวถูก compile ไปที่ address ที่ต่างกันใน binary -- หลักฐานตรง ๆ ว่าพวกมันเป็นสอง copy ของ machine code ที่แยกกัน",
+            "ว่า generic compile ช้ากว่าโค้ดที่ไม่ใช่ generic เสมอ",
+            "ว่า i32 กับ f64 มี memory layout เดียวกัน"
+        ],
+        answer: 1,
+        explain: "Instantiation ที่ต่างกันสองตัวของ generic function เดียวกันอยู่ที่ address ต่างกันเมื่อ compile แล้ว -- หลักฐานว่ามันเป็น copy ของโค้ดที่แยกกันจริง ๆ ไม่ใช่ implementation เดียวที่แชร์กัน"
+    },
+    {
+        q: "ในการเปรียบเทียบ --emit=asm ทำไม call ของ call_generic::<Dog> แบบ monomorphized ถึงหายไปทั้งหมดจากโค้ดที่ compile แล้วของ main (แทนที่ด้วย `mov w8, #1`) แม้จะมี #[inline(never)] และ argument ที่ห่อด้วย black_box?",
+        options: [
+            "black_box ไม่มีผลอะไรเลยและคอมไพเลอร์เพิกเฉย #[inline(never)] สำหรับ generic",
+            "Dog::speak return 1 เสมอไม่ว่าค่าที่ห่อด้วย black_box จะเป็นอะไร และเพราะคอมไพเลอร์รู้ concrete type ที่ call site นี้ มันจึงไล่ตาม call chain ทั้งหมดได้และพับมันเป็น constant ตอน compile time",
+            "ตัวอย่างนี้ compile ไม่ผ่านจริง ๆ",
+            "call_generic ไม่เคยถูกเรียกจริงใน source"
+        ],
+        answer: 1,
+        explain: "black_box แค่ซ่อนค่าของ argument จากการให้เหตุผลแบบ constant-propagation -- มันไม่หยุด optimizer จากการพิสูจน์ว่าผลลัพธ์ของ call แบบ monomorphized เป็น constant เดียวกันเสมอ เมื่อพฤติกรรมของ callee ไม่ขึ้นกับค่านั้น"
+    },
+    {
+        q: "body ที่ compile แล้วของ call_dyn (`br x1` instruction เดียว) ที่นำหน้าด้วย `ldr x1, [x8, #24]` ใน main แทนอะไร?",
+        options: [
+            "บั๊กใน code generation ของคอมไพเลอร์",
+            "vtable lookup (load function pointer ของ speak จาก offset คงที่ใน vtable) ตามด้วย indirect jump ไปยัง address ที่ pointer นั้นถืออยู่ -- ต้นทุนทั้งหมด ตามตัวอักษร และวัดได้ ของ call แบบ dyn Trait",
+            "การตรวจ stack overflow ที่คอมไพเลอร์แทรกเข้าไป",
+            "โค้ดที่ inline มาจาก implementation ของ Cat"
+        ],
+        answer: 1,
+        explain: "vtable slot ถูก load เข้า register แล้ว call_dyn แค่กระโดดไปที่มัน นี่คือต้นทุนทั้งหมดของ dynamic dispatch: หนึ่ง memory load, หนึ่ง indirect branch และ (ต่างจาก call แบบ generic) boundary ที่ทึบแสงที่ optimizer มองเห็นหรือพับผ่านไม่ได้"
+    },
+    {
+        q: "Enum กับ match เป็นตัวเลือกที่ดีกว่า generic หรือ dyn Trait เมื่อไหร่ สำหรับการรันโค้ดที่เจาะจง type?",
+        options: [
+            "ไม่มีวัน -- enum ช้ากว่าทั้งสองตัวเลือกเสมอ",
+            "เมื่อเซตของ concrete type ทั้งหมดคงที่และรู้อยู่แล้ว -- มันเลี่ยงทั้งการ duplicate โค้ดของ monomorphization และ vtable indirection ของ dyn Trait แลกกับความจำเป็นต้องอัปเดตทุก match เมื่อเพิ่ม type ใหม่",
+            "เฉพาะตอนที่มี implementing type แค่ตัวเดียวเท่านั้น",
+            "เฉพาะในโค้ด async เท่านั้น"
+        ],
+        answer: 1,
+        explain: "Enum dispatch เลี่ยง trade-off ระหว่าง generic กับ dyn ไปทั้งหมดสำหรับเซตของ type ที่ปิด: concrete type เดียว, direct jump ตาม discriminant, ไม่มี vtable -- แต่เซตของ variant ต้องรู้อยู่แล้วและคอมไพเลอร์บังคับให้ทุก match จัดการกับตัวที่เพิ่มเข้ามา"
+    },
+    {
+        q: "ทำไม `fn make() -> impl Shape` ถึง return Square จาก branch หนึ่งและ Circle จากอีก branch ไม่ได้ ในขณะที่ `fn make() -> Box<dyn Shape>` ทำได้?",
+        options: [
+            "impl Trait ใน return position resolve เป็น concrete type เดียวเสมอต่อ function ตัดสินตอน compile time เหมือน generic parameter -- ไม่มี dynamic dispatch ให้เลือกระหว่าง branch ตอน runtime แบบที่ Box<dyn Shape> ทำได้",
+            "impl Trait ใช้กับ struct ไม่ได้เลย ใช้ได้แค่กับ primitive type",
+            "Box<dyn Shape> ก็เก็บได้แค่ type เดียวเหมือนกัน",
+            "นี่เป็นข้อจำกัดชั่วคราวที่จะถูกลบใน edition ในอนาคต"
+        ],
+        answer: 0,
+        explain: "impl Trait ใน return position คือ static dispatch: คอมไพเลอร์ต้อง resolve concrete return type เดียวให้ function ทั้งหมด Box<dyn Shape> คือ dynamic dispatch พอดีเพื่อให้ branch ต่างกันสามารถ return concrete type ที่ต่างกันจริง ๆ ได้ รวมกันอยู่หลัง type ที่ vtable-erased ตัวเดียวตอน runtime"
+    },
+    {
+        q: "Function หนึ่งสร้างและ return แค่ concrete type เดียวเสมอ ห่อไว้ใน Box<dyn Trait> โดยไม่มี branch หรือ configuration ไหนที่จะสร้าง type อื่นได้ ตัวเลือกที่ดีกว่าคืออะไร และทำไม?",
+        options: [
+            "เก็บ Box<dyn Trait> ไว้ -- มันปลอดภัยกว่าเป็นค่าเริ่มต้นเสมอไม่ว่าสถานการณ์จะเป็นยังไง",
+            "impl Trait ใน return position -- มัน return ค่าเดียวกันเป๊ะโดยไม่มี heap allocation และไม่มี vtable indirection เลย เพราะไม่เคยมี concrete type มากกว่าหนึ่งตัวเข้ามาเกี่ยวข้องตั้งแต่แรก",
+            "ใช้ Arc<dyn Trait> แทน เพื่อ performance ที่ดีกว่า",
+            "ไม่มีตัวเลือกที่ดีกว่าเลยเมื่อมี trait เข้ามาเกี่ยวข้อง"
+        ],
+        answer: 1,
+        explain: "Box<dyn Trait> จ่ายเงินให้ความยืดหยุ่น (heap allocation, vtable indirection) ที่สำคัญก็ต่อเมื่อ concrete type มากกว่าหนึ่งตัวอาจถูก return กลับมาได้จริง เมื่อมีแค่ตัวเดียวเสมอ impl Trait ให้โค้ดที่เรียกเหมือนกันเป๊ะโดยไม่มีต้นทุนนั้นเลย"
+    }
+];
+
+<Quiz client:visible id="runtime-internals/monomorphization-and-dispatch" questions={quizMonomorphizationAndDispatch} />
+
+<ProgressTracker client:visible id="runtime-internals/monomorphization-and-dispatch" />

@@ -1,0 +1,224 @@
+---
+title: 'Why the Runtime Model Matters'
+description: 'Source, MIR ที่ผ่าน borrow check, monomorphized codegen, binary — สี่ขั้นตอนที่โปรแกรม Rust ทุกตัวต้องผ่าน และห้าบทในโมดูลนี้เชื่อมกันยังไง'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+## ทำไมโมดูลนี้ถึงมีอยู่
+
+เจ็ดโมดูลที่แล้วสอนให้คุณ *เขียน* Rust: move ค่า, borrow มัน, implement trait, propagate error, iterate collection, spawn thread ความรู้เท่านั้นก็เพียงพอที่จะเขียนโปรแกรมที่ถูกต้องด้วยมือตัวเอง แต่ไม่พอที่จะรีวิว Rust ที่คุณไม่ได้เขียนเองได้อย่างมั่นใจ — และสัดส่วนของ Rust ที่คุณเจอทุกวันนี้มาจากเครื่องมือที่ทำซ้ำรูปแบบที่มันเคยเห็น ไม่ใช่จากคนที่ไล่ตามว่าคอมไพเลอร์ทำอะไรกับรูปแบบนั้นจริง ๆ
+
+Rust ที่ AI สร้างแล้ว compile ผ่านไม่ใช่ข้อความเดียวกันกับ Rust ที่ AI สร้างแล้วถูกต้องด้วยเหตุผลที่คุณคิด โค้ดที่ box ค่า `Copy` เล็ก ๆ "เพื่อ performance" การเรียก `dyn Trait` ที่เชื่อว่าไม่มีต้นทุนเลย `Rc<RefCell<T>>` ที่หยิบมาใช้เพราะความเคยชิน — ทั้งหมดนี้ compile ผ่าน ทั้งหมดนี้รันได้ และไม่มีบั๊กไหนมองเห็นได้จาก syntax เพียงอย่างเดียว การแยกแยะ "ถูกต้องโดยบังเอิญ" ออกจาก "ถูกต้องโดยออกแบบ" ต้องรู้ว่าคอมไพเลอร์ทำอะไรกับ source ของคุณระหว่างที่คุณพิมพ์มันจนถึงตอนที่มันรัน นี่คือสิ่งที่โมดูลนี้มีไว้เพื่อสอน
+
+## สี่ขั้นตอน หนึ่งโปรแกรม
+
+ไฟล์ `.rs` ทุกไฟล์ที่คุณเขียนผ่าน pipeline เดียวกันก่อนจะกลายเป็น binary:
+
+<Mermaid code={`flowchart LR
+    Source["Your source code\nAST"] --> MIR["MIR + borrow checker\nownership, lifetimes, exclusivity all verified here"]
+    MIR --> Codegen["Monomorphized codegen\none specialized copy of generic code per concrete type"]
+    Codegen --> Binary["Machine code\nthe binary you run"]`} title="สิ่งที่ rustc ทำกับโปรแกรมของคุณก่อนที่คุณจะได้รันมันเลย" />
+
+Source ของคุณจะถูกตรวจสอบการละเมิด borrow checker กับ **MIR** (mid-level intermediate representation) ก่อน — นี่คือขั้นตอนที่ตัดสินว่า `E0502`, `E0499` หรือ lifetime error จะเกิดขึ้นไหม ทั้งหมดนี้เกิดก่อนที่ machine code จะมีอยู่เลยด้วยซ้ำ โค้ดที่รอดจากขั้นตอนนั้นจะถูก **monomorphize**: generic function ทุกตัวถูก compile เป็น copy เฉพาะทางหนึ่งชุดต่อ concrete type ที่มันถูกเรียกใช้จริง และการเรียก `dyn Trait` ทุกครั้งจะเหลือเป็น function ที่ใช้ร่วมกันตัวเดียวที่เข้าถึงผ่าน vtable แทน หลังจากทั้งสองขั้นตอนนี้เท่านั้น LLVM ถึงจะแปลงผลลัพธ์ให้เป็น machine code จริงใน binary ของคุณ
+
+ห้าบทของโมดูลนี้จะเดินตาม pipeline นั้น บวกกับสิ่งที่เกิดขึ้นเมื่อ binary กำลังรันจริง: [Memory Layout](/rust/th/runtime-internals/memory-layout/) ครอบคลุมว่าค่าหนึ่งค่าหน้าตาเป็นยังไงจริง ๆ ในหน่วยความจำ — stack กับ heap, padding, niche optimization [Drop & RAII](/rust/th/runtime-internals/drop-and-raii/) ครอบคลุมสิ่งที่คอมไพเลอร์แทรกเข้าไปตอนออกจาก scope และทำไม [The Borrow Checker Model](/rust/th/runtime-internals/borrow-checker-model/) ไปไกลกว่า compile error ที่คุณเคยเห็นแล้ว เข้าไปสู่ *ทำไม* ขั้นตอน MIR ถึงยอมรับหรือปฏิเสธโปรแกรมแบบที่มันทำ [Monomorphization & Dispatch](/rust/th/runtime-internals/monomorphization-and-dispatch/) พูดถึงขั้นตอน codegen โดยตรง — "zero-cost" หมายความว่าอะไรจริง ๆ และวัดออกมาเป็นอะไร [The Async Runtime Model](/rust/th/runtime-internals/async-runtime-model/) ครอบคลุมว่า `async fn` compile ออกมาเป็นอะไรจริง ๆ เพราะมันคือช่องว่างที่ใหญ่ที่สุดระหว่าง "โค้ดที่อ่านเหมือนเรียงลำดับ" กับ "สิ่งที่คอมไพเลอร์กับ executor ทำกับมันจริง ๆ"
+
+## สิ่งที่ Compiler บอก: ถูกจับก่อนจะไปถึง Codegen ด้วยซ้ำ
+
+ขั้นตอน MIR/borrow-check รันก่อน monomorphization และ codegen — โปรแกรมที่ละเมิดกฎ ownership จะไม่มีวันไปถึงจุดที่จะถูก compile เป็น machine code เลย ไม่ว่าทางเลือกเรื่อง generic หรือ dispatch ในขั้นตอนถัดไปจะเป็นยังไงก็ตาม:
+
+```rust
+// @expect-error E0382
+fn main() {
+    let s = String::from("hello");
+    let t = s;
+    println!("{}", s);
+}
+```
+
+```text
+error[E0382]: borrow of moved value: `s`
+ --> src/main.rs:4:20
+  |
+2 |     let s = String::from("hello");
+  |         - move occurs because `s` has type `String`, which does not implement the `Copy` trait
+3 |     let t = s;
+  |             - value moved here
+4 |     println!("{}", s);
+  |                    ^ value borrowed here after move
+  |
+help: consider cloning the value if the performance cost is acceptable
+  |
+3 |     let t = s.clone();
+  |              ++++++++
+
+error: aborting due to 1 previous error
+```
+
+นี่คือ error แบบเดียวกับที่ [The Borrow Checker Model](/rust/th/runtime-internals/borrow-checker-model/) อธิบายจากภายใน: มันเกิดจากการวิเคราะห์บน MIR ไม่ใช่จากการ pattern-match ข้อความ source เดิมของคุณ — ซึ่งเป็นเหตุผลว่าทำไม diagnostic ถึงชี้ไปที่ type ที่ประกาศของ `s` และแนะนำทางแก้ที่เจาะจงได้
+
+## โปรแกรมที่พิสูจน์ว่า Model นี้มีอยู่จริง
+
+`std::any::type_name` กับ `std::mem::size_of` ให้คุณถามคอมไพเลอร์ตอน runtime ว่ามันตัดสินใจอะไรจริง ๆ เกี่ยวกับ generic function เมื่อมัน specialize มันสำหรับผู้เรียกแต่ละราย:
+
+```rust
+use std::any::type_name;
+use std::mem::size_of;
+
+fn describe<T>(_val: &T) {
+    println!("T = {}, size_of::<T>() = {} bytes", type_name::<T>(), size_of::<T>());
+}
+
+fn main() {
+    describe(&42i32);
+    describe(&"hello");
+    describe(&3.14f64);
+    describe(&Some(7u8));
+}
+```
+
+```text
+T = i32, size_of::<T>() = 4 bytes
+T = &str, size_of::<T>() = 16 bytes
+T = f64, size_of::<T>() = 8 bytes
+T = core::option::Option<u8>, size_of::<T>() = 2 bytes
+```
+
+มี `describe` แค่ตัวเดียวใน source แต่มี `T` ที่ต่างกันสี่แบบใน call site ทั้งสี่ และคอมไพเลอร์ตอบคำถามที่ต่างกัน แม่นยำ เจาะจงให้แต่ละอันไป — `size_of` ไม่ใช่การคำนวณตอน runtime ที่ตรงนี้ มันคือข้อเท็จจริงที่ถูกฝังไว้ตอน codegen สำหรับ copy เฉพาะทางตัวนั้น [Monomorphization & Dispatch](/rust/th/runtime-internals/monomorphization-and-dispatch/) พิสูจน์คำกล่าวอ้าง "หนึ่ง copy ต่อหนึ่ง type" นั้นโดยตรง [Memory Layout](/rust/th/runtime-internals/memory-layout/) อธิบายว่าเลขอย่าง `16` (fat pointer) กับ `2` (`Option<u8>` ที่ผ่าน niche optimization) มาจากไหนจริง ๆ
+
+export const indexCode = `use std::any::type_name;
+use std::mem::size_of;
+
+fn describe<T>(_val: &T) {
+    println!("T = {}, size_of::<T>() = {} bytes", type_name::<T>(), size_of::<T>());
+}
+
+fn main() {
+    describe(&42i32);
+    describe(&"hello");
+    describe(&3.14f64);
+    describe(&Some(7u8));
+}`;
+
+<Playground code={indexCode} />
+
+<Callout title="การ compile มีขั้นตอน และแต่ละขั้นตอนตัดบั๊กคนละประเภทออกไป">
+การละเมิด ownership และ lifetime ถูกปฏิเสธก่อน codegen จะมีอยู่ด้วยซ้ำ ต้นทุนของ generic dispatch ถูกตัดสินตอน codegen ครั้งเดียวต่อหนึ่ง concrete type พฤติกรรมตอน runtime อย่าง drop order กับการจัดตารางของ async มีอยู่ก็ต่อเมื่อ binary เริ่มรันแล้วเท่านั้น การรู้ว่าขั้นตอนไหนรับผิดชอบพฤติกรรมไหนคือสิ่งที่แยก "ฉันอ่าน Rust นี้ได้" ออกจาก "ฉันรีวิว Rust นี้ได้"
+</Callout>
+
+## Mental Model
+
+ลองคิดว่าการ compile โปรแกรม Rust เหมือนผู้ตรวจสอบสามคนบนสายพานการผลิต แต่ละคนมีอำนาจปฏิเสธงานได้ทันที ตามด้วยเครื่องจักรที่เห็นแค่สิ่งที่ผ่านมาแล้วเท่านั้น ผู้ตรวจสอบคนแรก (borrow checking บน MIR) ตรวจ ownership กับ lifetime และปฏิเสธโปรแกรมได้ก่อนที่ code generation จะเริ่มด้วยซ้ำ ขั้นตอนที่สอง (monomorphization) ไม่ได้ปฏิเสธอะไร — มันแค่ทำซ้ำ: generic function ทุกตัวกลายเป็น copy เฉพาะทางหนึ่งชุดต่อ type ที่มันถูกใช้ ในขณะที่การเรียก `dyn Trait` ทุกครั้งยังเป็น function ที่ใช้ร่วมกันตัวเดียวที่เข้าถึงทางอ้อม มีแค่สิ่งที่รอดจากทั้งสองขั้นตอนเท่านั้นที่ไปถึง LLVM ซึ่งแปลงมันให้เป็น machine code ที่กลายเป็น binary ของคุณ ทั้งหมดนี้มองไม่เห็นใน source text ที่คุณพิมพ์ — มันคือความต่างระหว่างสิ่งที่คุณเขียนกับสิ่งที่รันจริง
+
+## Trade-offs
+
+การเข้าใจ pipeline นี้มีต้นทุนคือ mental model อีกหนึ่งชั้นที่ต้องจำ นอกเหนือจาก syntax และ semantics ของภาษาที่คุณรู้อยู่แล้ว สิ่งที่ได้กลับมาคือ "ทำไมโค้ดนี้ compile ไม่ผ่าน" "ทำไม call นี้ช้ากว่า call นั้น" และ "ทำไมโค้ดนี้รันไม่ตามลำดับที่คาดไว้" ทั้งหมดหยุดเป็นปริศนาแยกกันและกลายเป็นคำถามเดียวกัน — *ขั้นตอนไหนรับผิดชอบ* — พร้อมคำตอบที่เจาะจงและเรียนรู้ได้ แทนที่จะเดาใหม่ทุกครั้ง
+
+## Common Misconceptions
+
+- **"ถ้ามัน compile ผ่าน แปลว่าคอมไพเลอร์ไม่ได้คิดหนักอะไรมาก"** ตรงกันข้ามบ่อยครั้ง — การที่ borrow checker ไม่ปฏิเสธอะไรเลยไม่เหมือนกับมันไม่ได้ทำอะไรเลย การวิเคราะห์ระดับ MIR รันบนทุกโปรแกรม ไม่ว่าจะสำเร็จหรือไม่ และมันคือเหตุผลว่าทำไมบั๊กทั้งหมวด (data race, use-after-free, iterator invalidation) ถึงไม่มีวันไปถึงขั้นตอน codegen เลย
+- **"Generic กับ dyn Trait ก็แค่ feature เดียวกันที่ syntax ต่างกัน"** ทั้งสองถูก resolve คนละขั้นตอนใน pipeline: generic ถูก resolve ต่อ call site ตอน monomorphization (ไม่มีต้นทุน dispatch ตอน runtime แต่โค้ดที่ generate ออกมาเยอะกว่า) `dyn Trait` ถูก resolve แค่ครั้งเดียวตอน runtime ผ่าน vtable (มี indirection หนึ่งชั้นต่อ call, function ตัวเดียวที่ใช้ร่วมกัน) [Monomorphization & Dispatch](/rust/th/runtime-internals/monomorphization-and-dispatch/) วัดความต่างนี้โดยตรง
+- **"Rust มี garbage collector ทำความสะอาดตอน runtime เหมือนภาษา memory-safe อื่น ๆ"** ไม่มี runtime process แยกต่างหาก คอมไพเลอร์แทรกการเรียก `drop` ที่เจาะจงและ deterministic เข้าไปในโค้ดที่ generate ตอน compile time ณ จุดที่กำหนดโดย scope ทั้งหมด — [Drop & RAII](/rust/th/runtime-internals/drop-and-raii/) ครอบคลุมว่าอะไรถูกแทรกและตอนไหนบ้าง
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ "เห็นได้ชัด" ว่าน่าจะเร็วกว่าหรือปลอดภัยกว่าจากการให้เหตุผลแบบผิวเผินกับ source text โดยไม่มี model ว่าขั้นตอนไหนของ pipeline เป็นตัวตัดสินผลลัพธ์จริง ๆ คือรูปแบบที่พบบ่อยใน Rust ที่สร้างขึ้น — มัน compile ผ่าน มันรันได้ และเหตุผลเบื้องหลังมันผิดล้วน ๆ
+
+<SpotTheBug code={`// "Box it so it doesn't get copied every time we pass it to a function" -- AI-added comment
+fn process(counter: &Box<i32>) {
+    println!("count = {}", **counter);
+}
+
+fn main() {
+    let counter = Box::new(42);
+    process(&counter);
+    process(&counter);
+}
+`}>
+โค้ดนี้ compile ผ่านและรันได้ปกติ พิมพ์ `count = 42` สองครั้ง — และเหตุผลใน comment นั้นกลับหัวกลับหาง `i32` เป็น `Copy` และมีขนาดแค่ 4 byte การส่ง `&i32` ตรง ๆ ก็เลี่ยงการ copy ข้อมูลที่ box ไว้อยู่แล้ว แถมยังเลี่ยง heap allocation ไปได้ทั้งหมดด้วย `Box::new(42)` ที่นี่เพิ่ม heap allocation หนึ่งครั้ง เพิ่ม pointer indirection ทุกครั้งที่เข้าถึง (`**counter` ต้อง dereference สองชั้นแทนที่จะเป็นชั้นเดียว) และไม่ได้อะไรกลับมาเลย — ไม่เคยมีค่าขนาดใหญ่ที่เสี่ยงต่อการ copy แพง ๆ ตั้งแต่แรก [Memory Layout](/rust/th/runtime-internals/memory-layout/) ครอบคลุมว่าตอนไหนการ box ช่วยได้จริง (ค่าที่ใหญ่เกินกว่าจะย้ายไปมาถูก ๆ หรือค่าที่ไม่รู้ขนาดจนกว่าจะถึง runtime) เทียบกับตอนที่มันเป็นแค่ overhead ล้วน ๆ แบบที่เห็นตรงนี้
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+โปรแกรม Rust ทุกตัวผ่านสี่ขั้นตอนเดียวกัน — source, MIR ที่ผ่าน borrow check, monomorphized codegen, binary — และการรู้ว่าขั้นตอนไหนรับผิดชอบพฤติกรรมหนึ่ง ๆ คือสิ่งที่เปลี่ยน "โค้ดนี้ compile ผ่าน" ให้กลายเป็น "ฉันเข้าใจว่าทำไมมันถึงถูกต้อง"
+</Callout>
+
+export const quizIndex = [
+    {
+        q: "ขั้นตอนไหนของ pipeline ที่รับผิดชอบการปฏิเสธโปรแกรมที่ละเมิดกฎ exclusivity ของ borrow checker?",
+        options: [
+            "LLVM codegen",
+            "การตรวจ borrow ระดับ MIR ก่อนที่ monomorphization หรือ codegen จะรันเลย",
+            "Linker ตอนประกอบ binary สุดท้าย",
+            "Rust runtime ตอนโปรแกรมเริ่มทำงาน"
+        ],
+        answer: 1,
+        explain: "การตรวจ borrow รันบน MIR ก่อนที่ code generation ใด ๆ จะเกิดขึ้น โปรแกรมที่ล้มเหลวในขั้นตอนนี้จะไม่มีวันไปถึง monomorphization หรือ codegen เลย"
+    },
+    {
+        q: "โค้ดนี้ print อะไร?\n```rust\nuse std::any::type_name;\nfn describe<T>(_val: &T) {\n    println!(\"{}\", type_name::<T>());\n}\nfn main() {\n    describe(&5i32);\n    describe(&\"hi\");\n}\n```",
+        options: [
+            "T\nT",
+            "i32\n&str",
+            "5\nhi",
+            "compile ไม่ผ่าน -- describe ถูกกำหนดไว้แค่ type เดียว"
+        ],
+        answer: 1,
+        explain: "describe<T> ถูก monomorphize หนึ่งครั้งต่อ concrete type ที่มันถูกเรียกใช้ type_name::<T>() รายงาน type จริง เจาะจงที่คอมไพเลอร์ resolve ให้ call site นั้น -- i32 สำหรับตัวแรก, &str สำหรับตัวที่สอง"
+    },
+    {
+        q: "ทำไมโค้ดนี้ compile ไม่ผ่าน?\n```rust\nfn main() {\n    let s = String::from(\"hello\");\n    let t = s;\n    println!(\"{}\", s);\n}\n```",
+        options: [
+            "String ไม่ implement trait Display",
+            "error[E0382]: s ถูก move เข้าไปใน t ในบรรทัดก่อนหน้า ดังนั้นการใช้มันอีกครั้งใน println! คือการ borrow ค่าที่ถูก move ไปแล้ว",
+            "t ไม่ถูกใช้เลย ซึ่ง Rust ถือว่าเป็น hard error",
+            "println! รับตัวแปรไม่ได้ รับได้แค่ literal"
+        ],
+        answer: 1,
+        explain: "let t = s; move String ไป (มันไม่ใช่ Copy) borrow checker ปฏิเสธการใช้ s อีกครั้งในภายหลังตั้งแต่ขั้นตอน MIR -- ก่อน codegen ทั้งหมด -- ด้วย error[E0382]"
+    },
+    {
+        q: "ความต่างสำคัญระหว่างวิธีที่ generic กับ dyn Trait ถูกจัดการใน compiler pipeline คืออะไร?",
+        options: [
+            "ไม่มีความต่างจริง -- ทั้งสองแบบ compile ออกมาเป็น machine code เดียวกันเป๊ะ",
+            "Generic ถูก resolve ครั้งเดียวตอน runtime; dyn Trait ถูก resolve ต่อ call site ตอน compile time",
+            "Generic ถูก resolve ต่อ concrete type ตอน monomorphization (copy เฉพาะทางหนึ่งชุดต่อ type ไม่มีต้นทุน dispatch); dyn Trait ถูก resolve ครั้งเดียวตอน runtime ผ่าน function ที่ใช้ร่วมกันกับการ lookup vtable",
+            "dyn Trait เร็วกว่าเสมอเพราะมันเลี่ยงการ generate โค้ดซ้ำ"
+        ],
+        answer: 2,
+        explain: "Monomorphization เกิดตอน compile time ครั้งเดียวต่อ concrete type ที่ generic ถูกใช้ dyn Trait เก็บ function ไว้ตัวเดียวและปล่อยให้ implementation เฉพาะเจาะจงไปตัดสินตอน runtime ผ่าน vtable lookup -- trade-off ตรงข้ามกัน ครอบคลุมใน Monomorphization & Dispatch"
+    },
+    {
+        q: "ทำไมการ box ตัวแปร i32 ธรรมดา เพียงเพื่อเลี่ยงไม่ให้มัน 'ถูก copy ทุกครั้งที่เรียก function' ถึงมักเป็นการทำให้แย่ลงมากกว่าดีขึ้น?",
+        options: [
+            "i32 box ไม่ได้เลย -- จะ compile ไม่ผ่าน",
+            "i32 เป็น Copy และมีขนาดแค่ 4 byte การส่ง &i32 ตรง ๆ ก็เลี่ยงการ copy มันได้อยู่แล้ว ดังนั้น Box::new จึงเพิ่ม heap allocation กับ pointer indirection พิเศษโดยไม่ได้อะไรเลย",
+            "Box<i32> กับ i32 compile ออกมาเป็น machine code เดียวกันเป๊ะเสมอ จึงไม่ต่างกันเลย",
+            "การ box มีผลแค่กับ type ที่ใหญ่กว่า 1024 byte เท่านั้น คอมไพเลอร์เพิกเฉยต่ำกว่านั้น"
+        ],
+        answer: 1,
+        explain: "&i32 เปล่า ๆ ก็เป็นวิธีที่ถูกที่สุดในการส่งค่า Copy ขนาด 4 byte โดยไม่ copy มันอยู่แล้ว Box::new(42) เพิ่ม heap allocation จริงและเพิ่ม indirection เป็นสองเท่าเพื่อเข้าถึงค่า โดยไม่ได้อะไรกลับมาเลย"
+    },
+    {
+        q: "Rust compile pipeline ใช้อะไรแทน garbage collector ในการคืนหน่วยความจำ heap?",
+        options: [
+            "Background thread ที่สแกนหาหน่วยความจำที่เข้าถึงไม่ได้เป็นระยะ เหมือน tracing GC",
+            "การนับ reference ที่ถูกแทรกอัตโนมัติเข้าไปในทุก type",
+            "การเรียก drop แบบ deterministic ที่คอมไพเลอร์แทรกตอน compile time ณ จุดที่กำหนดโดย scope และ ownership ทั้งหมด -- ไม่มี runtime process แยกต่างหากเข้ามาเกี่ยวข้อง",
+            "OS คืนหน่วยความจำทั้งหมดก็ต่อเมื่อ process ทั้งตัวจบเท่านั้น"
+        ],
+        answer: 2,
+        explain: "ไม่มี GC runtime คอมไพเลอร์คำนวณแบบ static ว่า owner ของแต่ละค่าออกจาก scope ตรงไหนพอดี แล้วแทรกการเรียก drop ที่สอดคล้องกันเข้าไปในโค้ดที่ generate โดยตรง -- นี่คือหัวข้อของบท Drop & RAII"
+    }
+];
+
+<Quiz client:visible id="runtime-internals/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="runtime-internals/index" />

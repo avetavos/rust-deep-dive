@@ -1,6 +1,6 @@
 # Rust Deep Dive
 
-A bilingual (EN/TH), interactive, standalone course that teaches the **Rust language** in depth — syntax, ownership & borrowing, structs/enums/pattern matching, traits & generics, error handling, collections & iterators, and concurrency/testing/Cargo. It is language-core focused (the language and its type system), not a framework tutorial.
+A bilingual (EN/TH), interactive, standalone course that teaches the **Rust language** in depth — syntax, ownership & borrowing, structs/enums/pattern matching, traits & generics, error handling, collections & iterators, concurrency/testing/Cargo, runtime internals, and reading & reviewing Rust. It is language-core focused (the language and its type system), not a framework tutorial.
 
 ## Tech Stack
 
@@ -37,23 +37,27 @@ src/content/docs/
     error-handling/
     collections-iterators/
     concurrency-testing-cargo/
+    runtime-internals/
+    reading-rust/
     index.mdx                  # EN landing (splash)
   th/                          # Thai — served at /th/...
     (same module directories)
     index.mdx                  # TH landing (splash)
 ```
 
-### The 7 Modules
+### The 9 Modules
 
 | Directory | Module |
 | --------- | ------ |
 | `basics` | Basics & Syntax |
-| `ownership-borrowing` | Ownership & Borrowing (moves, references, mutable borrows, slices) |
+| `ownership-borrowing` | Ownership & Borrowing (moves, references, mutable borrows, slices, smart pointers) |
 | `structs-enums-matching` | Structs, Enums & Pattern Matching |
 | `traits-generics` | Traits & Generics (trait objects, lifetimes) |
 | `error-handling` | Error Handling (panic, Result, `?`, custom errors) |
 | `collections-iterators` | Collections & Iterators (closures) |
 | `concurrency-testing-cargo` | Concurrency, Testing & Cargo |
+| `runtime-internals` | Runtime Internals (memory layout, Drop & RAII, the borrow checker model, monomorphization & dispatch, the async runtime model) |
+| `reading-rust` | Reading & Reviewing Rust (AI-bug catalog, review checklist, verification tools, worked reviews) |
 
 ### Lesson Template
 

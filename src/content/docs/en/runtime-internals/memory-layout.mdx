@@ -1,0 +1,326 @@
+---
+title: 'Memory Layout'
+description: 'What a Rust value actually looks like in memory — stack vs heap, size_of and align_of measured for real, niche optimization, repr(C) vs repr(Rust) field reordering, and fat pointers.'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+Every claim in this lesson is something you can check yourself with `std::mem::size_of` and `std::mem::align_of` — this lesson does not ask you to take memory layout on faith.
+
+## Stack vs Heap
+
+A stack frame holds fixed-size, known-at-compile-time data: your local variables, function arguments, and return addresses, all popped automatically when a function returns — no allocation, no deallocation call, just moving a pointer. The heap holds data whose size isn't known until runtime, or that needs to outlive the function that created it; getting there always means going through an owning type (`Box`, `Vec`, `String`, `Rc`) that holds a pointer *on the stack* to a buffer allocated *on the heap*.
+
+`String` is the clearest example: the `String` value itself — the thing that lives on the stack, gets moved, and has a fixed size — is a three-word header: a pointer to the heap buffer, a length (bytes currently used), and a capacity (bytes currently allocated). The actual text lives in a separate heap allocation the header points to.
+
+<Mermaid code={`flowchart LR
+    subgraph Stack
+        H["String header\nptr | len | cap"]
+    end
+    subgraph Heap
+        Buf["byte buffer\n'h' 'e' 'l' 'l' 'o'"]
+    end
+    H -->|ptr| Buf`} title="A String's three-word header on the stack points at its buffer on the heap" />
+
+## Measuring `size_of` and `align_of`
+
+`std::mem::size_of::<T>()` returns the number of bytes a `T` occupies (including any padding); `std::mem::align_of::<T>()` returns the alignment the type requires. Both are compile-time constants — the compiler already knows the answer before your program runs, which is exactly why you can call them with no value in hand at all, just a type.
+
+```rust
+use std::mem::{size_of, align_of};
+
+fn main() {
+    println!("i32:            size {}, align {}", size_of::<i32>(), align_of::<i32>());
+    println!("i64:            size {}, align {}", size_of::<i64>(), align_of::<i64>());
+    println!("bool:           size {}, align {}", size_of::<bool>(), align_of::<bool>());
+    println!("char:           size {}, align {}", size_of::<char>(), align_of::<char>());
+    println!("():             size {}, align {}", size_of::<()>(), align_of::<()>());
+    println!("String:         size {}", size_of::<String>());
+    println!("Vec<i32>:       size {}", size_of::<Vec<i32>>());
+    println!("&str:           size {}", size_of::<&str>());
+    println!("&[i32]:         size {}", size_of::<&[i32]>());
+    println!("&i32:           size {}", size_of::<&i32>());
+    println!("Box<i32>:       size {}", size_of::<Box<i32>>());
+    println!("Option<Box<i32>>: size {}", size_of::<Option<Box<i32>>>());
+    println!("Option<u32>:    size {}", size_of::<Option<u32>>());
+    println!("Option<bool>:   size {}", size_of::<Option<bool>>());
+}
+```
+
+```text
+i32:            size 4, align 4
+i64:            size 8, align 8
+bool:           size 1, align 1
+char:           size 4, align 4
+():             size 0, align 1
+String:         size 24
+Vec<i32>:       size 24
+&str:           size 16
+&[i32]:         size 16
+&i32:           size 8
+Box<i32>:       size 8
+Option<Box<i32>>: size 8
+Option<u32>:    size 8
+Option<bool>:   size 1
+```
+
+`char` is 4 bytes, not 1 — Rust's `char` is always a full Unicode scalar value, never a single byte (this is exactly why indexing a `String` by byte position and expecting a `char` doesn't work, covered in the Collections module). `String` and `Vec<i32>` are both 24 bytes — three machine words (pointer, length, capacity), regardless of how much data they actually hold; the data itself is on the heap and is not part of this number at all.
+
+## Niche Optimization: How `Option<Box<i32>>` Fits in 8 Bytes
+
+`Option<T>` normally needs a discriminant bit to distinguish `Some` from `None`, so naively you'd expect `Option<Box<i32>>` to be `size_of::<Box<i32>>()` (8) plus room for that tag — but the measurement above shows it's still exactly 8. This is **niche optimization**: `Box<T>` (like every reference) is guaranteed to never be a null pointer, so the compiler reuses the all-zero bit pattern — a value `Box<T>` itself could never legally hold — to represent `None`, with no separate tag needed at all. `Option<bool>` gets the same treatment down to a single byte: `bool` only ever uses 2 of the 256 values a byte can hold, so `Option<bool>` fits `Some(true)`, `Some(false)`, and `None` into that same one byte. `Option<u32>`, on the other hand, has no unused bit pattern to steal — every `u32` bit pattern is a legitimate value — so it genuinely needs a separate tag, and pads out to 8 bytes rather than the 4 you might expect (an example of the padding covered next).
+
+## `#[repr(C)]` vs Default Field Reordering
+
+Rust's default representation (`repr(Rust)`) does **not** guarantee your struct's fields are laid out in the order you wrote them — the compiler is free to reorder fields to minimize padding, and it does:
+
+```rust
+use std::mem::{size_of, align_of};
+
+struct Reordered {
+    a: u8,
+    b: u32,
+    c: u8,
+}
+
+#[repr(C)]
+struct ReorderedC {
+    a: u8,
+    b: u32,
+    c: u8,
+}
+
+fn main() {
+    println!("repr(Rust) Reordered:  size {}, align {}", size_of::<Reordered>(), align_of::<Reordered>());
+    println!("repr(C)    ReorderedC: size {}, align {}", size_of::<ReorderedC>(), align_of::<ReorderedC>());
+}
+```
+
+```text
+repr(Rust) Reordered:  size 8, align 4
+repr(C)    ReorderedC: size 12, align 4
+```
+
+Both structs hold the same three fields (`u8`, `u32`, `u8`), but the default `repr(Rust)` version is 8 bytes while the `#[repr(C)]` version is 12. `#[repr(C)]` guarantees C-compatible layout: fields stay in declaration order, so `a` (1 byte) forces 3 bytes of padding before `b` (which needs 4-byte alignment), then `c` (1 byte) forces 3 more bytes of trailing padding so the whole struct's size is a multiple of its alignment — 1 + 3 + 4 + 1 + 3 = 12. Without that guarantee, the compiler is free to reorder to `a, c, b` or similar, packing both single bytes together and cutting the padding to 8 total. Use `#[repr(C)]` only when layout actually needs to match another language's expectations (FFI) or a wire format — for everything else, the default lets the compiler shrink your structs for free.
+
+## Fat Pointers Are 16 Bytes
+
+`&str` and `&[i32]` both measured as 16 bytes above — double an ordinary `&i32` reference's 8 bytes — because both are **fat pointers**: a data pointer plus a length, since neither `str` nor `[T]` (the unsized slice/string types themselves) carries a size the compiler knows about ahead of time. A `dyn Trait` reference is a fat pointer for the same underlying reason (data pointer plus vtable pointer instead of a length), as the Traits & Generics module's trait-objects lesson measured directly.
+
+### What the Compiler Says: A Type With No Compile-Time-Known Size
+
+`size_of::<T>()` requires `T: Sized` — a type whose size the compiler can compute without looking at a specific value — which is exactly why you can never write `size_of::<[i32]>()` for the bare, unsized slice type:
+
+```rust
+// @expect-error E0277
+fn main() {
+    println!("{}", std::mem::size_of::<[i32]>());
+}
+```
+
+```text
+error[E0277]: the size for values of type `[i32]` cannot be known at compilation time
+ --> src/main.rs:2:40
+  |
+2 |     println!("{}", std::mem::size_of::<[i32]>());
+  |                                        ^^^^^ doesn't have a size known at compile-time
+  |
+  = help: the trait `Sized` is not implemented for `[i32]`
+note: required by an implicit `Sized` bound in `std::mem::size_of`
+
+error: aborting due to 1 previous error
+```
+
+This is the exact same restriction that forces `dyn Trait` behind a pointer (the Traits & Generics module's `E0277` example): `[i32]` and `str` are unsized for the same reason `dyn Trait` is — their size depends on a specific value, not just the type — so they can only ever be reached through a pointer, and that pointer has to carry the missing size information itself, which is why it's fat. `std::mem::size_of_val` sidesteps this entirely by taking an actual reference (not just a type), since the value behind it does have a concrete, measurable size:
+
+```rust
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let s: &[i32] = &v;
+    println!("size_of_val(&s) = {}", std::mem::size_of_val(&s)); // the fat pointer itself
+    println!("size_of_val(s)  = {}", std::mem::size_of_val(s));  // the 5 i32s it points at
+}
+```
+
+```text
+size_of_val(&s) = 16
+size_of_val(s)  = 20
+```
+
+`size_of_val(&s)` measures the fat pointer `s` itself (16 bytes: data pointer + length). `size_of_val(s)` measures what it *points at* — 5 `i32`s at 4 bytes each, 20 bytes, on the stack in this case since `v` is a plain array, but the same call works identically for a heap-allocated slice.
+
+## `Box<str>` and `Box<[T]>`: Owned Unsized Types
+
+`Box<str>` and `Box<[T]>` are owned versions of the unsized `str`/`[T]` types — and they're fat pointers too, exactly like their borrowed counterparts, for the identical reason: the `Box` itself has to carry the length since `str`/`[T]` don't know it themselves.
+
+```rust
+use std::mem::size_of;
+
+fn main() {
+    println!("Box<str>:   size {}", size_of::<Box<str>>());
+    println!("Box<[i32]>: size {}", size_of::<Box<[i32]>>());
+}
+```
+
+```text
+Box<str>:   size 16
+Box<[i32]>: size 16
+```
+
+`String` (24 bytes: pointer + length + *capacity*) and `Box<str>` (16 bytes: pointer + length, no capacity) look similar but aren't interchangeable: a `Box<str>` can never grow, because it never tracked spare capacity to grow into in the first place — `.into_boxed_str()` on a `String` deliberately drops that capacity to shrink the header from three words to two.
+
+## Zero-Sized Types
+
+`()` measured as `size_of` 0 above — the unit type occupies no space at all, and neither do zero-field structs (`struct Marker;`) or empty enums with no data. Zero-sized types are not a curiosity: a `Vec<()>` genuinely allocates no heap memory no matter how many elements you push, since there's nothing to store, and every no-data enum variant, empty struct, and `PhantomData<T>` marker you'll see in generic code relies on this costing exactly nothing at runtime.
+
+export const memoryLayoutCode = `use std::mem::{size_of, align_of};
+
+struct Reordered {
+    a: u8,
+    b: u32,
+    c: u8,
+}
+
+#[repr(C)]
+struct ReorderedC {
+    a: u8,
+    b: u32,
+    c: u8,
+}
+
+fn main() {
+    println!("size_of::<String>()            = {}", size_of::<String>());
+    println!("size_of::<Option<Box<i32>>>()  = {}", size_of::<Option<Box<i32>>>());
+    println!("size_of::<Option<u32>>()       = {}", size_of::<Option<u32>>());
+    println!("size_of::<Option<bool>>()      = {}", size_of::<Option<bool>>());
+    println!("size_of::<Reordered>()  repr(Rust) = {}, align {}", size_of::<Reordered>(), align_of::<Reordered>());
+    println!("size_of::<ReorderedC>() repr(C)    = {}, align {}", size_of::<ReorderedC>(), align_of::<ReorderedC>());
+
+    let v = [1, 2, 3, 4, 5];
+    let s: &[i32] = &v;
+    println!("size_of_val(&s) fat pointer = {}", std::mem::size_of_val(&s));
+    println!("size_of_val(s)  5 i32s      = {}", std::mem::size_of_val(s));
+}`;
+
+<Playground code={memoryLayoutCode} />
+
+<Callout title="size_of and align_of are compile-time facts, not runtime measurements">
+Every number in this lesson is decided during compilation, before your program ever runs — which is exactly why generic code can call `size_of::<T>()` with no value of `T` in hand, and why two different monomorphized copies of the same generic function can report two entirely different sizes for their own `T`.
+</Callout>
+
+## Mental Model
+
+Think of a value's stack representation as its "business card" — a small, fixed-size summary (a pointer, maybe a length, maybe a capacity) — and any heap allocation as the "full file" the card points to. `size_of` always measures the card, never the file: a `String` holding one byte and a `String` holding a gigabyte report the identical `size_of::<String>()` because the card itself hasn't changed shape, only what it points to has. Padding and repr choices are about how neatly multiple cards pack together in a struct; niche optimization is the compiler noticing that some cards have "impossible" values it can legally repurpose as a free extra state.
+
+## Trade-offs
+
+Letting the compiler reorder struct fields and exploit niches (the `repr(Rust)` default) shrinks your structs for free with zero code changes — the cost is that layout is not guaranteed or stable across compiler versions, so anything that needs a specific byte layout (FFI, a wire format, `unsafe` code that transmutes) must opt out with `#[repr(C)]` or similar and accept whatever extra padding that guarantee costs. Fat pointers give unsized types (`str`, `[T]`, `dyn Trait`) a uniform way to be referenced at all, at the fixed cost of one extra word per reference compared to a sized type's pointer.
+
+## Common Misconceptions
+
+- **"A struct's fields are laid out in memory in the order I declared them."** Only under `#[repr(C)]` or another explicit layout attribute. The default `repr(Rust)` makes no such promise and actively reorders fields to reduce padding, as the 8-vs-12-byte measurement above shows directly.
+- **"`Option<T>` always costs one extra byte (or word) for its tag, on top of `T`'s size."** Only when `T` has no unusable bit pattern the compiler can repurpose. `Option<Box<T>>`, `Option<&T>`, and `Option<bool>` are all niche-optimized to cost nothing or almost nothing extra; `Option<u32>` is not, because every `u32` bit pattern is already a legitimate value.
+- **"`size_of::<String>()` tells me roughly how much memory a `String` uses."** It tells you the size of the fixed stack header only (24 bytes, always) — the actual text is a separate heap allocation whose size depends entirely on the string's contents and is not included in that number at all.
+
+## Reading AI-generated Code
+
+Generated code sometimes assumes a struct's byte layout matches field declaration order — usually while writing `unsafe` code that reads a struct through a raw pointer at a hardcoded offset, or serializing a struct by copying its raw bytes — without the `#[repr(C)]` that claim actually requires.
+
+<SpotTheBug code={`#[repr(C)]
+struct Header {
+    version: u8,
+    flags: u8,
+    length: u32,
+}
+
+fn main() {
+    let h = Header { version: 1, flags: 0, length: 128 };
+    println!("size = {}", std::mem::size_of::<Header>());
+}
+`}>
+This one actually has `#[repr(C)]` and is correct — which is exactly the point of the exercise: the same struct *without* that attribute would silently compile and run too, but the compiler would be free to reorder `version`, `flags`, and `length` however it likes to minimize padding, breaking any code (a hand-rolled byte parser, an FFI call, a network protocol reader) that assumes the fields sit at fixed offsets in declaration order. The bug this snippet is guarding against never announces itself with an error — remove `#[repr(C)]` from a struct that `unsafe` code reads by raw offset, and everything keeps compiling while the actual field order becomes compiler-version-dependent. Any code that reasons about a struct's byte layout — parsing bytes into it, computing an offset into it with `unsafe`, passing it across an FFI boundary — needs `#[repr(C)]` (or another explicit layout attribute) as a hard requirement, not an assumption.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`size_of`/`align_of` are compile-time facts about a fixed-size stack representation, not the memory a value's heap data actually uses — and the default `repr(Rust)` layout only matches your field declaration order by coincidence, never by guarantee.
+</Callout>
+
+export const quizMemoryLayout = [
+    {
+        q: "Why is size_of::<String>() 24 bytes regardless of whether the string holds 1 character or 1 million?",
+        options: [
+            "String always pre-allocates 24 bytes of text storage",
+            "size_of measures the fixed stack header (pointer, length, capacity) -- the actual text lives in a separate heap allocation not counted in this number",
+            "24 is a rounding artifact of alignment and has no real meaning",
+            "String secretly stores up to 24 bytes inline before allocating"
+        ],
+        answer: 1,
+        explain: "A String's stack representation is always three machine words: a pointer to the heap buffer, a length, and a capacity. The text itself is a separate heap allocation whose size depends entirely on the content."
+    },
+    {
+        q: "Why does size_of::<Option<Box<i32>>>() measure 8, the same as size_of::<Box<i32>>() alone?",
+        options: [
+            "Option<T> is always the same size as T, with no exceptions",
+            "Niche optimization: Box<T> can never be a null pointer, so the compiler reuses the impossible all-zero bit pattern to represent None, with no separate tag needed",
+            "This is a compiler bug that will eventually be fixed",
+            "Option<Box<i32>> actually allocates 8 bytes on the heap in addition to the Box"
+        ],
+        answer: 1,
+        explain: "Box<T> is guaranteed non-null, so its all-zero bit pattern is otherwise unused -- the compiler repurposes it to mean None, avoiding any extra tag byte. Option<u32> has no such spare bit pattern and does need one."
+    },
+    {
+        q: "What do these two structs measure as with std::mem::size_of?\n```rust\nstruct A { a: u8, b: u32, c: u8 }\n#[repr(C)] struct B { a: u8, b: u32, c: u8 }\n```",
+        options: [
+            "Both are 6 bytes (1 + 4 + 1)",
+            "Both are 12 bytes, since repr has no effect on either",
+            "A (repr(Rust)) is 8 bytes; B (repr(C)) is 12 bytes",
+            "A (repr(Rust)) is 12 bytes; B (repr(C)) is 8 bytes"
+        ],
+        answer: 2,
+        explain: "repr(C) locks in declaration order, forcing 3 bytes of padding before the u32 and 3 trailing bytes after the last u8 -- 12 total. The default repr(Rust) is free to reorder fields (e.g. both u8s together) and shrinks to 8."
+    },
+    {
+        q: "Why does this fail to compile?\n```rust\nfn main() {\n    println!(\"{}\", std::mem::size_of::<[i32]>());\n}\n```",
+        options: [
+            "[i32] is not a valid type in Rust at all",
+            "error[E0277]: [i32] is an unsized type -- its size depends on a specific value, not just the type, so it fails size_of's implicit Sized bound",
+            "size_of only works on structs and enums, never on array or slice types",
+            "You must import std::mem before using size_of"
+        ],
+        answer: 1,
+        explain: "[i32] (the bare slice type, not a reference to one) has no compile-time-known size -- that's exactly why it can only be reached through a pointer like &[i32], which is fat precisely to carry the missing length."
+    },
+    {
+        q: "Why are &str and &[i32] both 16 bytes, twice the size of &i32?",
+        options: [
+            "They store two copies of the data for safety",
+            "They are fat pointers: a data pointer plus a length, since str and [T] don't carry a compile-time-known size on their own -- &i32 is a plain, non-fat pointer",
+            "UTF-8 encoding requires double-width pointers",
+            "This is a historical accident with no technical reason"
+        ],
+        answer: 1,
+        explain: "str and [T] are unsized types, so any reference to them must carry the missing size information (a length) alongside the data pointer -- exactly the same reason &dyn Trait carries a vtable pointer instead."
+    },
+    {
+        q: "What is the difference between Box<str> (16 bytes) and String (24 bytes)?",
+        options: [
+            "They are identical in every way, just different names",
+            "Box<str> is a pointer plus a length only (no spare capacity to grow into); String additionally tracks capacity, which is what lets it grow via push_str/push",
+            "Box<str> can hold more text than String",
+            "String is always faster than Box<str> for every operation"
+        ],
+        answer: 1,
+        explain: "String's extra 8 bytes track allocated-but-unused capacity, which is what makes growing it efficient. Box<str> drops that capacity permanently -- it's a fixed-size, non-growable owned string."
+    }
+];
+
+<Quiz client:visible id="runtime-internals/memory-layout" questions={quizMemoryLayout} />
+
+<ProgressTracker client:visible id="runtime-internals/memory-layout" />

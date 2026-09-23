@@ -1,0 +1,435 @@
+---
+title: 'Drop & RAII'
+description: 'สิ่งที่คอมไพเลอร์แทรกเข้าไปตอนออกจาก scope และทำไม — ลำดับการ drop, trait Drop, move, ManuallyDrop, mem::forget, leak amplification และจะเกิดอะไรขึ้นถ้า destructor เองก็ panic'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+**RAII** (Resource Acquisition Is Initialization) คือ pattern ที่ ownership model ทั้งหมดของ Rust ถูกสร้างขึ้นมาบน: ผูกอายุของ resource เข้ากับ scope ของค่าหนึ่งค่า แล้วปล่อยให้คอมไพเลอร์แทรกการเรียก cleanup อัตโนมัติเมื่อ scope นั้นจบ ไม่มี garbage collector ตัดสินใจว่า *เมื่อไหร่* จะคืนหน่วยความจำ — คอมไพเลอร์ตัดสินใจว่า *ตรงไหนพอดี* ตอน compile time และฝังการเรียก `drop` ที่เจาะจงเข้าไปในโค้ดที่ generate ตรงจุดนั้นเป๊ะ
+
+## Local Drop ย้อนกลับ Field Drop ตามลำดับ
+
+สองกฎที่ควบคุมเกือบทุกอย่างในบทนี้: local variable ถูก drop ตามลำดับ **ย้อนกลับ** ของการประกาศ และ field ของค่าหนึ่งถูก drop ตามลำดับ **การประกาศ** (ไปข้างหน้า ไม่ใช่ย้อนกลับ)
+
+```rust
+struct Noisy(&'static str);
+
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("dropping {}", self.0);
+    }
+}
+
+struct Pair {
+    first: Noisy,
+    second: Noisy,
+}
+
+fn main() {
+    let _a = Noisy("a");
+    let _b = Noisy("b");
+    let _pair = Pair { first: Noisy("pair.first"), second: Noisy("pair.second") };
+    println!("end of main");
+}
+```
+
+```text
+end of main
+dropping pair.first
+dropping pair.second
+dropping b
+dropping a
+```
+
+`_pair` ถูกประกาศทีหลังสุด ดังนั้นมันจึงถูก drop ก่อน (ลำดับย้อนกลับในหมู่ local) — และข้างในมัน `first` ถูก drop ก่อน `second` (ลำดับไปข้างหน้าในหมู่ field) จากนั้น `_b` แล้วก็ `_a` นี่คือ stack เป๊ะ ๆ: สิ่งที่ push เข้าไปล่าสุดคือสิ่งที่ pop ออกก่อน และมันใช้กับทุกกรณีเหมือนกัน ไม่ว่าค่าจะเป็น local ธรรมดาหรืออยู่ซ้อนในกันใน struct
+
+## Temporary Drop ตอนจบ Statement ของมัน
+
+ค่าที่ไม่มีชื่อ — ผลลัพธ์ของ expression ที่ไม่ได้ผูกกับ `let` — คือ **temporary** และมันถูก drop ตอนจบ statement ที่มันปรากฏ ไม่ใช่ตอนจบ scope ที่ล้อมรอบมัน:
+
+```rust
+struct Noisy(&'static str);
+
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("dropping {}", self.0);
+    }
+}
+
+fn main() {
+    println!("temporary: {}", Noisy("temporary").0);
+    println!("this runs after the temporary is already gone");
+}
+```
+
+```text
+temporary: temporary
+dropping temporary
+this runs after the temporary is already gone
+```
+
+`Noisy("temporary")` ไม่เคยถูกผูกกับตัวแปรเลย — มันมีอยู่แค่นานพอให้ `.0` ถูกอ่านข้างใน call `println!` และมันถูก drop ทันทีที่ statement นั้นจบ ก่อน statement *ถัดไป* จะรันด้วยซ้ำ ไม่ว่า scope ที่ล้อมรอบจะมีโค้ดเหลืออีกเยอะแค่ไหนก็ตาม
+
+### Temporary ของ Scrutinee ใน `if let` / `match`: การเปลี่ยนแปลงใน Edition 2024
+
+ค่าที่ `match` หรือ `if let` กำลังจับคู่ด้วย (**scrutinee**) เองก็เป็น temporary ได้ — ที่พบบ่อยที่สุดคือ lock guard เช่นใน `if let Some(x) = *some_rwlock.read().unwrap() { ... } else { ... }` Rust 2021 กับ Rust 2024 ไม่เห็นตรงกันว่า drop ของ temporary นั้นเกิดขึ้นเมื่อไหร่เทียบกับ branch `else` และความต่างนั้นใหญ่พอที่จะเปลี่ยนโปรแกรมจากถูกต้องให้กลายเป็น deadlock กับตัวเอง ส่วน [`if let` and Lock Guards (Rust 2024)](/rust/th/concurrency-testing-cargo/threads/#if-let-and-lock-guards-rust-2024) ของโมดูล Concurrency ไล่ตัวอย่าง 2021-deadlock/2024-ไม่-deadlock นี้ด้วย lock จริง บทนี้แค่ต้องการให้คุณจำรูปร่างได้ — temporary ที่ถูกเงื่อนไข `if let`/`match` ยึดไว้ให้มีชีวิตอยู่ — ว่าเป็นจุดที่การเปลี่ยนเวลา drop ข้าม edition มีผล
+
+## สิ่งที่ Compiler บอก: เรียก `Drop::drop` ตรง ๆ ไม่ได้
+
+`Drop::drop` รับ `&mut self` ซึ่งจะให้คุณเรียกมันได้ในขณะที่ค่ายังมีชีวิตและใช้งานได้อยู่ — แล้วให้มันถูกเรียก *อีกครั้ง* อัตโนมัติเมื่อค่านั้นออกจาก scope จริง ๆ กลายเป็น double-drop คอมไพเลอร์ห้ามสิ่งนี้ทั้งหมด แทนที่จะพยายามตรวจจับกรณีที่ไม่ปลอดภัย:
+
+```rust
+// @expect-error E0040
+struct Resource;
+
+impl Drop for Resource {
+    fn drop(&mut self) {
+        println!("releasing resource");
+    }
+}
+
+fn main() {
+    let r = Resource;
+    r.drop();
+}
+```
+
+```text
+error[E0040]: explicit use of destructor method
+  --> src/main.rs:11:7
+   |
+11 |     r.drop();
+   |       ^^^^ explicit destructor calls not allowed
+   |
+help: consider using `drop` function
+   |
+11 -     r.drop();
+11 +     drop(r);
+   |
+
+error: aborting due to 1 previous error
+```
+
+ทางแก้ที่ rustc แนะนำ, `drop(r)`, คือ `std::mem::drop` — free function ที่ implementation ทั้งหมดของมันคือ `fn drop<T>(_x: T) {}` มันทำงานด้วยการ *move* `r` เข้าไปในตัวมันเองแล้วปล่อยให้มันหลุดออกจาก scope ตอนจบ function เปล่า ๆ นั้น ซึ่ง trigger การเรียก destructor ที่ compiler แทรกให้ครั้งเดียวตามปกติ มันเป็น function ไม่ใช่ method พอดีเพื่อให้มันรับ ownership แบบ by value แทนที่จะ borrow — คุณเรียกมันบนสิ่งที่คุณไม่ได้เป็นเจ้าของโดยไม่ตั้งใจไม่ได้ และคุณเรียกมันสองครั้งบนค่าเดียวกันไม่ได้ (การเรียกครั้งที่สองจะ compile ไม่ผ่าน — ค่าถูก move ไปแล้ว)
+
+## Move ระงับ Drop ที่ตำแหน่ง *เดิม* ไม่ใช่ระงับทั้งหมด
+
+การ move ค่าไม่ได้ข้าม destructor ของมัน — มันแค่หมายความว่า destructor รันที่ไหนก็ตามที่ owner ของค่า *ตอนนี้* อยู่เมื่อ scope ของ owner นั้นจบ ไม่จำเป็นต้องเป็นที่ที่ค่านั้นถูกสร้างครั้งแรก:
+
+```rust
+struct Noisy(&'static str);
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("dropping {}", self.0);
+    }
+}
+
+fn consume(n: Noisy) {
+    println!("consume received {}", n.0);
+} // n is dropped here, at the end of consume -- not back in main
+
+fn main() {
+    let a = Noisy("a");
+    consume(a); // ownership moves into consume; main no longer owns it
+    println!("back in main");
+}
+```
+
+```text
+consume received a
+dropping a
+back in main
+```
+
+`a` ถูก drop ข้างใน `consume` ก่อนที่ `"back in main"` จะ print เลยด้วยซ้ำ — `main` สละ ownership ไปแล้วตอน call `consume(a)` ดังนั้นตอน scope ของ `main` เองจบทีหลังจึงไม่มีอะไรเหลือให้ drop นี่ก็เป็นเหตุผลว่าทำไมการ move ค่าออกจากตัวแปรแล้วพยายามใช้ตัวแปรเดิมถึงเป็น compile error (`E0382` จากโมดูล Ownership & Borrowing) แทนที่จะเป็น double-drop เงียบ ๆ ตอน runtime: คอมไพเลอร์ track แบบ static ว่าค่าแต่ละตัวจะถูก drop ที่ไหนที่เดียวเป๊ะ ๆ
+
+## `ManuallyDrop<T>`: ปิด `Drop` อัตโนมัติทั้งหมด
+
+`std::mem::ManuallyDrop<T>` ห่อค่าหนึ่งไว้และระงับการเรียก `Drop` อัตโนมัติของมันทั้งหมด — destructor ของค่าที่ห่อไว้ไม่มีวันรัน เว้นแต่คุณจะ opt back in ด้วย `ManuallyDrop::drop` (`unsafe` เพราะการเรียกมันมากกว่าหนึ่งครั้งคือ double-drop จริง ๆ ที่คอมไพเลอร์ป้องกันให้คุณไม่ได้อีกต่อไป)
+
+```rust
+use std::mem::ManuallyDrop;
+
+struct Noisy(&'static str);
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("dropping {}", self.0);
+    }
+}
+
+fn main() {
+    let wrapped = ManuallyDrop::new(Noisy("wrapped"));
+    println!("wrapped.0 = {}", wrapped.0);
+    println!("end of main -- wrapped's Drop never runs, ManuallyDrop suppresses it");
+}
+```
+
+```text
+wrapped.0 = wrapped
+end of main -- wrapped's Drop never runs, ManuallyDrop suppresses it
+```
+
+`ManuallyDrop<T>` มีไว้สำหรับโค้ดระดับต่ำที่ต้องควบคุมด้วยมือว่าเมื่อไหร่ (หรือจะรันไหม) destructor ของค่าหนึ่งจะรัน — implement data structure ที่ย้ายค่าไปมาด้วย raw pointer โดยไม่ trigger destructor ของมันระหว่างทำงาน หรือส่ง ownership ของค่าให้โค้ดภายนอกข้าม FFI boundary การหยิบมันมาใช้ในโค้ด application ธรรมดาเป็นสัญญาณแรง ๆ ว่ามีบางอย่างใน design ที่ต้องมองอีกครั้ง
+
+## `mem::forget`: วิธี Leak ที่ปลอดภัย
+
+`std::mem::forget(value)` รับ ownership ของ `value` แล้วไม่ทำอะไรกับมันเลย — ไม่มีการเรียก destructor เลย ตลอดชีวิตที่เหลือของโปรแกรม มันเป็น function ที่ **safe** โดยตั้งใจ: การ leak หน่วยความจำไม่ได้ละเมิดการรับประกันความปลอดภัยของหน่วยความจำของ Rust ข้อไหนเลย (ไม่มี use-after-free, ไม่มี double-free, ไม่มี data race) มันแค่สิ้นเปลือง เหมือนกับวงจร `Rc` จากบทที่แล้วเป๊ะ
+
+```rust
+struct Noisy(&'static str);
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("dropping {}", self.0);
+    }
+}
+
+fn main() {
+    let a = Noisy("a");
+    std::mem::forget(a); // leaks a -- its Drop will never run
+    println!("end of main -- \"dropping a\" never printed, a's memory is never reclaimed");
+}
+```
+
+```text
+end of main -- "dropping a" never printed, a's memory is never reclaimed
+```
+
+`mem::forget` มีการใช้งานที่ชอบธรรม — ส่ง ownership ของค่าให้โค้ด C ที่จะ free มันเอง หรือ implementation ภายในของ concurrent data structure บางแบบ — แต่การใช้งานที่ชอบธรรมทุกแบบคือการตั้งใจโอนความรับผิดชอบเรื่อง cleanup ไปที่อื่น ไม่ใช่การเลี่ยง cleanup ไปเฉย ๆ
+
+## Leak Amplification ผ่านวงจร `Rc`
+
+`mem::forget` ข้างบน leak ค่าเดียวเป๊ะ ๆ โดยตั้งใจ มองเห็นได้ ที่ call site เดียว — ตรวจสอบง่าย วงจร `Rc` reference ของบทที่แล้ว leak แบบเงียบ ๆ ไม่มี call ไหนเลยที่ flag มันไว้ตรง ๆ และมันขยายตัวได้: node เพิ่มเติมทุกตัวที่ถูกดึงเข้าไปในวงจร (ตรง ๆ หรือทางอ้อม) leak ไปด้วย ตลอดชีวิตของโปรแกรม โดยไม่มีอะไรใน source code ทำเครื่องหมายว่า leak เกิดขึ้นตรงไหน กลับไปดู [Smart Pointers](/rust/th/ownership-borrowing/smart-pointers/#rc-cycles-leak-memory) ถ้ากลไกนี้ไม่สดใหม่ในหัว — ประเด็นตรงนี้คือความต่าง: `mem::forget` คือ leak ที่ตั้งใจ ตรวจสอบได้; วงจร reference คือ leak แบบ *บังเอิญ* ที่โตขึ้นเงียบ ๆ ได้เมื่อ object graph ของโปรแกรมโตขึ้น
+
+## Unwinding เทียบกับ Abort และ Panic ระหว่าง Panic
+
+`panic!` ปกติจะ **unwind**: คอมไพเลอร์เรียก destructor ของทุกค่าที่ยังมีชีวิตอยู่ ทีละ scope ย้อนกลับขึ้นไปตาม call stack เหมือนกับว่าแต่ละ scope นั้น return ตามปกติเป๊ะ — ซึ่งเป็นเหตุผลตรง ๆ ว่าทำไม `Drop` impl ที่ปล่อย lock หรือปิดไฟล์ถึงยังรันถูกต้องแม้โค้ดจะ panic แทนที่จะ return ปกติ มีสองวิธีที่ safety net นี้เองล้มเหลว
+
+`panic = "abort"` (ค่า config ใน `Cargo.toml`/`rustc` profile) ข้าม unwinding ไปทั้งหมดและจบ process ทันทีเมื่อมี panic ใด ๆ โดยไม่มี destructor รันเลย — binary เล็กลงและไม่มี overhead ของ unwinding table แลกกับ resource ที่ไม่ถูก clean up จริง ๆ บน path นั้น หัวข้อ `panic = "abort"` ของโมดูล Error Handling ครอบคลุมว่าตอนไหน trade นี้คุ้มค่า
+
+โหมดล้มเหลวที่สองไม่ต้อง config อะไรเลย: ถ้า `Drop` impl เองก็ panic *ในขณะที่ panic อีกตัวกำลัง unwind ผ่านมันอยู่* Rust unwind สองครั้งพร้อมกันไม่ได้ ดังนั้น process จึง abort ทันที ไม่มีเงื่อนไข:
+
+```rust
+// @expect-panic
+struct BadDrop;
+
+impl Drop for BadDrop {
+    fn drop(&mut self) {
+        panic!("panic during drop"); // this drop runs while already unwinding from main's panic
+    }
+}
+
+fn main() {
+    let _guard = BadDrop;
+    panic!("first panic"); // unwinding starts, which runs _guard's Drop
+}
+```
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:11:5:
+first panic
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'main' (<id>) panicked at src/main.rs:5:9:
+panic during drop
+stack backtrace:
+   (backtrace elided -- a panic-during-unwind always prints one regardless of RUST_BACKTRACE, since the process is about to abort)
+
+thread 'main' (<id>) panicked at /rustc/<hash>/library/core/src/panicking.rs:233:5:
+panic in a destructor during cleanup
+thread caused non-unwinding panic. aborting.
+```
+
+Panic แรกเริ่ม unwind ซึ่งเรียก `Drop` ของ `_guard`; `Drop` นั้นเอง panic ในขณะที่ unwind แรกยังดำเนินอยู่ และ Rust ไม่มีทางแสดง "unwind ในขณะที่กำลัง unwind อยู่" ได้ จึง abort process ทั้งหมดทันทีแทน กฎเชิงปฏิบัติที่นี่รองรับคือ: `Drop` implementation ควรถือว่าการ panic เป็นทางเลือกสุดท้าย และไม่ควรสมมติว่าปลอดภัยที่จะ `.unwrap()` หรือทำให้ panic ได้ในทางอื่นข้างในมัน เพราะเวลาที่มันสำคัญที่สุด (cleanup ระหว่าง panic ที่มีอยู่แล้ว) คือเวลาเดียวกับที่ panic ที่สองตรงนั้นมีต้นทุนสูงที่สุด
+
+## `Drop` กับ `?`: Early Return ก็ยัง Clean Up
+
+Early return ของ operator `?` ไม่ใช่กรณีพิเศษสำหรับ `Drop` — มันคือ early return ธรรมดา และ destructor ของทุก local ที่ยังมีชีวิตอยู่รันตอนออกไป เหมือนกับ `return` ปกติหรือการรันจนจบ function เป๊ะ:
+
+```rust
+struct Noisy(&'static str);
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("dropping {}", self.0);
+    }
+}
+
+fn parse(input: &str) -> Result<i32, std::num::ParseIntError> {
+    let _guard = Noisy("guard"); // dropped no matter which path we take out of this function
+    let n: i32 = input.parse()?; // early return on Err still runs _guard's Drop first
+    Ok(n * 2)
+}
+
+fn main() {
+    println!("parse(\"21\") = {:?}", parse("21"));
+    println!("parse(\"oops\") = {:?}", parse("oops"));
+}
+```
+
+```text
+dropping guard
+parse("21") = Ok(42)
+dropping guard
+parse("oops") = Err(ParseIntError { kind: InvalidDigit })
+```
+
+`_guard` ถูก drop ก่อนที่ `println!` ทั้งสองตัวจะเห็นผลลัพธ์ ทั้งบน success path และ path ที่ `?` trigger early-return — นี่คือเหตุผลตรง ๆ ว่าทำไม RAII guard (`MutexGuard`, wrapper ของ file handle, span ในโค้ด tracing) ถึงปลอดภัยที่จะใช้ใน function ที่เต็มไปด้วย `?`: ไม่มี path ไหนออกจาก function เลย ไม่ว่าจะ error หรือไม่ ที่ข้าม destructor ไปได้
+
+export const dropAndRaiiCode = `struct Noisy(&'static str);
+
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("dropping {}", self.0);
+    }
+}
+
+struct Pair {
+    first: Noisy,
+    second: Noisy,
+}
+
+fn consume(n: Noisy) {
+    println!("consume received {}", n.0);
+}
+
+fn main() {
+    let _a = Noisy("a");
+    let _b = Noisy("b");
+    let _pair = Pair { first: Noisy("pair.first"), second: Noisy("pair.second") };
+
+    println!("temporary: {}", Noisy("temporary").0);
+
+    let c = Noisy("c");
+    consume(c); // dropped inside consume, not here
+
+    std::mem::forget(Noisy("forgotten")); // never dropped at all
+
+    println!("end of main");
+}`;
+
+<Playground code={dropAndRaiiCode} />
+
+<Callout title="การเรียก drop ทุกครั้งถูกแทรกตอน compile time ที่ตำแหน่งที่คอมไพเลอร์รู้อยู่แล้ว">
+ไม่มีการสแกน ไม่มีการวิเคราะห์ reachability ไม่มีการตัดสินใจตอน runtime ว่าจะรัน destructor เมื่อไหร่ คอมไพเลอร์กำหนด สำหรับทุกค่า statement ที่เจาะจงว่า scope ของมันจบตรงไหน แล้วแทรกการเรียก `drop` ไว้ตรงนั้นเป๊ะ — move แค่ทำให้ statement นั้นอยู่ใน function คนละตัวจากที่ค่าถูกสร้างขึ้นมาเท่านั้น
+</Callout>
+
+## Mental Model
+
+ลองนึกภาพว่าทุก scope คือ stack ของตั๋วเคลม หนึ่งใบต่อค่าหนึ่งค่าที่เป็นเจ้าของสิ่งที่ต้อง drop ได้ ถูก push เข้าไปตามลำดับการประกาศ การออกจาก scope คือการ pop แล้วแลกตั๋วจากบนลงล่าง — ประกาศทีหลังสุด, drop ก่อน — และค่าที่มี field ก็เป็น stack ตั๋วขนาดจิ๋วของตัวมันเอง แลกตามลำดับที่ประกาศไว้ข้างใน move ไม่ได้ทำลายตั๋ว มันแค่ส่งตั๋วให้ stack อีกอัน (ของ callee) เพื่อให้แลกที่นั่นแทน เมื่อไหร่ก็ตามที่ stack นั้น unwind `mem::forget` ฉีกตั๋วทิ้งโดยไม่แลก โดยตั้งใจ ครั้งเดียว วงจร `Rc` คือตั๋วสองใบที่แต่ละใบต้องการให้อีกใบถูกแลกก่อน — ไม่มีใบไหนแลกได้เลย ทั้งคู่จึงนอนอยู่ในลิ้นชักตลอดไป
+
+## Trade-offs
+
+การ drop แบบ deterministic ที่ถูกแทรกตอน compile time ให้เวลาการ cleanup ที่แม่นยำ คาดเดาได้ ด้วยต้นทุนการสแกนตอน runtime เป็นศูนย์ — คุณรู้เสมอว่าบรรทัดไหนเป๊ะ ๆ ที่ปล่อย lock หรือปิดไฟล์ ต่างจาก "สักวันหนึ่ง ในที่สุด" ของ GC ต้นทุนคือ อะไรก็ตามที่หลีกเลี่ยงความ deterministic นั้น (`ManuallyDrop`, `mem::forget`, วงจร reference) จะ opt out จากการรับประกันนั้นทั้งหมดและผลักความถูกต้องกลับมาให้คุณ ไม่ว่าจะตั้งใจ (การส่งต่อผ่าน FFI) หรือบังเอิญ (วงจรที่คุณไม่ทันสังเกตว่าสร้างขึ้นมา)
+
+## Common Misconceptions
+
+- **"การ move ค่าออกจากตัวแปรข้าม Drop impl ของมันไป"** มันไม่ได้ข้าม — มันแค่ย้าย *ที่* ที่ drop เกิดขึ้น ไปยังที่ที่ scope ของ owner ใหม่จบ วิธีเดียวที่จะข้าม destructor ของค่าจริง ๆ คือ `ManuallyDrop`, `mem::forget` หรือการ leak (เช่นวงจร reference)
+- **"Function ที่ panic ทิ้ง resource ค้างไว้เพราะมันไม่ได้ `return` ตามปกติ"** Unwinding เรียก destructor ของทุกอย่างที่ยังมีชีวิตอยู่ตอนขึ้นไปตาม call stack เหมือน return ปกติเป๊ะ — นี่คือเหตุผลตรง ๆ ว่าทำไม RAII guard ถึงปลอดภัยข้าม `?` และแม้แต่ข้าม `panic!` ธรรมดา (ที่ไม่ panic ใน drop)
+- **"`mem::forget` เป็น unsafe เพราะมันป้องกัน cleanup"** มันเป็น function ที่ safe — การ leak ไม่ใช่การละเมิดความปลอดภัยของหน่วยความจำในความหมายของ Rust (ไม่มี use-after-free, ไม่มี data race) แค่เสียทรัพยากรไปเปล่า ๆ สิ่งที่มันเสียไปแบบเงียบ ๆ คือ cleanup ในโลกจริง (ปิดไฟล์, ปล่อย lock) ที่ `Drop` ของ type นั้นควรจะทำ
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างบางครั้งเอื้อมไปหยิบ `mem::forget` เพื่อ "ป้องกัน double-free" ที่มันคิดขึ้นเองจากความเข้าใจ ownership ผิด ๆ — move semantics ของ Rust รับประกันอยู่แล้วว่าค่าหนึ่งมีเจ้าของเดียวในแต่ละครั้ง ดังนั้นไม่เคยมีความเสี่ยง double-drop ตั้งแต่แรก และการเรียก `forget` ก็แค่ leak resource แทน
+
+<SpotTheBug code={`struct FileHandle {
+    name: &'static str,
+}
+
+impl Drop for FileHandle {
+    fn drop(&mut self) {
+        println!("closing file: {}", self.name);
+    }
+}
+
+fn process(handle: FileHandle) {
+    println!("processing {}", handle.name);
+    // "forget it here so the caller's copy doesn't also try to close it" -- AI-added comment
+    std::mem::forget(handle);
+}
+
+fn main() {
+    let handle = FileHandle { name: "report.csv" };
+    process(handle);
+    println!("end of main");
+}
+`}>
+โค้ดนี้ compile ผ่านและรันได้ พิมพ์ `processing report.csv` แล้ว `end of main` — และ `closing file: report.csv` ไม่ถูก print เลย สมมติฐานใน comment นั้นผิดล้วน ๆ: `process(handle)` move `handle` เข้าไปใน `process`; `main` ไม่มี "สำเนา" เหลือให้ต้องกังวลเลย เพราะ Rust ไม่เคยมีมันตั้งแต่แรก — ownership ถูกโอนครั้งเดียว สมบูรณ์ ตอน call นั้น ไม่เคยมีความเสี่ยง double-close ให้ต้องป้องกัน ดังนั้นการเรียก `mem::forget` จึงไม่มีจุดประสงค์อะไรเลยนอกจากไประงับการเรียก `Drop` ตัวเดียวที่ควรจะรัน ทำให้ resource จริงที่ `FileHandle` แทนอยู่ leak ไป (ในที่นี้คือ file descriptor ที่ไม่เคยถูกปิด) ทางแก้คือลบบรรทัด `mem::forget` ทิ้งไปเลย — `handle` ถูก drop อัตโนมัติ ครั้งเดียวเป๊ะ ตอนจบ `process` ซึ่งเป็นพฤติกรรมที่ถูกต้องเป๊ะโดยไม่ต้องมีโค้ดเพิ่มเลย
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+คอมไพเลอร์แทรกการเรียก `drop` เพียงครั้งเดียวต่อค่าที่เป็นเจ้าของหนึ่งค่า ตรงจุดที่ scope ของเจ้าของเดียวของมันจบเป๊ะ — move ย้ายจุดนั้น `ManuallyDrop`/`mem::forget`/การ leak ยกเลิกมัน แต่ไม่มีอะไรใน ownership ปกติที่เสี่ยงต่อการเรียกมันสองครั้งเลย
+</Callout>
+
+export const quizDropAndRaii = [
+    {
+        q: "โค้ดนี้ print อะไร?\n```rust\nstruct N(&'static str);\nimpl Drop for N {\n    fn drop(&mut self) { println!(\"drop {}\", self.0); }\n}\nfn main() {\n    let _a = N(\"a\");\n    let _b = N(\"b\");\n}\n```",
+        options: ["drop a\ndrop b", "drop b\ndrop a", "drop a\ndrop a", "ไม่มีเลย -- Drop รันก็ต่อเมื่อคุณเรียกมันตรง ๆ เท่านั้น"],
+        answer: 1,
+        explain: "Local drop ตามลำดับย้อนกลับของการประกาศ -- _b ถูกประกาศทีหลัง _a ดังนั้น Drop ของ _b จึงรันก่อนเมื่อ scope ของ main จบ"
+    },
+    {
+        q: "ทำไมโค้ดนี้ compile ไม่ผ่าน?\n```rust\nstruct R;\nimpl Drop for R {\n    fn drop(&mut self) { println!(\"bye\"); }\n}\nfn main() {\n    let r = R;\n    r.drop();\n}\n```",
+        options: [
+            "R ต้อง derive Clone ก่อนถึงจะ implement Drop ได้",
+            "error[E0040]: ห้ามเรียก destructor ตรง ๆ -- การเรียก .drop() ตรง ๆ อาจปล่อยให้ค่าใช้งานได้ต่อแล้วถูก drop อีกครั้งอัตโนมัติ กลายเป็น double-drop",
+            "Drop::drop ต้องรับ self แบบ by value ไม่ใช่ &mut self",
+            "ต้องเรียก std::mem::forget(r) แทน"
+        ],
+        answer: 1,
+        explain: "Rust ห้ามเรียก Drop::drop ตรง ๆ (error[E0040]) เพื่อป้องกัน double-drop โดยเฉพาะ std::mem::drop(r) คือวิธีที่ถูกต้อง -- มันรับ ownership แบบ by value แล้วปล่อยให้ค่าหลุดจาก scope ตามปกติ"
+    },
+    {
+        q: "ค่าหนึ่งถูก move จากตัวแปร `a` ใน function หนึ่งเข้าไปเป็น parameter ของอีก function หนึ่งชื่อ `consume` destructor ของมันรันที่ไหน?",
+        options: [
+            "กลับไปที่ function เดิม ตอนที่ scope ของ `a` จบ ไม่ว่าจะ move หรือไม่",
+            "ใน consume ตอนที่ scope ของ consume จบ -- ownership (และความรับผิดชอบเรื่อง drop) ย้ายไปพร้อมกับค่า",
+            "รันสองครั้ง: ครั้งละ function",
+            "ไม่รันเลย เพราะค่าถูก move ไปแล้ว"
+        ],
+        answer: 1,
+        explain: "การ move ย้ายที่ที่ drop เกิดขึ้น ไปยังที่ที่ owner ใหม่จบ scope -- มันไม่ได้ข้าม drop ไป และ owner เดิม (ที่สละ ownership ไปแล้ว) ก็ไม่มีอะไรเหลือให้ drop"
+    },
+    {
+        q: "std::mem::forget คืออะไร และทำไมมันถึงเป็น function ที่ safe ทั้งที่มันป้องกัน cleanup?",
+        options: [
+            "มันเป็น unsafe และต้องใช้ unsafe block ในการเรียก",
+            "มันรับ ownership ของค่าหนึ่งแล้วไม่เรียก destructor ของมันเลย -- มัน safe เพราะการ leak ไม่ใช่การละเมิดความปลอดภัยของหน่วยความจำ (ไม่มี use-after-free, ไม่มี data race) แค่เสียทรัพยากรไปเปล่า ๆ",
+            "มัน free หน่วยความจำของค่าทันทีโดยไม่รัน Drop",
+            "มันใช้ได้แค่กับ type ที่ไม่ implement Drop เท่านั้น"
+        ],
+        answer: 1,
+        explain: "mem::forget ตั้งใจเป็น function ที่ safe การรับประกันความปลอดภัยของ Rust ไม่รวมการไม่มี leak -- ค่าที่ถูก forget แค่ไม่เคยมี Drop ของมันรัน ซึ่งเสียสิ่งที่มันถืออยู่ไปเปล่า ๆ แต่ไม่ละเมิดกฎความปลอดภัยของหน่วยความจำเลย"
+    },
+    {
+        q: "จะเกิดอะไรขึ้นถ้า Drop implementation เอง panic ในขณะที่มันกำลังรันเป็นส่วนหนึ่งของการ unwind panic ก่อนหน้า?",
+        options: [
+            "Panic ตัวที่สองถูกเพิกเฉยเงียบ ๆ และ unwinding ดำเนินต่อไปตามปกติ",
+            "Rust unwind สองครั้งพร้อมกันไม่ได้ ดังนั้น process จึง abort ทันทีและไม่มีเงื่อนไข -- \"panic in a destructor during cleanup\"",
+            "โปรแกรม restart main() ใหม่ตั้งแต่ต้น",
+            "แสดงแค่ข้อความของ panic ตัวที่สอง ส่วนตัวแรกถูกทิ้งโดยไม่มีผลอะไรอื่น"
+        ],
+        answer: 1,
+        explain: "Panic ระหว่างที่ unwind ตัวหนึ่งกำลังดำเนินอยู่แล้วไม่มี unwind path ที่ถูกต้องให้เดินตาม ดังนั้น runtime จึง abort process ทั้งหมดแทนที่จะพยายามแสดง unwind-ในขณะที่กำลัง-unwind"
+    },
+    {
+        q: "`_guard` ของ function นี้ถูก drop ไหมถ้า `?` trigger early return?\n```rust\nfn parse(s: &str) -> Result<i32, std::num::ParseIntError> {\n    let _guard = Noisy(\"guard\");\n    let n: i32 = s.parse()?;\n    Ok(n * 2)\n}\n```",
+        options: [
+            "ไม่ -- ? ข้ามการจัดการ drop ปกติไปทั้งหมด",
+            "ใช่ -- ? เป็น early return ธรรมดา และ destructor ของทุก local ที่ยังมีชีวิตอยู่รันตอนออกไป เหมือน return แบบอื่นเป๊ะ",
+            "เฉพาะตอน Result เป็น Ok เท่านั้น ไม่รันตอน Err",
+            "เฉพาะตอนที่ _guard ถูกส่งเข้าไปใน expression ของ ? ตรง ๆ เท่านั้น"
+        ],
+        answer: 1,
+        explain: "Early return ของ operator ? ไม่ใช่กรณีพิเศษสำหรับ Drop -- มันคือ return ธรรมดา ดังนั้น destructor ของ _guard จึงรันไม่ว่า parse จะ return ผ่าน Ok(n * 2) หรือผ่าน early Err ของ ?"
+    }
+];
+
+<Quiz client:visible id="runtime-internals/drop-and-raii" questions={quizDropAndRaii} />
+
+<ProgressTracker client:visible id="runtime-internals/drop-and-raii" />

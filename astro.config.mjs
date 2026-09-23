@@ -40,6 +40,8 @@ export default defineConfig({
         { label: 'Error Handling', translations: { th: 'การจัดการ Error' }, items: [{ autogenerate: { directory: 'error-handling' } }] },
         { label: 'Collections & Iterators', translations: { th: 'Collection และ Iterator' }, items: [{ autogenerate: { directory: 'collections-iterators' } }] },
         { label: 'Concurrency, Testing & Cargo', translations: { th: 'Concurrency, Testing และ Cargo' }, items: [{ autogenerate: { directory: 'concurrency-testing-cargo' } }] },
+        { label: 'Runtime Internals', translations: { th: 'กลไกภายใน Runtime' }, items: [{ autogenerate: { directory: 'runtime-internals' } }] },
+        { label: 'Reading & Reviewing Rust', translations: { th: 'อ่านและรีวิวโค้ด Rust' }, items: [{ autogenerate: { directory: 'reading-rust' } }] },
         { label: 'Glossary', translations: { th: 'อภิธานศัพท์' }, link: 'glossary' },
       ],
       }), preact()],

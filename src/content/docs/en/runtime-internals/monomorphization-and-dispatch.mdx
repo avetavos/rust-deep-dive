@@ -1,0 +1,438 @@
+---
+title: 'Monomorphization & Dispatch'
+description: 'What "zero-cost" actually means and measures as: one compiled copy per concrete type, vtables, inline hints, and a real assembly excerpt comparing a monomorphized call to a dyn call.'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+The Traits & Generics module introduced static dispatch (generics) and dynamic dispatch (`dyn Trait`) and their basic trade-off. This lesson proves the underlying mechanics directly — one compiled copy per type, a real vtable, and an actual assembly excerpt showing exactly what each strategy costs.
+
+## One Copy Per Type: Monomorphization
+
+A generic function like `fn identity<T>(x: T) -> T` is not compiled once. For every distinct `T` it's actually called with, the compiler generates a separate, fully concrete copy — this is **monomorphization**, and each copy is compiled and optimized completely independently, as if you had hand-written `identity_i32` and `identity_i64` yourself.
+
+You can observe this directly: two monomorphized instantiations of the same generic function are genuinely different function items to the type system, not the same code wearing different data.
+
+## What the Compiler Says: Two Instantiations Are Two Different Types
+
+```rust
+// @expect-error E0308
+fn identity<T>(x: T) -> T {
+    x
+}
+
+fn main() {
+    let mixed = [identity::<i32>, identity::<i64>];
+    println!("{:?}", mixed);
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> src/main.rs:8:36
+  |
+8 |     let mixed = [identity::<i32>, identity::<i64>];
+  |                                   ^^^^^^^^^^^^^^^ expected `i32`, found `i64`
+  |
+  = note: expected fn item `fn(i32) -> i32 {identity::<i32>}`
+             found fn item `fn(i64) -> i64 {identity::<i64>}`
+
+error: aborting due to 1 previous error
+```
+
+`identity::<i32>` and `identity::<i64>` aren't the same value wrapped around different data — they're two distinct types (`fn item` types, one per monomorphized instantiation), which is exactly what you'd expect if the compiler had generated two entirely separate functions, because it has. This is also a direct, verifiable proof that generics cost zero indirection: there is no single shared `identity` function being looked up at runtime for either call — each call site is compiled to invoke its own specific, concrete function.
+
+You can also compare their actual addresses once coerced to a plain function pointer (`fn(T) -> T`, which erases which generic instantiation they came from, the same way `dyn Trait` erases a concrete type):
+
+```rust
+fn identity<T>(x: T) -> T {
+    x
+}
+
+fn main() {
+    let f_i32: fn(i32) -> i32 = identity::<i32>;
+    let f_f64: fn(f64) -> f64 = identity::<f64>;
+    println!("f_i32 as usize == f_f64 as usize? {}", f_i32 as usize == f_f64 as usize);
+    println!("f_i32(5) = {}", f_i32(5));
+    println!("f_f64(2.5) = {}", f_f64(2.5));
+}
+```
+
+```text
+f_i32 as usize == f_f64 as usize? false
+f_i32(5) = 5
+f_f64(2.5) = 2.5
+```
+
+Two different instantiations of the exact same generic function land at two different addresses in the compiled binary — direct evidence they're two separate copies of machine code, not one function branching on a type tag at runtime.
+
+## Code Size: The Cost Side of Monomorphization
+
+One copy per type is exactly what makes generic calls free of runtime dispatch cost — and exactly what makes them cost compiled code size. A generic function called with 20 different types produces 20 copies of its machine code in the final binary, even if most of those copies are nearly identical. This is invisible from the source (you wrote the function once) and easy to lose track of in a codebase with many small generic helpers each instantiated across many types — `cargo bloat` (a separate, widely used cargo subcommand) exists specifically to show which functions' monomorphized copies are actually taking up space in a release binary, since the compiler itself doesn't surface this by default.
+
+## Dynamic Dispatch: A Real Vtable, Measured
+
+`dyn Trait` takes the opposite trade: one shared function, resolved through a vtable lookup at runtime, instead of a separate compiled copy per type.
+
+<Mermaid code={`flowchart LR
+    subgraph FatPointer["&dyn Speak (data ptr + vtable ptr)"]
+        Data["data pointer"]
+        VtablePtr["vtable pointer"]
+    end
+    Data --> Value["Dog value"]
+    VtablePtr --> Vtable["Dog's Speak vtable"]
+    Vtable --> Slot["speak fn pointer slot"]
+    Slot -->|indirect call| DogSpeak["Dog::speak"]`} title="A dyn Trait call: two loads (data, vtable) then one indirect call through the vtable slot" />
+
+The Ownership & Borrowing module's smart-pointers lesson and this module's memory-layout lesson already measured `&dyn Trait` at 16 bytes (a fat pointer: data pointer + vtable pointer) versus 8 for `&T`. That extra pointer is exactly what a `dyn Trait` call has to load and jump through, and it's directly visible in compiled assembly.
+
+## What the Compiler Actually Generates: A Real `--emit=asm` Comparison
+
+Compiling this program with optimizations (`rustc -O --emit=asm`) and looking at the generated AArch64 assembly for `main` shows the two dispatch strategies producing structurally different code, not just theoretically different code:
+
+```rust
+use std::hint::black_box;
+
+trait Speak {
+    fn speak(&self) -> i32;
+}
+
+struct Dog;
+impl Speak for Dog {
+    fn speak(&self) -> i32 { 1 }
+}
+
+struct Cat;
+impl Speak for Cat {
+    fn speak(&self) -> i32 { 2 }
+}
+
+#[inline(never)]
+fn call_generic<T: Speak>(x: &T) -> i32 {
+    x.speak()
+}
+
+#[inline(never)]
+fn call_dyn(x: &dyn Speak) -> i32 {
+    x.speak()
+}
+
+fn main() {
+    let d = Dog;
+    let c = Cat;
+    println!("{}", call_generic(black_box(&d)));
+    let obj: &dyn Speak = if std::env::args().count() > 100 { &c } else { &d };
+    println!("{}", call_dyn(black_box(obj)));
+}
+```
+
+```text
+1
+1
+```
+
+The generated assembly for the monomorphized `call_generic::<Dog>` call in `main` contains no call instruction at all:
+
+```text
+	mov	w8, #1
+	str	w8, [sp, #32]
+```
+
+Even though `call_generic` is marked `#[inline(never)]` and its argument is wrapped in `black_box` (to stop the compiler from constant-folding based on the *value* it's called with), the optimizer can still see straight through the monomorphized call: `Dog::speak` unconditionally returns `1`, `call_generic::<Dog>` does nothing but call it, and because the compiler knows the concrete type at this call site, it can trace that chain all the way through and replace the entire call with the constant `1` at compile time.
+
+The `dyn` call, by contrast, compiles to a genuine indirect call the compiler *cannot* see through, because it doesn't know at compile time which concrete type's `speak` will actually run:
+
+```text
+	ldr	x1, [x8, #24]
+	bl	__ZN4main8call_dyn17he0bc89168f5fae1cE
+```
+
+and `call_dyn`'s entire compiled body is exactly one instruction:
+
+```text
+__ZN4main8call_dyn17he0bc89168f5fae1cE:
+	br	x1
+```
+
+`ldr x1, [x8, #24]` is the vtable lookup — loading the `speak` function pointer out of the vtable at a fixed offset, into register `x1`. `call_dyn`'s whole job is then `br x1`: jump to whatever address happens to be sitting in that register. This is the entire, literal cost of dynamic dispatch: one memory load plus one indirect jump the optimizer has no way to resolve ahead of time — and, just as importantly, an opaque boundary that blocks the kind of cross-function constant-folding the monomorphized call above got for free.
+
+## `#[inline]` and `#[inline(never)]`
+
+`#[inline]` is a *hint*, not a directive — it asks the compiler to consider inlining a function at its call sites (mainly useful for small functions defined in one crate and called from another, where the compiler otherwise might not consider it), but the compiler is always free to ignore it. `#[inline(always)]` is a much stronger request, close to a directive, and `#[inline(never)]` is what this lesson used above to force a real, named `call_dyn` function to exist in the output rather than let the compiler fold it away — useful for exactly this kind of measurement, and occasionally for code-size-sensitive builds where a rarely-hot function shouldn't be duplicated into every caller. Neither attribute changes *what* runs, only whether the compiler duplicates a call site's target inline or keeps it as a separate, callable function.
+
+## Enum Dispatch: The Third Option
+
+Generics and `dyn Trait` aren't the only way to run different code for different types — when the full set of concrete types is fixed and known, an `enum` with a `match` is a third option that sidesteps the trade-off entirely:
+
+```rust
+trait Speak {
+    fn speak(&self) -> i32;
+}
+
+struct Dog;
+impl Speak for Dog {
+    fn speak(&self) -> i32 { 1 }
+}
+struct Cat;
+impl Speak for Cat {
+    fn speak(&self) -> i32 { 2 }
+}
+
+enum Animal {
+    Dog(Dog),
+    Cat(Cat),
+}
+
+impl Animal {
+    fn speak(&self) -> i32 {
+        match self {
+            Animal::Dog(d) => d.speak(),
+            Animal::Cat(c) => c.speak(),
+        }
+    }
+}
+
+fn main() {
+    let animals = vec![Animal::Dog(Dog), Animal::Cat(Cat)];
+    for a in &animals {
+        println!("{}", a.speak());
+    }
+}
+```
+
+```text
+1
+2
+```
+
+`Animal` is one concrete type (no monomorphization needed, no code duplication), and `match` compiles to a direct jump based on the discriminant — no vtable, no indirect call through a pointer the compiler can't see through. The cost is that adding a new kind of `Speak`-implementing type means adding a new `Animal` variant and updating every `match` on it (which the compiler will point out for you, since `match` is exhaustive) — the same closed-set-vs-open-set trade-off the Traits & Generics module covered when choosing between `Box<dyn Trait>`, an enum, and a generic.
+
+## `impl Trait` in Return Position Is Static Dispatch
+
+`fn make_speaker() -> impl Speak` looks similar to `-> Box<dyn Speak>` at a glance, but it compiles completely differently: `impl Trait` in return position means "some specific, single concrete type, decided by this function's own body, that the caller doesn't need to name" — the compiler knows the exact concrete type at every call site, exactly like a generic parameter, so there's no vtable and no dynamic dispatch involved at all.
+
+```rust
+trait Speak {
+    fn speak(&self) -> i32;
+}
+
+struct Dog;
+impl Speak for Dog {
+    fn speak(&self) -> i32 { 1 }
+}
+
+fn make_speaker() -> impl Speak {
+    Dog // concrete type baked into the return type at compile time -- this is static dispatch
+}
+
+fn main() {
+    println!("{}", make_speaker().speak());
+}
+```
+
+```text
+1
+```
+
+This is why `impl Trait` in return position cannot return different concrete types from different branches (an `if`/`else` returning `Dog` in one arm and `Cat` in the other is a compile error) — the whole point is that the compiler resolves one single concrete type for the function, at compile time, the same way it resolves a generic parameter.
+
+export const monomorphizationCode = `use std::hint::black_box;
+
+trait Speak {
+    fn speak(&self) -> i32;
+}
+
+struct Dog;
+impl Speak for Dog {
+    fn speak(&self) -> i32 { 1 }
+}
+
+struct Cat;
+impl Speak for Cat {
+    fn speak(&self) -> i32 { 2 }
+}
+
+fn call_generic<T: Speak>(x: &T) -> i32 {
+    x.speak()
+}
+
+fn call_dyn(x: &dyn Speak) -> i32 {
+    x.speak()
+}
+
+enum Animal {
+    Dog(Dog),
+    Cat(Cat),
+}
+
+impl Animal {
+    fn speak(&self) -> i32 {
+        match self {
+            Animal::Dog(d) => d.speak(),
+            Animal::Cat(c) => c.speak(),
+        }
+    }
+}
+
+fn main() {
+    let d = Dog;
+    let c = Cat;
+
+    println!("static dispatch (generic): {}", call_generic(black_box(&d)));
+    println!("dynamic dispatch (dyn):    {}", call_dyn(black_box(&c as &dyn Speak)));
+
+    let animals = vec![Animal::Dog(Dog), Animal::Cat(Cat)];
+    for a in &animals {
+        println!("enum dispatch:             {}", a.speak());
+    }
+
+    println!("&dyn Speak is {} bytes, &Dog is {} bytes",
+        std::mem::size_of::<&dyn Speak>(), std::mem::size_of::<&Dog>());
+}`;
+
+<Playground code={monomorphizationCode} />
+
+<Callout title="Zero-cost is measured, not assumed">
+'Zero-cost abstraction' for generics means the compiled call is indistinguishable from hand-written, type-specific code -- provably so, since the optimizer can constant-fold straight through it. dyn Trait is a different, deliberate trade: one shared function and a real, measurable per-call cost (one load, one indirect jump) in exchange for something monomorphization cannot do -- storing genuinely different concrete types together at runtime.
+</Callout>
+
+## Mental Model
+
+Think of a generic function as a recipe the compiler hand-copies and specializes, once per ingredient list it's ever asked to cook with — by the time it's in the oven (compiled), there's no "recipe lookup" left at all, just that one specific dish's exact instructions, which is why the optimizer can simplify it as aggressively as if you'd written that exact dish by hand. A `dyn Trait` call is the opposite: one single kitchen (one compiled function) that takes instructions from a card (the vtable) handed to it at the door, and looks at that card fresh, every single time, precisely because it has no way of knowing ahead of time which dish it will be asked to make next.
+
+## Trade-offs
+
+Monomorphization is transparent to every later optimization pass — inlining, constant folding, the cross-function analysis this lesson's assembly excerpt showed directly — at the cost of one compiled copy of code per concrete type, which can measurably grow binary size across a large generic-heavy codebase. `dyn Trait` caps code size at one shared function regardless of how many types implement the trait, and is the only option that lets genuinely different concrete types live together in one collection, at the cost of one runtime indirection per call and a hard optimization boundary the compiler cannot see through. Enum dispatch avoids both costs when the full set of types is fixed and known, at the cost of needing to update the enum (and its matches) whenever a new type is added.
+
+## Common Misconceptions
+
+- **"`#[inline(never)]` makes a function never appear as a separate copy in the binary."** It stops the compiler from copying that function's code into its callers, forcing it to remain one distinct, callable function in the output — which is why this lesson used it to force `call_dyn` to appear as an inspectable symbol rather than being folded away.
+- **"Zero-cost abstraction means literally no cost anywhere in the system."** For generics, it means no runtime dispatch cost and code indistinguishable from hand-specialized code — the cost that does exist (compiled code size, one copy per type) shows up in the binary, not at the call site's runtime behavior.
+- **"`dyn Trait` is always meaningfully slower in practice."** The measured cost is one memory load and one indirect jump per call — real, and non-zero, but frequently negligible next to whatever the method actually does; the more consequential loss is usually the blocked cross-function optimization (inlining, constant folding) this lesson's assembly comparison showed directly, which matters most for very small, very hot methods.
+- **"`impl Trait` in return position works like `dyn Trait` — the caller gets a value that could be any implementor."** It's the opposite: `impl Trait` in return position always resolves to one single concrete type per function, decided entirely by that function's own body, with zero dynamic dispatch involved — the compiler simply doesn't require the caller to write the concrete type's name out.
+
+## Reading AI-generated Code
+
+Generated code sometimes reaches for `Box<dyn Trait>` as a default whenever a function needs to "return something that implements a trait," even when the function only ever returns one single concrete type — throwing away the compiler's ability to devirtualize, inline, and constant-fold for no actual flexibility gained.
+
+<SpotTheBug code={`trait Shape {
+    fn area(&self) -> f64;
+}
+
+struct Square {
+    side: f64,
+}
+
+impl Shape for Square {
+    fn area(&self) -> f64 {
+        self.side * self.side
+    }
+}
+
+// "Box<dyn Shape> so callers can treat the return value generically" -- AI-added comment
+fn make_unit_square() -> Box<dyn Shape> {
+    Box::new(Square { side: 1.0 })
+}
+
+fn main() {
+    let s = make_unit_square();
+    println!("{}", s.area());
+}
+`}>
+This compiles and runs correctly, printing `1`, and it's easy to see why it survives review: nothing about it is wrong, exactly. But `make_unit_square` only ever constructs a `Square` -- there is no branch, no configuration, no case where it could return any other concrete type. `Box<dyn Shape>` pays for a heap allocation and a vtable indirection on every call to `.area()`, in exchange for a flexibility ("callers can treat the return value generically") that was never actually exercised: every caller receives the exact same concrete type every time. `fn make_unit_square() -> impl Shape` returns the identical value with the identical calling code at every call site, but with zero dynamic dispatch, zero heap allocation, and the return type fully known and inlinable at every call site. `Box<dyn Shape>` earns its cost the moment a second concrete `Shape` might come back from a different branch or configuration -- until then, it's paying for a capability that doesn't exist yet.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Monomorphization gives every generic call site its own concrete, fully-optimizable copy of the code -- provably transparent to the optimizer -- while dyn Trait keeps one shared function behind a real, measurable vtable indirection that no optimizer can see through; pick based on whether you actually need to store different concrete types together, not by default.
+</Callout>
+
+export const quizMonomorphizationAndDispatch = [
+    {
+        q: "Why does this fail to compile?\n```rust\nfn identity<T>(x: T) -> T { x }\nfn main() {\n    let mixed = [identity::<i32>, identity::<i64>];\n}\n```",
+        options: [
+            "Arrays cannot hold function items at all",
+            "error[E0308]: identity::<i32> and identity::<i64> are genuinely different fn item types -- one compiled, concrete copy per monomorphized instantiation, not the same function with different data",
+            "identity is missing a trait bound",
+            "i32 and i64 cannot both appear in the same program"
+        ],
+        answer: 1,
+        explain: "Monomorphization produces a distinct type (and a distinct compiled function) per instantiation. identity::<i32> and identity::<i64> are as different to the type system as two unrelated functions would be."
+    },
+    {
+        q: "What does comparing `identity::<i32> as usize == identity::<f64> as usize` (after coercing both to plain fn pointers) prove?",
+        options: [
+            "Nothing -- fn pointers cannot be compared",
+            "That the two monomorphized instantiations are compiled to different addresses in the binary -- direct evidence they are two separate copies of machine code",
+            "That generics always compile slower than non-generic code",
+            "That i32 and f64 have the same memory layout"
+        ],
+        answer: 1,
+        explain: "Two different concrete instantiations of the same generic function occupy two different addresses once compiled -- proof they are genuinely separate compiled copies of code, not one shared implementation."
+    },
+    {
+        q: "In the --emit=asm comparison, why does the monomorphized call_generic::<Dog> call disappear entirely from main's compiled code (replaced by `mov w8, #1`), even with #[inline(never)] and a black_box'd argument?",
+        options: [
+            "black_box has no effect and the compiler ignores #[inline(never)] for generics",
+            "Dog::speak always returns 1 regardless of the boxed value, and because the compiler knows the concrete type at this call site, it can trace the whole call chain through and fold it to a compile-time constant",
+            "The example doesn't actually compile",
+            "call_generic was never actually called in the source"
+        ],
+        answer: 1,
+        explain: "black_box only hides the argument's value from constant-propagation reasoning -- it does not stop the optimizer from proving that a monomorphized call's *result* is always the same constant when the callee's behavior doesn't depend on that value."
+    },
+    {
+        q: "What does call_dyn's compiled body (`br x1`, a single instruction) preceded by `ldr x1, [x8, #24]` in main represent?",
+        options: [
+            "A bug in the compiler's code generation",
+            "The vtable lookup (loading the speak function pointer from a fixed vtable offset) followed by an indirect jump to whatever address that pointer holds -- the entire, literal, measurable cost of a dyn Trait call",
+            "A stack overflow check inserted by the compiler",
+            "Inlined code from the Cat implementation"
+        ],
+        answer: 1,
+        explain: "The vtable slot is loaded into a register, then call_dyn simply jumps to it. This is the whole cost of dynamic dispatch: one memory load, one indirect branch, and (unlike the generic call) an opaque boundary the optimizer cannot see or fold through."
+    },
+    {
+        q: "When is an enum with a match a better choice than either generics or dyn Trait for running type-specific code?",
+        options: [
+            "Never -- enums are always slower than both alternatives",
+            "When the full set of concrete types is fixed and known -- it avoids both monomorphization's code duplication and dyn Trait's vtable indirection, at the cost of needing to update every match when a new type is added",
+            "Only when there is exactly one implementing type",
+            "Only in async code"
+        ],
+        answer: 1,
+        explain: "Enum dispatch sidesteps the generics-vs-dyn trade-off entirely for a closed set of types: one concrete type, direct jumps on the discriminant, no vtable -- but the set of variants must be known and the compiler forces every match to handle additions."
+    },
+    {
+        q: "Why can't `fn make() -> impl Shape` return a Square from one branch and a Circle from another, while `fn make() -> Box<dyn Shape>` can?",
+        options: [
+            "impl Trait in return position resolves to exactly one concrete type per function, decided at compile time like a generic parameter -- there's no dynamic dispatch to select between branches at runtime the way Box<dyn Shape> allows",
+            "impl Trait can never be used with structs, only with primitive types",
+            "Box<dyn Shape> cannot actually hold more than one type either",
+            "This is a temporary limitation that will be removed in a future Rust edition"
+        ],
+        answer: 0,
+        explain: "impl Trait in return position is static dispatch: the compiler must resolve one single concrete return type for the whole function. Box<dyn Shape> is dynamic dispatch specifically so different branches can return genuinely different concrete types, unified behind one vtable-erased type at runtime."
+    },
+    {
+        q: "A function only ever constructs and returns one concrete type wrapped in Box<dyn Trait>, with no branch or configuration that could produce a different type. What is the better alternative, and why?",
+        options: [
+            "Keep Box<dyn Trait> -- it is always the safer default regardless of the situation",
+            "impl Trait in return position -- it returns the identical value with zero heap allocation and zero vtable indirection, since there was never more than one concrete type in play",
+            "Arc<dyn Trait> instead, for better performance",
+            "There is no better alternative once a trait is involved at all"
+        ],
+        answer: 1,
+        explain: "Box<dyn Trait> pays for flexibility (heap allocation, vtable indirection) that only matters if more than one concrete type could actually come back. When only one ever does, impl Trait gives identical calling code with none of that cost."
+    }
+];
+
+<Quiz client:visible id="runtime-internals/monomorphization-and-dispatch" questions={quizMonomorphizationAndDispatch} />
+
+<ProgressTracker client:visible id="runtime-internals/monomorphization-and-dispatch" />

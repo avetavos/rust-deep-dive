@@ -1,0 +1,504 @@
+---
+title: 'Smart Pointers'
+description: 'Box, Rc, RefCell, Cell และ Arc: การจอง heap, shared ownership และ interior mutability — และทำไม Rc<RefCell<T>> มักเป็น smell ไม่ใช่ทางแก้'
+sidebar:
+  order: 6
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+ทุกอย่างในสี่บทที่แล้ว — ownership, move, `&T`, `&mut T`, slice — ถูกบังคับใช้ทั้งหมดตอน compile time แบบไม่มีต้นทุนตอน runtime **Smart pointer** คือเครื่องมือที่ Rust ให้มาสำหรับกรณีที่ ownership แบบ compile-time-only เพียงอย่างเดียวแสดงออกไม่ได้: ค่าที่ไม่รู้ขนาดจนกว่าจะถึง runtime, ค่าที่มีเจ้าของมากกว่าหนึ่ง หรือค่าที่ต้อง mutate ผ่าน shared reference แต่ละตัวแลกต้นทุนเล็ก ๆ ที่วัดได้ เพื่อความสามารถเฉพาะอย่างหนึ่ง
+
+## `Box<T>`: เป็นเจ้าของข้อมูลบน Heap
+
+`Box<T>` เป็น smart pointer ที่ง่ายที่สุด: มัน allocate `T` บน heap แล้วให้ pointer ที่เป็นเจ้าของตัวเดียวแก่คุณ `Box<T>` มีพฤติกรรมเหมือนกับว่าคุณเป็นเจ้าของ `T` โดยตรง (ผ่าน `Deref`) มันมีเจ้าของเดียวเหมือนค่าอื่น ๆ และจะถูก drop — คืนหน่วยความจำ heap — เมื่อ `Box` ออกจาก scope
+
+```rust
+fn main() {
+    let boxed = Box::new(42);
+    println!("{}", *boxed); // dereference to read the i32 inside
+    println!("{}", *boxed + 1); // arithmetic needs the dereference too -- Box itself has no Add impl
+}
+```
+
+เหตุผลที่พบบ่อยที่สุดในการใช้ `Box<T>` คือ type ที่คอมไพเลอร์คำนวณขนาดไม่ได้ — แบบคลาสสิกที่สุดคือ recursive type
+
+### สิ่งที่ Compiler บอก: Recursive Type ที่ไม่มี Indirection
+
+```rust
+// @expect-error E0072
+enum List {
+    Cons(i32, List),
+    Nil,
+}
+
+fn main() {}
+```
+
+```text
+error[E0072]: recursive type `List` has infinite size
+ --> src/main.rs:1:1
+  |
+1 | enum List {
+  | ^^^^^^^^^
+2 |     Cons(i32, List),
+  |               ---- recursive without indirection
+  |
+help: insert some indirection (e.g., a `Box`, `Rc`, or `&`) to break the cycle
+  |
+2 |     Cons(i32, Box<List>),
+  |               ++++    +
+
+error: aborting due to 1 previous error
+```
+
+`List` มี `List` อีกตัวอยู่ข้างในโดยตรง การคำนวณขนาดของมันจึงต้องแก้สมการ "ขนาดของ `List` = ขนาดของ `List` + ขนาดของ `i32`" — วนไม่รู้จบ `Box<List>` ตัดวงจรนี้: `Box` มีความกว้างเท่ากับ pointer หนึ่งตัวเสมอ (8 byte) ไม่ว่าจะชี้ไปที่อะไร ดังนั้น `Cons(i32, Box<List>)` จึงมีขนาดคงที่ที่คำนวณได้ ไม่ว่า list จะมีกี่ element ในที่สุด
+
+```rust
+enum List {
+    Cons(i32, Box<List>),
+    Nil,
+}
+
+use List::{Cons, Nil};
+
+fn main() {
+    let list = Cons(1, Box::new(Cons(2, Box::new(Cons(3, Box::new(Nil))))));
+    let mut cur = &list;
+    loop {
+        match cur {
+            Cons(v, next) => {
+                println!("{}", v);
+                cur = next;
+            }
+            Nil => break,
+        }
+    }
+}
+```
+
+## `Rc<T>`: หลายเจ้าของ Thread เดียว
+
+ที่ผ่านมา ownership หมายถึงเจ้าของ *หนึ่งเดียว* เสมอ `Rc<T>` ("reference counted") ผ่อนกฎนั้น: `Rc<T>` หลายตัวสามารถแชร์ ownership ของค่าเดียวกันบน heap ได้ `Rc::clone` ไม่ได้ copy ข้อมูลข้างใน — มันเพิ่ม counter ที่เก็บไว้คู่กับข้อมูล ค่าจะถูก drop ก็ต่อเมื่อ `Rc` ตัวสุดท้ายที่ชี้ไปหามันถูก drop เท่านั้น
+
+```rust
+use std::rc::Rc;
+
+fn main() {
+    let a = Rc::new(String::from("shared"));
+    println!("count after creating a = {}", Rc::strong_count(&a));
+
+    let b = Rc::clone(&a); // increments the strong count -- no data is copied
+    println!("count after cloning b = {}", Rc::strong_count(&a));
+
+    {
+        let _c = Rc::clone(&a);
+        println!("count after cloning c = {}", Rc::strong_count(&a));
+    } // _c dropped here, count decrements
+
+    println!("count after c's scope ends = {}", Rc::strong_count(&a));
+    println!("a and b still point at the same string: {} / {}", a, b);
+}
+```
+
+```text
+count after creating a = 1
+count after cloning b = 2
+count after cloning c = 3
+count after c's scope ends = 2
+a and b still point at the same string: shared / shared
+```
+
+`Rc<T>` ให้ shared access (`&T`) กับข้อมูลข้างในเท่านั้น — ตัวมันเองไม่ได้ทำให้ mutate ค่าได้ และไม่ thread-safe (การเพิ่ม counter ไม่ใช่ atomic) ข้อจำกัดทั้งสองมีคำตอบตรง ๆ ในบทนี้ต่อไป: `RefCell<T>` สำหรับการ mutate, `Arc<T>` สำหรับ thread
+
+## Rc Cycle ทำให้หน่วยความจำรั่ว
+
+การนับของ `Rc<T>` แม่นยำแต่ไร้เดียงสา: มันรู้แค่ "มี `Rc` กี่ตัวที่ชี้มาที่ฉัน" ไม่รู้ว่า "ฉันยังเข้าถึงได้อยู่ไหม" สอง node ที่ถือ `Rc` ชี้ไปหา *กันและกัน* จะไม่มีวันมี strong count เป็นศูนย์ แม้ reference ภายนอกทั้งหมดของทั้งคู่จะหายไปแล้วก็ตาม — นี่คือ memory leak จริง ๆ และมัน memory-safe (ไม่ crash ไม่มี undefined behavior) ซึ่งเป็นเหตุผลว่าทำไมมันถึงมองข้ามได้ง่าย
+
+```rust
+use std::cell::RefCell;
+use std::rc::Rc;
+
+struct Node {
+    name: String,
+    other: RefCell<Option<Rc<Node>>>,
+}
+
+impl Drop for Node {
+    fn drop(&mut self) {
+        println!("dropping {}", self.name);
+    }
+}
+
+fn main() {
+    let a = Rc::new(Node { name: "a".to_string(), other: RefCell::new(None) });
+    let b = Rc::new(Node { name: "b".to_string(), other: RefCell::new(None) });
+
+    *a.other.borrow_mut() = Some(Rc::clone(&b));
+    *b.other.borrow_mut() = Some(Rc::clone(&a));
+
+    println!("a strong = {}", Rc::strong_count(&a));
+    println!("b strong = {}", Rc::strong_count(&b));
+    println!("end of main -- neither Node will print \"dropping\": each still has 1 strong reference held by the other");
+}
+```
+
+```text
+a strong = 2
+b strong = 2
+end of main -- neither Node will print "dropping": each still has 1 strong reference held by the other
+```
+
+ลองรันดู: `a` กับ `b` ออกจาก scope ตอนจบ `main` แต่ละตัว drop strong reference หนึ่งใน สองของมันไป — แต่ก็แค่ทำให้ count จาก 2 ลงมาเหลือ 1 เพราะอีก node ยังถือ `Rc` แบบ strong ชี้มาอยู่ `Drop::drop` ไม่เคยถูกเรียกเลยสักตัว ไม่มี panic ไม่มี crash หน่วยความจำของทั้งสอง node ไม่เคยถูกคืนตลอดชีวิตที่เหลือของโปรแกรม
+
+### `Weak<T>` ตัดวงจร
+
+`Weak<T>` เป็น reference แบบไม่เป็นเจ้าของ: ให้คุณเข้าถึงค่าได้โดยไม่เพิ่ม *strong* count มีแค่ *weak* count แยกต่างหากที่ `Drop` ไม่รอ ทางแก้แบบคลาสสิกคือ tree แบบ parent/child ที่ child ถือ strong `Rc` กลับไปหาอะไรเลย แต่ถือ `Weak` pointer *ขึ้นไป* หา parent แทน ในขณะที่ parent ถือ strong `Rc` *ลงมา* หา child ของมัน — ownership ไหลไปทางเดียว จึงไม่มีวงจรเกิดขึ้น
+
+```rust
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
+
+struct Node {
+    name: String,
+    parent: RefCell<Weak<Node>>,
+    children: RefCell<Vec<Rc<Node>>>,
+}
+
+impl Drop for Node {
+    fn drop(&mut self) {
+        println!("dropping {}", self.name);
+    }
+}
+
+fn main() {
+    let leaf = Rc::new(Node {
+        name: "leaf".to_string(),
+        parent: RefCell::new(Weak::new()),
+        children: RefCell::new(vec![]),
+    });
+    println!("leaf strong = {}, weak = {}", Rc::strong_count(&leaf), Rc::weak_count(&leaf));
+
+    let branch = Rc::new(Node {
+        name: "branch".to_string(),
+        parent: RefCell::new(Weak::new()),
+        children: RefCell::new(vec![Rc::clone(&leaf)]),
+    });
+    *leaf.parent.borrow_mut() = Rc::downgrade(&branch); // downgrade: Rc -> Weak, does not bump strong count
+
+    println!("branch strong = {}, weak = {}", Rc::strong_count(&branch), Rc::weak_count(&branch));
+    println!("leaf strong = {}, weak = {}", Rc::strong_count(&leaf), Rc::weak_count(&leaf));
+    println!("leaf's parent is: {:?}", leaf.parent.borrow().upgrade().map(|p| p.name.clone()));
+}
+```
+
+```text
+leaf strong = 1, weak = 0
+branch strong = 1, weak = 1
+leaf strong = 2, weak = 0
+leaf's parent is: Some("branch")
+```
+
+`Rc::downgrade` สร้าง `Weak<Node>` โดยไม่แตะ strong count ของ `leaf` เลย — นั่นคือสิ่งที่ทำให้ `branch` ไม่ถูก `leaf` ยึดไว้ไม่ให้ตาย `Weak` dereference ตรง ๆ ไม่ได้ เพราะค่าที่มันชี้ไปอาจหายไปแล้ว; `.upgrade()` คืน `Option<Rc<T>>` เป็น `Some` ถ้าค่ายังอยู่ เป็น `None` ถ้า strong reference ทุกตัวถูก drop ไปหมดแล้ว เพราะ strong reference ของ `branch` ไหลไปทางเดียวตอนนี้ — ลงไปหา child ของมัน — การ drop `branch` กับ `leaf` ตอนจบ `main` จึงเรียก destructor จริง ๆ (ต่างจากวงจรข้างบน) เพราะ strong count ของแต่ละ node ไม่ได้ขึ้นกับอีกตัวคอยยึดไว้
+
+<Mermaid code={`flowchart LR
+    subgraph Cycle["Rc <-> Rc: a leak"]
+        A1["Node a\nstrong = 2"] -->|strong Rc| B1["Node b\nstrong = 2"]
+        B1 -->|strong Rc| A1
+    end
+    subgraph Fixed["Rc down, Weak up: no leak"]
+        P["branch\nstrong = 1"] -->|strong Rc| C["leaf\nstrong = 2"]
+        C -.->|Weak, doesn't count| P
+    end`} title="วงจร strong reference ไม่มีวันถึงศูนย์ ส่วน Weak back-reference ทำให้ count ถึงศูนย์ได้" />
+
+## `RefCell<T>`: Interior Mutability พร้อมตรวจตอน Runtime
+
+กฎ shared/exclusive ของ borrow checker (บทที่แล้ว) ถูกบังคับใช้ทั้งหมดตอน compile time — ซึ่งบางครั้งปฏิเสธ pattern ที่จริง ๆ ปลอดภัย แต่คอมไพเลอร์พิสูจน์ไม่ได้แค่จากดูโครงสร้างของโค้ดแบบ static `RefCell<T>` ย้ายกฎเดียวกันนี้ — ผู้อ่านกี่คนก็ได้ *หรือ* ผู้เขียนหนึ่งคน ไม่เคยทั้งสองพร้อมกัน — ไปเป็น **runtime**: มันให้คุณเรียก `.borrow_mut()` บนค่าที่เข้าถึงผ่าน `&RefCell<T>` ธรรมดา และ panic ถ้าคุณละเมิดกฎขณะที่ borrow ที่ขัดแย้งกันยังมีชีวิตอยู่
+
+```rust
+use std::cell::RefCell;
+
+fn main() {
+    let cell = RefCell::new(5);
+
+    {
+        let value = cell.borrow(); // shared borrow, checked at runtime
+        println!("value = {}", value);
+    } // shared borrow ends here
+
+    *cell.borrow_mut() += 1; // exclusive borrow, checked at runtime
+    println!("after increment = {}", cell.borrow());
+}
+```
+
+### สิ่งที่ Compiler บอก: การละเมิด Borrow ตอน Runtime
+
+`RefCell<T>` ย้ายการตรวจสอบจาก compile time ไป runtime แต่ไม่ได้ลบกฎทิ้ง — การละเมิดมันยังเป็นบั๊กอยู่ดี แค่ type system ตรวจล่วงหน้าให้ไม่ได้อีกต่อไป:
+
+```rust
+// @expect-panic
+use std::cell::RefCell;
+
+fn main() {
+    let cell = RefCell::new(5);
+    let _b1 = cell.borrow_mut();
+    let _b2 = cell.borrow_mut(); // second mutable borrow while _b1 is still alive
+    println!("{} {}", _b1, _b2);
+}
+```
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:7:20:
+RefCell already borrowed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+ไม่มีทางทำให้เป็น compile error ได้ — จุดประสงค์ทั้งหมดของ `RefCell<T>` คือรับ pattern ของโปรแกรมที่ borrow checker ยืนยันแบบ static ไม่ได้ แลกกับการตรวจตอน runtime แทนที่จะเป็นตอน compile time ข้อความ panic เปลี่ยนไปตามกฎที่ถูกละเมิด: เรียก `.borrow()` ขณะที่ `.borrow_mut()` ยังมีชีวิตอยู่จะ panic ด้วย `RefCell already mutably borrowed`
+
+## `Cell<T>`: Interior Mutability สำหรับ Type ที่เป็น `Copy`
+
+`RefCell<T>` ให้ reference เข้าไปในข้อมูลข้างในได้ ซึ่งเป็นเหตุผลว่าทำไมมันถึงต้อง track borrow ตอน runtime ตั้งแต่แรก `Cell<T>` เลี่ยงเรื่องนี้ทั้งหมด: มันไม่เคยให้ reference เข้าไปในค่าข้างในเลย แทนที่ `.get()` จะคืน **copy** ใหม่ (ดังนั้น `T` ต้องเป็น `Copy`) และ `.set()` เขียนทับค่าทั้งก้อน เพราะไม่มี reference หลุดออกไปเลย จึงไม่มีอะไรต้องตรวจ — panic เป็นไปไม่ได้ และ `Cell<T>` compile ออกมาแทบจะมีต้นทุนเท่ากับ `T` ข้างในตรง ๆ โดยไม่มีการบันทึกอะไรเลย
+
+```rust
+use std::cell::Cell;
+
+fn main() {
+    let c = Cell::new(5);
+    c.set(c.get() + 1);
+    println!("{}", c.get());
+}
+```
+
+```text
+6
+```
+
+ใช้ `Cell<T>` แทน `RefCell<T>` เมื่อค่าเป็น `Copy` type ขนาดเล็ก (counter, flag, index) และคุณแค่ต้องอ่านทั้งค่าหรือแทนที่ทั้งค่าเท่านั้น — มันถูกกว่าแน่นอนและ panic ไม่ได้
+
+## `Arc<T>`: `Rc<T>` สำหรับหลาย Thread
+
+`Arc<T>` ("atomically reference counted") เป็นฝาแฝดแบบ thread-safe ของ `Rc<T>`: API เหมือนกันทุกอย่าง แต่ counter ทั้ง strong/weak ใช้ atomic operation แทนการเพิ่มเลขธรรมดา ทำให้หลาย thread ถือและ drop `Arc` ที่ชี้ไปยังค่าเดียวกันได้โดยไม่เกิด data race บน counter เอง ความเป็น atomic นี้ไม่ฟรี — การเพิ่มค่าแบบ atomic มีต้นทุนมากกว่าแบบธรรมดา — ซึ่งเป็นเหตุผลว่าทำไม `Rc<T>` ถึงยังคงอยู่ในฐานะตัวเลือก single-thread ที่ถูกกว่า แทนที่ทุกคนจะใช้ `Arc<T>` ตลอด โมดูล Concurrency จะครอบคลุม `Arc<Mutex<T>>` และเพื่อน ๆ อย่างละเอียด บทนี้แค่ต้องการให้คุณรู้ว่า "เวอร์ชันหลายเจ้าของที่แชร์ข้าม thread ได้อย่างปลอดภัย" คือ `Arc<T>` ไม่ใช่ `Rc<T>` — คอมไพเลอร์บังคับเรื่องนี้ให้คุณเอง (`Rc<T>` ไม่ implement `Send` การพยายามย้ายมันเข้าไปใน thread ที่ spawn จึงเป็น compile error)
+
+## เลือก Interior Mutability ที่ใช่
+
+| Type | เจ้าของ | การ Mutate | การตรวจ | Thread-safe |
+|---|---|---|---|---|
+| `T` หลัง `&mut T` | หนึ่ง | compile-time exclusive borrow | compile time | ขึ้นกับ `T` |
+| `Cell<T>` | หนึ่ง (หรือแชร์ผ่าน `Rc`/`Arc`) | whole-value get/set, `T: Copy` | ไม่ต้องตรวจ | ไม่ |
+| `RefCell<T>` | หนึ่ง (หรือแชร์ผ่าน `Rc`/`Arc`) | `.borrow()` / `.borrow_mut()` | panic ตอน runtime ถ้าขัดแย้ง | ไม่ |
+| `Mutex<T>` / `RwLock<T>` | แชร์ผ่าน `Arc` | lock แล้วเข้าถึง | block/รอ ไม่ panic | ใช่ |
+
+อ่านตารางนี้จากบนลงล่างตามลำดับความสำคัญ: `&mut T` ธรรมดาก่อนเสมอ แล้วค่อยลงไปลึกกว่านั้นเมื่อรูปร่างของปัญหาต้องการ shared ownership จริง ๆ หรือคอมไพเลอร์พิสูจน์ pattern การเข้าถึงที่ปลอดภัยแบบ static ไม่ได้จริง ๆ
+
+## `Rc<RefCell<T>>`: Smell ไม่ใช่ทางเลือกแรก
+
+`Rc<RefCell<T>>` รวม shared ownership เข้ากับการ mutate ที่ตรวจตอน runtime และมันคือ combination ที่ AI assistant เอื้อมไปหยิบแทบจะเป็นปฏิกิริยาสะท้อนทุกครั้งที่ดีไซน์มี "หลายอย่างที่ต้องอ่านและเขียน state ที่แชร์กัน" — เพราะมัน compile ได้กับปัญหาเกือบทุกรูปร่าง นั่นก็คือปัญหาของมันด้วย: มัน compile ได้กับปัญหาเกือบทุกรูปร่าง รวมถึงหลายกรณีที่ดีไซน์ที่ถูกกว่ามากก็ใช้ได้เหมือนกัน การเห็นมันจึงควรกระตุ้นให้มองอีกครั้ง ไม่ใช่ยอมรับทันที
+
+ก่อนยอมรับ `Rc<RefCell<T>>` ให้เช็คว่าตัวเลือกเหล่านี้ตัวใดตัวหนึ่งเข้ากับปัญหาแทนได้ไหม:
+
+- **จัดโครงสร้าง ownership ใหม่** บ่อยครั้ง state ที่ "แชร์" มีเจ้าของธรรมชาติหนึ่งเดียว และที่เหลือแค่ต้อง borrow มันในช่วงเวลาที่เรียกใช้ — ส่ง `&T` / `&mut T` ลงไปผ่าน function call แทนการแจก handle ที่เป็นเจ้าของอิสระ
+- **Index เข้า arena** แทนที่ node จะถือ pointer `Rc<RefCell<Node>>` ชี้ไปหากันและกัน ให้เก็บทุก node ไว้ใน `Vec<Node>` เดียว แล้วให้ node อ้างถึงกันด้วย index แบบ `usize` วิธีนี้เลี่ยงกฎ aliasing ของ borrow checker ไปทั้งหมด (index ไม่ใช่ reference) แลกกับต้นทุนการ lookup ใน `Vec` และเป็น pattern มาตรฐานสำหรับ graph กับ tree ที่มี cross-link ใน Rust
+- **ส่ง `&mut` ผ่านไป ทีละผู้เรียก** ถ้าจริง ๆ แล้วมีโค้ดจุดเดียวเท่านั้นที่ mutate ค่าในแต่ละครั้ง `&mut T` ที่ร้อยผ่าน call chain บอกสิ่งนั้นใน type system ตรง ๆ ในขณะที่ `Rc<RefCell<T>>` บอกว่า "ใครก็ได้ เมื่อไหร่ก็ได้" แม้ว่าความจริงไม่เคยเป็นแบบนั้นเลย
+
+`Rc<RefCell<T>>` เป็นเครื่องมือที่ถูกต้องพอดีเมื่อ ownership แชร์กันจริง ๆ *และ* การ mutate ต้องเกิดผ่าน handle อิสระหลายตัวที่คุณให้เหตุผลเรื่อง lifetime แบบ static ไม่ได้ — GUI widget tree จริงที่มี callback ถือ reference ไปยัง shared state เป็นกรณีที่ชอบธรรม ปัญหาคือการเอื้อมไปหยิบมันเป็นค่าเริ่มต้น ก่อนที่จะเช็คว่าปัญหาต้องการมันจริง ๆ หรือเปล่า
+
+## Deref Coercion ผ่าน `Box`
+
+`Box<T>` implement `Deref<Target = T>` และ Rust ใช้ **deref coercion** ให้อัตโนมัติที่จุดเรียก: `&Box<T>` (หรือค่าที่ deref ไปเป็นแบบนั้น) จะถูกแปลงเป็น `&T` ให้อัตโนมัติ และคอมไพเลอร์จะไล่ coercion หลายชั้นต่อกันถ้าจำเป็น
+
+```rust
+fn greet(name: &str) {
+    println!("hello, {}", name);
+}
+
+fn main() {
+    let boxed = Box::new(String::from("ferris"));
+    greet(&boxed); // &Box<String> -> &String -> &str, two chained deref coercions
+}
+```
+
+```text
+hello, ferris
+```
+
+`&boxed` คือ `&Box<String>` คอมไพเลอร์ต้องการ `&str` สำหรับ `greet` มันจึงไล่ตาม `Deref` จาก `Box<String>` ไป `String` แล้วจาก `String` ไป `str` จบที่ `&str` — แก้ทั้งหมดตอน compile time ไม่มีต้นทุนตอน runtime นี่คือกลไกเดียวกัน (`Deref`/`DerefMut`) ที่ทำให้ guard `Ref`/`RefMut` ของ `Rc<T>` กับ `RefCell<T>` ถูกใช้เหมือนกับว่าคุณถือ `T` โดยตรง
+
+## `Cow`: ตัวอย่างสั้น ๆ
+
+`std::borrow::Cow<'a, T>` ("clone on write") เป็น enum ที่ถือได้ทั้ง `&'a T` แบบ borrow หรือ `T` แบบเป็นเจ้าของ และจะ clone ข้อมูลที่ borrow มาให้กลายเป็น copy ที่เป็นเจ้าของก็ต่อเมื่อโค้ดพยายาม mutate มันจริง ๆ เท่านั้น — มีประโยชน์กับ function ที่ปกติไม่ต้องแก้ input ของตัวเองแต่บางครั้งก็ต้องแก้ มันพึ่งพา trait `ToOwned`/`Borrow` จากโมดูล Traits & Generics บทนี้เลยแค่บอกว่ามันมีอยู่ ส่วนบท `AsRef`/`Borrow`/`Cow` ของโมดูลนั้นจะครอบคลุมมันอย่างเต็มที่
+
+## สรุป `Box<dyn Trait>`
+
+บท trait-objects ของโมดูล Traits & Generics ครอบคลุม `Box<dyn Trait>` ในฐานะ trait object แบบเป็นเจ้าของไปแล้ว — smart pointer ที่เป็นเจ้าของค่าที่ concrete type ถูกลบทิ้งไปอยู่หลัง vtable ควรพูดตรงนี้ให้ชัด: `Box<dyn Trait>` คือ `Box<T>` ที่ `T` บังเอิญเป็น trait object แทนที่จะเป็น concrete type ดังนั้นทุกอย่างที่บทนี้พูดถึงเรื่อง ownership และการ allocate heap ของ `Box<T>` จึงใช้กับมันเหมือนกันทุกประการ
+
+export const smartPointersCode = `use std::cell::RefCell;
+use std::rc::{Rc, Weak};
+
+struct Node {
+    name: String,
+    parent: RefCell<Weak<Node>>,
+    children: RefCell<Vec<Rc<Node>>>,
+}
+
+fn main() {
+    let leaf = Rc::new(Node {
+        name: "leaf".to_string(),
+        parent: RefCell::new(Weak::new()),
+        children: RefCell::new(vec![]),
+    });
+    println!("leaf strong = {}, weak = {}", Rc::strong_count(&leaf), Rc::weak_count(&leaf));
+
+    let branch = Rc::new(Node {
+        name: "branch".to_string(),
+        parent: RefCell::new(Weak::new()),
+        children: RefCell::new(vec![Rc::clone(&leaf)]),
+    });
+    *leaf.parent.borrow_mut() = Rc::downgrade(&branch);
+
+    println!("branch strong = {}, weak = {}", Rc::strong_count(&branch), Rc::weak_count(&branch));
+    println!("leaf strong = {}, weak = {}", Rc::strong_count(&leaf), Rc::weak_count(&leaf));
+    println!("leaf's parent is: {:?}", leaf.parent.borrow().upgrade().map(|p| p.name.clone()));
+}`;
+
+<Playground code={smartPointersCode} />
+
+<Callout title="Rc + Weak: strong reference บอกว่า 'เป็นเจ้าของ' Weak reference บอกว่า 'อ้างถึง'">
+`Rc` แบบ strong ทำให้ target ของมันมีชีวิตอยู่ ส่วน `Weak` ไม่เคยทำแบบนั้น ownership graph ที่มีวงจรอยู่ต้องมี edge อย่างน้อยหนึ่งเส้นเป็น `Weak` ไม่งั้นวงจรจะไม่มีวันมี strong count เป็นศูนย์
+</Callout>
+
+## Mental Model
+
+Smart pointer ทุกตัวในบทนี้ตอบคำถามเฉพาะเจาะจงหนึ่งข้อที่กฎ ownership/borrowing ธรรมดาจากสี่บทที่แล้วตอบไม่ได้: `Box<T>` ตอบว่า "ฉันจะเป็นเจ้าของค่าที่ขนาดไม่คงที่ตอน compile time ได้ยังไง" `Rc<T>`/`Arc<T>` ตอบว่า "ถ้ามีมากกว่าหนึ่งที่ต้องเป็นเจ้าของสิ่งนี้ล่ะ" และ `Cell<T>`/`RefCell<T>` ตอบว่า "ถ้าฉันต้อง mutate ผ่าน shared reference ล่ะ" ไม่มีตัวไหนเป็นการอัปเกรดทั่วไปเหนือ ownership ธรรมดา — แต่ละตัวเป็นเครื่องมือเฉพาะทางแคบ ๆ สำหรับช่องว่างเฉพาะอย่างหนึ่ง การเอื้อมไปหยิบตัวใดตัวหนึ่งทั้งที่ `&mut T` ธรรมดาก็ใช้ได้อยู่แล้วคือการเพิ่มต้นทุน (การ allocate, counter, การตรวจตอน runtime) โดยไม่ได้อะไรเพิ่ม
+
+## Trade-offs
+
+`Box<T>` มีต้นทุนคือการ allocate heap หนึ่งครั้งและ pointer indirection หนึ่งชั้น แลกกับ handle ขนาดคงที่สำหรับค่าที่ขนาดไม่มีขอบเขต `Rc<T>`/`Arc<T>` มีต้นทุนคือ counter (atomic สำหรับ `Arc`) ที่อัปเดตทุกครั้งที่ clone และ drop แลกกับ shared ownership โดยไม่ต้องตัดสินใจล่วงหน้าว่าใคร "เป็นเจ้าของจริง ๆ" — และมันเปิดโอกาสให้เกิด reference cycle ซึ่งเป็น leak จริงที่ type system จับไม่ได้ `RefCell<T>` มีต้นทุนคือการตรวจตอน runtime เล็ก ๆ ต่อ borrow และความเป็นไปได้ที่จะ panic แลกกับ pattern การ mutate ที่ borrow checker แบบ static พิสูจน์ไม่ได้; `Cell<T>` ตัดแม้แต่การตรวจนั้นออกไปด้วยการไม่ให้ reference ออกไปเลย แลกกับการที่ต้องการ `T: Copy` และรองรับแค่ get/set ทั้งค่า
+
+## Common Misconceptions
+
+- **"`Rc::clone` copy ข้อมูล"** มันแค่เพิ่ม counter แล้วคืน handle ใหม่ที่ชี้ไปยัง heap allocation *เดียวกัน* — ค่าข้างในไม่เคยถูก duplicate เลย นี่คือเหตุผลว่าทำไม `Rc<T>` ถึงเหมาะกับข้อมูลที่แชร์กันแบบอ่านเป็นหลัก หรือคู่กับ `RefCell`/`Cell` สำหรับส่วนที่ต้อง mutate
+- **"Memory leak แปลว่าโปรแกรมของฉันมีบั๊กที่คอมไพเลอร์ควรจับได้"** วงจร `Rc` คือ leak จริง ๆ และการรับประกันความปลอดภัยของหน่วยความจำของ Rust ไม่ได้รวมการไม่มี leak — มันรับประกันว่าไม่มี use-after-free ไม่มี double-free ไม่มี data race แต่วงจรของ strong reference ที่ leak ตลอดไปก็ยัง "ปลอดภัย" ตามนิยามนั้น แค่สิ้นเปลือง
+- **"`RefCell<T>` ปิดกฎของ borrow checker"** มันแค่ย้ายกฎเดียวกัน (shared XOR exclusive) ไป runtime ไม่ได้ลบทิ้ง โค้ดที่จะเป็น `E0502` ตอน compile time ถ้าใช้ reference ธรรมดา จะกลายเป็น panic ตอน runtime แทนถ้าใช้ `RefCell<T>` — แย่กว่าในแง่หนึ่ง (บั๊กต้อง execute จริงถึงจะจับได้) ดีกว่าในอีกแง่ (มันรับ pattern ที่ static checker พิสูจน์ไม่ได้)
+- **"`Rc<RefCell<T>>` ก็แค่วิธีทำ shared mutable state ใน Rust"** มันเป็น *วิธีหนึ่ง* ที่ใช้เมื่อ ownership แชร์กันจริง ๆ และไม่มีการจัดโครงสร้างที่ง่ายกว่าใช้ได้ — ไม่ใช่ค่าเริ่มต้น arena แบบ index หรือการจัดโครงสร้าง ownership ใหม่มักจะถูกกว่ามากและ panic ตอน runtime แบบ `RefCell` ไม่ได้
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างที่ต้องการให้ "หลายอย่างอ่านและเขียน counter หรือ list ที่แชร์กัน" มักเอื้อมไปหยิบ `Rc<RefCell<T>>` แทบจะเป็นปฏิกิริยาสะท้อน แล้วบางทีก็ซ้ำเติมด้วยการถือ `.borrow()` ไว้สำหรับ loop `for` แล้วเรียก `.borrow_mut()` บน cell เดียวกันจากข้างในลูปนั้น — ซึ่ง compile ผ่าน เพราะกฎของ `RefCell<T>` ถูกตรวจตอน runtime ไม่ใช่ compile time และจะ panic ในครั้งแรกที่มันรันจริงกับข้อมูลนั้น
+
+<SpotTheBug code={`use std::cell::RefCell;
+
+struct Counter {
+    values: RefCell<Vec<i32>>,
+}
+
+impl Counter {
+    fn double_all(&self) {
+        for v in self.values.borrow().iter() {
+            if *v > 0 {
+                self.values.borrow_mut().push(*v); // still inside the .borrow() from the for loop
+            }
+        }
+    }
+}
+
+fn main() {
+    let c = Counter { values: RefCell::new(vec![1, 2, 3]) };
+    c.double_all();
+    println!("{:?}", c.values.borrow());
+}
+`}>
+โค้ดนี้ compile ผ่านสะอาดและ panic ทันทีที่มันรัน: `thread 'main' (<id>) panicked at src/main.rs:11:29: RefCell already borrowed` `for v in self.values.borrow().iter()` ถือ shared borrow ที่มีชีวิตอยู่ตลอด loop body — ตัว temporary จาก `.borrow()` ไม่ถูก drop จนกว่า loop จะจบ — และ `self.values.borrow_mut()` ข้างในลูปนั้นคือ borrow ตัวที่สองที่ขัดแย้งกัน ขณะที่ตัวแรกยังมีชีวิตอยู่ `RefCell<T>` จับสิ่งนี้ตอน compile time แบบที่ reference ธรรมดา `&`/`&mut` ทำได้ไม่ได้ (`error[E0502]`) มันทำได้แค่ panic เมื่อ borrow ที่ขัดแย้งเกิดขึ้นจริง ทางแก้มีรูปร่างเดียวกับทางแก้ iterator-invalidation แบบ reference ธรรมดาจากบทที่แล้ว: เก็บสิ่งที่ต้อง push ไว้ใน `Vec` แยกต่างหากก่อน แล้ว extend หลังจาก loop จบและ borrow แบบอ่านอย่างเดียวหายไปแล้ว — หรือ clone list ของค่าที่จะ iterate ก่อนเริ่ม loop
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`Box`, `Rc`/`Arc` และ `Cell`/`RefCell` แต่ละตัวตอบคำถามเฉพาะหนึ่งข้อที่ ownership ธรรมดาตอบไม่ได้ — heap-allocate ค่าที่ขนาดไม่คงที่, แชร์ ownership หรือ mutate ผ่าน shared reference — และการรวมพวกมันเข้าด้วยกัน (`Rc<RefCell<T>>`) เป็นเครื่องมือสำหรับตอนที่ปัญหาต้องการทั้งหมดนั้นจริง ๆ ไม่ใช่ค่าเริ่มต้น
+</Callout>
+
+export const quizSmartPointers = [
+    {
+        q: "ทำไมโค้ดนี้ compile ไม่ผ่าน?\n```rust\nenum List {\n    Cons(i32, List),\n    Nil,\n}\n```",
+        options: [
+            "Enum เก็บ field แบบ i32 ไม่ได้",
+            "List มีขนาดไม่รู้จบ — มันมีตัวมันเองซ้ำโดยไม่มี indirection มาทำให้มีขนาดคงที่ (error[E0072])",
+            "Cons กับ Nil ต้องประกาศเป็น struct แยกกัน",
+            "Rust enum เป็น recursive ไม่ได้ไม่ว่ากรณีใด"
+        ],
+        answer: 1,
+        explain: "การคำนวณขนาดของ List ต้องแก้สมการ \"ขนาดของ List = ขนาดของ List + ขนาดของ i32\" — วนไม่รู้จบ Box<List> แก้ปัญหานี้: Box มีความกว้างเท่ากับ pointer หนึ่งตัวเสมอไม่ว่าจะชี้ไปที่อะไร"
+    },
+    {
+        q: "Rc::clone(&a) ทำอะไรจริง ๆ?",
+        options: [
+            "Deep-copy ค่าที่ a ชี้ไปและคืน Rc ใหม่ที่เป็นอิสระ",
+            "เพิ่ม a ไปยังตำแหน่งหน่วยความจำใหม่โดยใช้ Copy",
+            "เพิ่ม reference counter แล้วคืน handle ใหม่ที่ชี้ไปยัง heap allocation เดียวกัน",
+            "ย้าย ownership ของ a ไปยัง handle ใหม่ ทำให้ a ใช้ไม่ได้อีก"
+        ],
+        answer: 2,
+        explain: "Rc::clone ไม่เคย duplicate ข้อมูลข้างใน — มันเพิ่ม strong count แล้วคืน Rc<T> ตัวใหม่ที่ชี้ไปยัง heap value ตัวเดิมเป๊ะ ๆ"
+    },
+    {
+        q: "สอง node ถือ Rc ชี้ไปหากันและกัน และไม่มีอะไรอื่นอ้างถึง node ทั้งสองเลย จะเกิดอะไรขึ้นเมื่อตัวแปร local ทั้งสองออกจาก scope?",
+        options: [
+            "Rust ตรวจจับวงจรตอน compile time และปฏิเสธไม่ compile โปรแกรม",
+            "Node ทั้งสองถูก drop ตามปกติ — Rc ตรวจจับวงจรตอน runtime เสมอ",
+            "Drop ของ node ทั้งสองไม่เคยถูกเรียกเลย — แต่ละตัวยังถือ strong reference จากอีกตัวอยู่ ดังนั้น strong count จึงไม่มีวันถึงศูนย์ นี่คือ memory leak จริง แต่ยัง memory-safe",
+            "โปรแกรม panic ด้วย stack overflow"
+        ],
+        answer: 2,
+        explain: "การนับของ Rc ติดตามแค่ว่ามี handle Rc กี่ตัว ไม่ได้ติดตาม reachability โดยรวม วงจร strong reference ไม่มีวันถึง count ศูนย์และรั่ว — แบบปลอดภัย เพราะไม่มี use-after-free หรือ double-free เกิดขึ้น แค่เสียหน่วยความจำไปเปล่า ๆ"
+    },
+    {
+        q: "โปรแกรมนี้ panic ด้วยข้อความอะไร?\n```rust\nuse std::cell::RefCell;\nfn main() {\n    let cell = RefCell::new(5);\n    let _b1 = cell.borrow_mut();\n    let _b2 = cell.borrow_mut();\n    println!(\"{} {}\", _b1, _b2);\n}\n```",
+        options: [
+            "ไม่ panic — RefCell อนุญาตให้เรียก borrow_mut พร้อมกันหลายครั้งได้",
+            "compile error, error[E0502], เหมือนกับ reference ธรรมดา",
+            "runtime panic: \"RefCell already borrowed\"",
+            "runtime panic: \"index out of bounds\""
+        ],
+        answer: 2,
+        explain: "RefCell<T> บังคับใช้กฎ shared-XOR-exclusive ตอน runtime แทนที่จะเป็น compile time borrow_mut() ตัวที่สองที่ยังมีชีวิตอยู่ขณะที่ตัวแรกยังอยู่จะ panic ด้วย \"RefCell already borrowed\" แทนที่จะ compile ไม่ผ่าน"
+    },
+    {
+        q: "ทำไม Weak<T> ถึงมีอยู่ และมันแก้ Rc reference cycle ได้ยังไง?",
+        options: [
+            "Weak<T> เร็วกว่า Rc<T> ในทุกกรณีและควรใช้แทนเสมอ",
+            "Weak<T> เป็น reference แบบไม่เป็นเจ้าของที่ไม่เพิ่ม strong count ดังนั้น back-reference ที่เก็บเป็น Weak (เช่น child ชี้ไป parent) จะไม่ยึด target ไว้ไม่ให้ตาย ทำให้ strong count ถึงศูนย์ได้",
+            "Weak<T> ตัดวงจรใด ๆ ที่มันตรวจพบตอน runtime โดยอัตโนมัติ",
+            "Weak<T> ใช้ได้แค่ข้าม thread เท่านั้น เหมือน Arc<T>"
+        ],
+        answer: 1,
+        explain: "Weak<T> เพิ่มแค่ weak count แยกต่างหาก ไม่ใช่ strong count ที่ Drop รออยู่ การจัดโครงสร้าง ownership ให้ไหลไปทางเดียว (strong ลง, Weak ขึ้น) ทำให้ไม่มีวันเกิดวงจร"
+    },
+    {
+        q: "ควรใช้ Cell<T> แทน RefCell<T> เมื่อไหร่?",
+        options: [
+            "ไม่ควรเลย — RefCell<T> ทำได้มากกว่าเสมอและควรใช้แทน",
+            "เมื่อ T เป็น Copy type ขนาดเล็กและคุณแค่ต้องการ get/set ทั้งค่า — Cell<T> ไม่เคยแจก reference ออกไป จึง panic ไม่ได้และไม่ต้องตรวจตอน runtime",
+            "เมื่อต้องแชร์ค่าข้าม thread",
+            "เมื่อ T ไม่ implement Copy"
+        ],
+        answer: 1,
+        explain: "Cell<T> รองรับแค่ .get() (คืน copy) กับ .set() (เขียนทับ) เพราะมันไม่เคยแจก reference เข้าไปในข้อมูลข้างใน จึงไม่มีอะไรต้องตรวจตอน runtime และไม่มีวัน panic ต่างจาก RefCell<T>"
+    },
+    {
+        q: "AI assistant เสนอ Rc<RefCell<T>> สำหรับ field ของ struct ที่ถูก mutate โดยเจ้าของเดียวเท่านั้นที่ส่งมันลงไปผ่าน function call ตัวเลือกที่ดีกว่าคืออะไร?",
+        options: [
+            "ใช้ Arc<Mutex<T>> แทน เพราะแข็งแรงกว่า",
+            "ใช้ Rc<RefCell<T>> ต่อไป — มัน compile ผ่านเสมอ จึงเป็นค่าเริ่มต้นที่ปลอดภัยเสมอ",
+            "&mut T ธรรมดาที่ร้อยผ่าน call chain — ถ้า ownership ไม่เคยแชร์กันจริง ๆ การตรวจ borrow ตอน runtime และการนับ reference ของ Rc<RefCell<T>> ก็แค่จ่ายเงินให้ความสามารถที่โค้ดไม่ได้ใช้",
+            "ใช้ Cell<T> แทน ไม่ว่า T จะเป็น Copy หรือไม่"
+        ],
+        answer: 2,
+        explain: "Rc<RefCell<T>> compile ได้กับรูปร่างของ shared-mutable-state เกือบทุกแบบ ซึ่งเป็นเหตุผลว่าทำไมมันถึงถูกใช้เกินความจำเป็น เมื่อ ownership เป็นของคนเดียวจริง ๆ และแค่ถูกส่งลงไปผ่าน call &mut T แสดงสิ่งนั้นตรง ๆ โดยไม่มีการ allocate ไม่มี counter และไม่มีความเสี่ยง panic"
+    }
+];
+
+<Quiz client:visible id="ownership-borrowing/smart-pointers" questions={quizSmartPointers} />
+
+<ProgressTracker client:visible id="ownership-borrowing/smart-pointers" />

@@ -1,0 +1,486 @@
+---
+title: 'The Async Runtime Model'
+description: '`async fn` compile ออกมาเป็นอะไรจริง ๆ: trait Future, poll, Pin, Waker, executor แบบ std-only ~40 บรรทัดที่รันได้จริง, future ที่เป็น Send และทำไม cancellation ก็แค่ Drop'
+sidebar:
+  order: 6
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+บทแนะนำ `async`/`.await` ของโมดูล Concurrency ครอบคลุมวิธีเขียนโค้ด async ไปแล้ว บทนี้ครอบคลุมสิ่งที่มีอยู่จริงเมื่อคุณ compile มัน: state machine, trait ที่มี method เดียว และ runtime ที่คุณต้องจัดหาเอง — Rust ให้ language feature มา ไม่ให้ executor มาด้วย
+
+## `async fn` Compile เป็น State Machine
+
+การเรียก `async fn` ไม่ได้รัน body ของมัน มันคืนค่าทันที — state machine ที่คอมไพเลอร์ generate ให้ ที่ implement trait `Future` — และไม่มีโค้ดของ function ไหนรันเลยจนกว่าจะมีอะไรบางอย่างมาขับเคลื่อน state machine นั้นไปข้างหน้าจริง ๆ
+
+<Mermaid code={`stateDiagram-v2
+    [*] --> Start
+    Start --> AfterFirstAwait: poll -- runs body up to first .await
+    AfterFirstAwait --> AfterSecondAwait: poll again -- inner future ready, runs to next .await
+    AfterSecondAwait --> Done: poll again -- inner future ready, runs to the end
+    Done --> [*]`} title="แต่ละจุด .await กลายเป็นขอบเขต state ที่คอมไพเลอร์ generate ให้คุณ" />
+
+`.await` แต่ละตัวใน body ของ function กลายเป็นขอบเขตระหว่าง state: คอมไพเลอร์ generate enum ที่ไม่มีชื่อหนึ่ง variant ต่อจุด suspend หนึ่งจุด เก็บทุกอย่างที่ local variable ยังต้องการหลังจากจุดนั้นไว้เป๊ะ นี่คือเหตุผลว่าทำไม `async fn` ที่มี `.await` สามตัว compile ออกมาเป็นสิ่งที่คล้ายกับ state machine ที่เขียนมือที่มีสาม-กว่า state ในเชิงแนวคิด และทำไมขนาดของ future ที่ generate ออกมาถึงโตขึ้นได้ตามปริมาณที่ต้องเก็บไว้ให้มีชีวิตอยู่ข้าม suspension แต่ละครั้ง
+
+## Trait `Future` และ `poll`
+
+ทุกอย่างข้างบนถูกขับเคลื่อนโดย trait เดียวที่มี method เดียว:
+
+```text
+trait Future {
+    type Output;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>;
+}
+```
+
+`poll` ทำสองอย่างนี้อย่างใดอย่างหนึ่งเป๊ะ: return `Poll::Ready(value)` ถ้า future จบแล้ว หรือ return `Poll::Pending` ถ้ายังไม่จบ — ซึ่งในกรณีนั้นมันยังต้องรับผิดชอบจัดการให้ตัวเองถูก poll อีกครั้งในภายหลังด้วย (ผ่าน `Waker` ข้างใน `Context` ที่จะครอบคลุมด้านล่าง) ไม่มีอะไรรันเองเลย future ที่ไม่เคยถูก poll จะไม่มีความคืบหน้าเลย ไม่ว่าเวลาจะผ่านไปแค่ไหนก็ตาม
+
+## `Pin`: ทำไมมันถึงมีอยู่
+
+State machine ที่ `async fn` generate ให้อาจเป็น **self-referential** ได้: local variable ที่สร้างก่อน `.await` และ reference ไปยัง local variable ตัวเดียวกันนั้น ทั้งคู่ต้องอยู่ข้างใน struct ที่ generate เดียวกัน ข้าม suspension นั้น ค่า Rust ธรรมดา move ได้อย่างอิสระ (byte ของมันถูก copy ไปที่อื่น) — แต่การ move struct แบบ self-referential จะทิ้ง reference ข้างในไว้ให้ชี้ไปที่ตำแหน่งหน่วยความจำ *เดิม* ที่อาจถูกใช้ซ้ำสำหรับอย่างอื่นไปแล้ว `Pin<P>` คือ wrapper รอบ pointer ที่เพิ่มการรับประกันเพียงหนึ่งข้อ: สิ่งที่ pointer ชี้ไปจะไม่ถูก move ตราบใดที่มัน pin อยู่ (สำหรับ type ที่ไม่ implement `Unpin` ซึ่ง future ที่ generate แบบ self-referential ส่วนใหญ่ไม่ implement) นี่คือเหตุผลตรง ๆ ว่าทำไม `poll` ถึงรับ `self: Pin<&mut Self>` แทนที่จะเป็น `&mut self` ธรรมดา — มันคือวิธีที่ type system บอกว่า "คุณเรียกสิ่งนี้ได้ก็ต่อเมื่อคุณสัญญาว่าจะไม่ move ค่าออกจากใต้มันเท่านั้น"
+
+## `Waker`: Future ถูก Poll อีกครั้งได้ยังไง
+
+เมื่อ `poll` return `Poll::Pending` มันต้องทำให้ตัวเองถูก poll อีกครั้งไม่ทางใดก็ทางหนึ่งเมื่อสิ่งที่มันรออยู่พร้อมจริง ๆ — ไม่งั้น executor ต้องเดาว่าจะลองใหม่เมื่อไหร่ `Context` (argument ตัวที่สองของ `poll`) พก `Waker`: handle ที่ future clone ได้ เก็บไว้ที่ไหนสักที่ (channel, ตาราง registration ของ I/O reactor) แล้วเรียก `.wake()` เมื่อ event ข้างใต้เกิดขึ้นจริง การเรียก `.wake()` ไม่ได้รันโค้ดของ future โดยตรงเลย — มันบอก *executor* ว่า "task นี้พร้อมถูก poll อีกครั้งแล้ว" และ executor คือคนที่เรียก `poll` ครั้งถัดไปจริง ๆ
+
+## Executor ที่รันได้จริง: `block_on` ใน `std` ~40 บรรทัด
+
+Standard library ของ Rust นิยาม `Future`, `Poll`, `Context` และ `Waker` — แต่ตั้งใจไม่ให้ executor มาด้วยเลย นี่คือตัวเล็ก ๆ ที่เป็น `std` ทั้งหมด ที่ขับเคลื่อน future หนึ่งตัวจนจบได้:
+
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+// A minimal, std-only executor: no crates, just enough to drive one Future to completion.
+
+static VTABLE: RawWakerVTable = RawWakerVTable::new(clone_raw, no_op, no_op, no_op);
+
+fn clone_raw(_: *const ()) -> RawWaker {
+    RawWaker::new(std::ptr::null(), &VTABLE)
+}
+fn no_op(_: *const ()) {}
+
+fn noop_waker() -> Waker {
+    let raw = RawWaker::new(std::ptr::null(), &VTABLE);
+    unsafe { Waker::from_raw(raw) }
+}
+
+fn block_on<F: Future>(fut: F) -> F::Output {
+    let waker = noop_waker();
+    let mut cx = Context::from_waker(&waker);
+    let mut fut = Box::pin(fut);
+    loop {
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => continue, // busy-poll: fine for a teaching example, never for real code
+        }
+    }
+}
+
+struct YieldOnce {
+    yielded: bool,
+}
+
+impl Future for YieldOnce {
+    type Output = &'static str;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.yielded {
+            Poll::Ready("done")
+        } else {
+            println!("poll #1: not ready yet, returning Pending");
+            self.yielded = true;
+            cx.waker().wake_by_ref(); // tell the executor to poll again
+            Poll::Pending
+        }
+    }
+}
+
+async fn demo() -> &'static str {
+    println!("demo started");
+    let value = YieldOnce { yielded: false }.await;
+    println!("demo resumed after .await");
+    value
+}
+
+fn main() {
+    let result = block_on(demo());
+    println!("result = {}", result);
+}
+```
+
+```text
+demo started
+poll #1: not ready yet, returning Pending
+demo resumed after .await
+result = done
+```
+
+`RawWaker`/`RawWakerVTable` เป็น building block แบบ unsafe ที่ `Waker` ถูกสร้างขึ้นมาจาก — executor จริง (Tokio, async-std) ใช้มันสร้าง `Waker` ที่ re-schedule task บน work queue จริง ๆ; waker ของตัวนี้ไม่ทำอะไรเลย ซึ่งเป็นเหตุผลว่าทำไม `block_on` ต้อง busy-loop เรียก `poll` ซ้ำ ๆ จนกว่า future จะ return `Ready` ในที่สุด `YieldOnce` เป็น future ที่เขียนมือที่ return `Pending` เป๊ะ ๆ ครั้งเดียว (print เพื่อพิสูจน์) แล้ว `Ready` ตอน poll ครั้งถัดไป — ทุกอย่างที่ state machine ที่ `async fn` generate ทำอัตโนมัติ ทำด้วยมือตรงนี้เพื่อให้กลไกมองเห็นได้ นี่คือ executor เพื่อการสอน ไม่ใช่ของจริง: executor จริงให้ thread หลับจนกว่า `Waker` จะทำงานจริง แทนที่จะหมุนวนตลอด
+
+## สิ่งที่ Compiler บอก: Future ที่ Send ไม่ได้
+
+Multi-threaded executor (รวมถึง runtime default ของ Tokio) ต้องการย้าย future ของ task ระหว่าง worker thread ได้อย่างอิสระ ซึ่งแปลว่าตัว future เองต้อง implement `Send` future ที่ capture type ที่ไม่ใช่ `Send` ไว้ข้าม `.await` ไม่ผ่านข้อกำหนดนั้น — และนี่คือ diagnostic จริงที่ตรวจสอบแล้ว ไม่มี error code เลยด้วยซ้ำ ที่ผลิตโดย `rustc` ธรรมดา ไม่มี async runtime crate เข้ามาเกี่ยวข้องเลย:
+
+```rust
+// @expect-error nocode
+use std::rc::Rc;
+
+async fn uses_rc() {
+    let val = Rc::new(5);
+    some_async_fn().await;
+    println!("{}", val);
+}
+
+async fn some_async_fn() {}
+
+fn assert_send<T: Send>(_t: T) {}
+
+fn main() {
+    assert_send(uses_rc());
+}
+```
+
+```text
+error: future cannot be sent between threads safely
+  --> src/main.rs:14:17
+   |
+14 |     assert_send(uses_rc());
+   |                 ^^^^^^^^^ future returned by `uses_rc` is not `Send`
+   |
+   = help: within `impl Future<Output = ()>`, the trait `Send` is not implemented for `Rc<i32>`
+note: future is not `Send` as this value is used across an await
+  --> src/main.rs:5:21
+   |
+ 4 |     let val = Rc::new(5);
+   |         --- has type `Rc<i32>` which is not `Send`
+ 5 |     some_async_fn().await;
+   |                     ^^^^^ await occurs here, with `val` maybe used later
+note: required by a bound in `assert_send`
+  --> src/main.rs:11:19
+   |
+11 | fn assert_send<T: Send>(_t: T) {}
+   |                   ^^^^ required by this bound in `assert_send`
+
+error: aborting due to 1 previous error
+```
+
+คำอธิบายของคอมไพเลอร์เองระบุกลไกที่แน่นอนจากก่อนหน้าในบทนี้: `val` เป็น local ที่มีชีวิตอยู่ *ข้าม* `.await` ซึ่งแปลว่ามันเป็นส่วนหนึ่งของ field ที่เก็บไว้ใน state machine ที่ generate ขึ้นมา ซึ่งแปลว่าความเป็น `Send` ของ future ทั้งตัวที่ generate ขึ้นมาขึ้นกับว่าทุก field ที่เก็บไว้เป็น `Send` หรือไม่ — local ที่ไม่ใช่ `Send` แค่ตัวเดียวที่ถูกเก็บไว้ข้าม suspension point ก็เพียงพอที่จะทำให้ future ทั้งตัวไม่ใช่ `Send` แม้ว่าส่วนที่เหลือของ function จะไม่แตะ thread อื่นเลยโดยตรงก็ตาม นี่คือฝาแฝดฝั่ง async ของตัวอย่าง `Rc` `E0277` ของโมดูล Concurrency — กฎข้างใต้เดียวกัน (`Rc<T>` ไม่ใช่ `Send`) แต่ปรากฏผ่าน state machine ที่ generate ขึ้นมาแทนที่จะผ่าน `thread::spawn` ที่ชัดเจน
+
+## การถือ `std::sync::MutexGuard` ข้าม `.await` ผิดในระดับ Model
+
+กลไกเดียวกันนี้ผลิต diagnostic จริงในโลกจริงที่พบบ่อยมากตัวที่สองออกมา และควรมองมันว่าเป็นมากกว่า "แค่ error `Send` อีกตัว" — มันคือ async model ที่อธิบายตรง ๆ ว่าทำไม pattern เฉพาะนี้ถึงเป็นความผิดพลาด ไม่ใช่แค่เรื่องทางเทคนิคของ type-checker:
+
+```rust
+// @expect-error nocode
+use std::sync::Mutex;
+
+async fn holds_lock_across_await(m: &Mutex<i32>) {
+    let mut guard = m.lock().unwrap();
+    *guard += 1;
+    some_async_fn().await; // the lock is still held here, across a suspension point
+}
+
+async fn some_async_fn() {}
+
+fn assert_send<T: Send>(_t: T) {}
+
+fn main() {
+    let m = Mutex::new(0);
+    assert_send(holds_lock_across_await(&m));
+}
+```
+
+```text
+error: future cannot be sent between threads safely
+  --> src/main.rs:15:17
+   |
+15 |     assert_send(holds_lock_across_await(&m));
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^ future returned by `holds_lock_across_await` is not `Send`
+   |
+   = help: within `impl Future<Output = ()>`, the trait `Send` is not implemented for `std::sync::MutexGuard<'_, i32>`
+note: future is not `Send` as this value is used across an await
+  --> src/main.rs:6:21
+   |
+ 4 |     let mut guard = m.lock().unwrap();
+   |         --------- has type `std::sync::MutexGuard<'_, i32>` which is not `Send`
+ 5 |     *guard += 1;
+ 6 |     some_async_fn().await; // the lock is still held here, across a suspension point
+   |                     ^^^^^ await occurs here, with `mut guard` maybe used later
+note: required by a bound in `assert_send`
+  --> src/main.rs:11:19
+   |
+11 | fn assert_send<T: Send>(_t: T) {}
+   |                   ^^^^ required by this bound in `assert_send`
+
+error: aborting due to 1 previous error
+```
+
+`std::sync::MutexGuard` ตั้งใจไม่ให้เป็น `Send` (การ unlock ต้องเกิดบน thread ที่ lock มันบางแพลตฟอร์ม) ดังนั้นมันถูกจับตรงนี้เป็น compile error — แต่ปัญหาที่ลึกกว่านั้นมีอยู่จริงแม้ในโค้ดที่หลีกเลี่ยงกฎ `Send` ไปได้ด้วยวิธีใดวิธีหนึ่ง: การ `.await` ในขณะที่ถือ lock อยู่แปลว่า lock ถูกถือไว้นานเท่ากับที่ future ที่ await นั้นใช้เวลาพร้อม บน executor ที่เกือบทุกครั้งแชร์ thread นั้นกับ task อื่นที่ไม่เกี่ยวข้องกัน ถ้างานที่ pending อยู่ช้า ทุก task อื่นที่รอ `Mutex` เดียวกัน — และบน executor แบบ single-threaded อาจรวมถึงทุก task ที่ถูก schedule บน thread นั้นทั้งหมด — จะติดค้างรอตลอดระยะเวลานั้น ทางแก้มีรูปร่างเดียวกันเสมอ: ทำงาน synchronous ที่ต้อง lock ก่อน แล้ว drop guard อย่างชัดเจน *จากนั้นค่อย* `.await`; ถ้า async operation เองต้องการข้อมูลที่ถูก protect ให้จัดโครงสร้างใหม่เพื่อให้ lock ถูกถือไว้แค่ช่วงอ่าน/เขียนแบบ synchronous สั้น ๆ เท่านั้น ไม่เคยข้าม suspension เลย
+
+## Cancellation ก็แค่ `Drop`
+
+Async runtime ไม่มี operation พิเศษ "cancel task นี้" ที่แยกจาก semantics ธรรมดาของ Rust เลย — การ cancel future คือการ drop มันเป๊ะ ๆ และทุกอย่างที่บท Drop & RAII ครอบคลุมยังใช้ได้ไม่เปลี่ยนแปลง: field ของ future ที่ถูก drop ถูก drop ตามลำดับ ตรงจุดที่ drop เกิดขึ้นเป๊ะ และโค้ดใด ๆ *หลัง* จุดที่มันถูก suspend ไม่เคยรันเลย
+
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+static VTABLE: RawWakerVTable = RawWakerVTable::new(clone_raw, no_op, no_op, no_op);
+fn clone_raw(_: *const ()) -> RawWaker {
+    RawWaker::new(std::ptr::null(), &VTABLE)
+}
+fn no_op(_: *const ()) {}
+fn noop_waker() -> Waker {
+    unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+}
+
+struct NoisyGuard(&'static str);
+impl Drop for NoisyGuard {
+    fn drop(&mut self) {
+        println!("dropping {}", self.0);
+    }
+}
+
+struct PendingForever;
+impl Future for PendingForever {
+    type Output = ();
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
+        Poll::Pending // never completes
+    }
+}
+
+async fn task() {
+    let _guard = NoisyGuard("task");
+    println!("task started, about to await forever");
+    PendingForever.await;
+    println!("this line never runs");
+}
+
+fn main() {
+    let waker = noop_waker();
+    let mut cx = Context::from_waker(&waker);
+    let mut fut = Box::pin(task());
+
+    match fut.as_mut().poll(&mut cx) {
+        Poll::Pending => println!("polled once: still pending (as expected)"),
+        Poll::Ready(()) => println!("unexpectedly ready"),
+    }
+
+    println!("dropping the future now -- this is what cancellation looks like");
+    drop(fut); // cancellation: drop the future without ever polling it to completion
+    println!("end of main");
+}
+```
+
+```text
+task started, about to await forever
+polled once: still pending (as expected)
+dropping the future now -- this is what cancellation looks like
+dropping task
+end of main
+```
+
+`"this line never runs"` ไม่ถูก print เลย — ทันทีที่ future ของ `task()` ถูก drop ขณะ suspend อยู่ข้างใน `PendingForever.await` การรัน body ของ function นั้นก็หยุดตรงจุดนั้นเป๊ะ ถาวร `Drop` ของ `_guard` ยังรันอยู่ (RAII cleanup ไม่ได้รับผลกระทบจาก *วิธี* ที่ scope จบ ตามที่บท Drop & RAII ครอบคลุมไว้เป๊ะ) แต่ไม่มีอะไรหลังจุด suspension เคยรันเลย นี่คือเหตุผลว่าทำไม cancellation-safety ถึงเป็นข้อกังวลด้าน design จริงสำหรับโค้ด async: future ที่ถูก drop กลางทาง สมมติว่าอยู่กลาง database transaction หลายขั้นตอน ทิ้ง state บางส่วนที่มีอยู่ ณ `.await` ล่าสุดไว้ — ไม่มี rollback อัตโนมัติเลยนอกจากสิ่งที่ `Drop` impl แต่ละตัวบังเอิญทำ
+
+## `thread::sleep` ในโค้ด Async และ `spawn_blocking`
+
+`std::thread::sleep` block OS thread ปัจจุบันทั้งหมด — การเรียกมันข้างใน `async fn` block executor thread ที่บังเอิญกำลังรัน task นั้นอยู่ ทำให้ task อื่นทุกตัวที่ถูก schedule บน thread เดียวกันแช่แข็งไปตลอดระยะเวลาที่ sleep เหมือนกับปัญหา `MutexGuard` ข้างบนเป๊ะ แต่เป็นงานที่ใช้ CPU/block แทนที่จะเป็น lock `tokio::time::sleep(...).await` ในทางกลับกัน เป็น future จริง: มัน return `Pending` และปล่อยให้ executor รันงานอื่นระหว่างรอ resume ก็ต่อเมื่อ timer ทำงานจริงเท่านั้น เวอร์ชันทั่วไปของปัญหานี้ — งาน synchronous ที่รันนานและไม่ yield ใด ๆ ข้างใน async task — คือสิ่งที่ `spawn_blocking` มีไว้เพื่อแก้: มันส่งงานที่ block ไปให้ thread pool แยกต่างหากที่มีไว้เพื่อสิ่งนี้โดยเฉพาะ เพื่อให้ thread ของ async executor เองยังว่างพอที่จะให้บริการ task อื่นต่อไป การครอบคลุมเรื่อง `thread::scope` และ concurrency แบบ thread-based ของโมดูล Concurrency คือที่ที่เหมาะสมในการทบทวนความต่างระหว่าง "การ block thread ปัจจุบัน" กับ "การคืนการควบคุมให้ scheduler" อย่างเต็มรูปแบบ
+
+export const asyncRuntimeCode = `use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+static VTABLE: RawWakerVTable = RawWakerVTable::new(clone_raw, no_op, no_op, no_op);
+
+fn clone_raw(_: *const ()) -> RawWaker {
+    RawWaker::new(std::ptr::null(), &VTABLE)
+}
+fn no_op(_: *const ()) {}
+
+fn noop_waker() -> Waker {
+    let raw = RawWaker::new(std::ptr::null(), &VTABLE);
+    unsafe { Waker::from_raw(raw) }
+}
+
+fn block_on<F: Future>(fut: F) -> F::Output {
+    let waker = noop_waker();
+    let mut cx = Context::from_waker(&waker);
+    let mut fut = Box::pin(fut);
+    loop {
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => continue, // busy-poll: fine for a teaching example, never for real code
+        }
+    }
+}
+
+struct YieldOnce {
+    yielded: bool,
+}
+
+impl Future for YieldOnce {
+    type Output = &'static str;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.yielded {
+            Poll::Ready("done")
+        } else {
+            println!("poll #1: not ready yet, returning Pending");
+            self.yielded = true;
+            cx.waker().wake_by_ref(); // tell the executor to poll again
+            Poll::Pending
+        }
+    }
+}
+
+async fn demo() -> &'static str {
+    println!("demo started");
+    let value = YieldOnce { yielded: false }.await;
+    println!("demo resumed after .await");
+    value
+}
+
+fn main() {
+    let result = block_on(demo());
+    println!("result = {}", result);
+}`;
+
+<Playground code={asyncRuntimeCode} />
+
+<Callout title="Rust ให้ state machine มา คุณ (หรือ crate) ต้องหา scheduler เอง">
+async fn/.await, Future, Pin และ Waker คือทั้งหมดที่ language กับ std ให้มา -- การเปลี่ยน "ยังไม่พร้อม" ให้กลายเป็น "รันอย่างอื่นจริง ๆ ระหว่างรอ" เป็นงานของ executor ทั้งหมด ซึ่งเป็นเหตุผลตรง ๆ ว่าทำไมโค้ด async ถึงไม่ทำอะไรเลยจนกว่าจะมีอะไรบางอย่าง (block_on, tokio::main, loop ที่เขียนมือแบบบทนี้) เรียก poll จริง ๆ
+</Callout>
+
+## Mental Model
+
+ลองนึกภาพ `async fn` เป็นการ์ดสูตรอาหารที่ถูกตัดเป็นขั้นตอนมีเลขกำกับที่ `.await` ทุกจุด พร้อม sticky note ที่ระบุว่าวัตถุดิบไหนต้องยังอยู่บนเคาน์เตอร์เพื่อ resume ที่แต่ละขั้นตอน — การ์ดพร้อม note นั้น *คือ* `Future` ที่คอมไพเลอร์ generate ให้ ครัวทำแค่อย่างเดียวในแต่ละครั้ง: หยิบการ์ดขึ้นมา อ่านจาก sticky note ของขั้นตอนปัจจุบัน ทำจนถึง `.await` ถัดไปหรือจนจบ แล้วหยุด (`Ready`) หรือวางการ์ดลงแล้วติด reminder (`Waker`) ไว้ที่ timer ที่กำลังบล็อกมันอยู่ (`Pending`) ไม่มีอะไรบนเคาน์เตอร์ทำตัวเองระหว่างที่การ์ดถูกวางลง — executor ก็แค่ process อะไรก็ตามที่ตัดสินใจว่าจะหยิบการ์ดไหนขึ้นมาต่อไป และ standard library ของ Rust ตั้งใจไม่ให้มันมาด้วย
+
+## Trade-offs
+
+การ compile `async` ให้เหลือแค่ trait ธรรมดาบวก state machine (แทนที่จะฝัง runtime เฉพาะเจาะจงเข้าไปใน language) คือสิ่งที่ทำให้ Tokio, async-std และ executor 40 บรรทัดจากศูนย์แบบบทนี้ทั้งหมดมีอยู่ได้ในฐานะ library ธรรมดาโดยไม่มี compiler support พิเศษ — ความยืดหยุ่นที่แท้จริง ถูกใช้จริงข้าม platform ที่ต่างกันมาก (embedded, WASM, server) ต้นทุนคือ โค้ด async ไม่เคย portable ข้าม executor ได้ฟรี ๆ แบบที่โค้ด synchronous portable ข้าม operating system ได้: `spawn_blocking`, timer และ I/O reactor เป็นแบบเจาะจงต่อ runtime และการผสม runtime หลายตัวไว้ใน binary เดียวเป็นแหล่งจริงที่พบบ่อยของบั๊กแบบ "future นี้ panic/ค้างโดยไม่มีเหตุผลให้เห็น"
+
+## Common Misconceptions
+
+- **"การเรียก async function เริ่มรันมันทันที เหมือน function ปกติ"** มัน return ค่า `Future` — เฉื่อยจนกว่าจะมีอะไรเรียก `poll` บนมัน โค้ดข้างใน `async fn` ไม่รันจริง ๆ จนกว่า executor จะขับเคลื่อนมัน ซึ่งเป็นเหตุผลว่าทำไม `some_async_fn();` เปล่า ๆ โดยไม่มี `.await` และไม่มี `.spawn` (ความผิดพลาดคลาสสิก) ถึงไม่ทำอะไรเลยเงียบ ๆ
+- **"`.await` block thread จนกว่าค่าจะพร้อม เหมือน call แบบ synchronous"** มัน suspend *future นี้* คืนการควบคุมให้ executor เพื่อให้มันรันงานอื่นได้ — ตัว thread เองยังคืบหน้าไปกับ task อื่นต่อ นี่คือสิ่งตรงข้ามกับที่ `std::thread::sleep` ทำข้างในโค้ด async เป๊ะ ๆ ซึ่งเป็นเหตุผลว่าทำไมการผสมทั้งสองถึงเป็นบั๊ก
+- **"Async task รันแบบ parallel กันเองอัตโนมัติ"** Executor แบบ single-threaded สลับ task บน thread เดียว (concurrency ไม่ใช่ parallelism) มีแค่ executor แบบ multi-threaded ที่มี future เป็น `Send` เท่านั้นที่รัน task บน thread ที่ต่างกันจริง ๆ พร้อมกันได้ ซึ่งเป็นข้อกำหนดเบื้องหลัง diagnostic ที่เกี่ยวกับ `Send` future ก่อนหน้าในบทนี้เป๊ะ
+- **"การ drop future กลางทางไม่ปลอดภัย หรือทิ้งมันไว้ในสถานะเสียหายพิเศษ"** มันคือ `Drop` ธรรมดา รันเหมือนกับที่มันจะรันสำหรับค่าอื่นที่ออกจาก scope เป๊ะ ส่วนที่น่าแปลกใจมีแค่ว่าโค้ดที่อยู่ *หลัง* จุด suspension ปัจจุบันใน body ของ `async fn` ไม่เคยรันเลย ซึ่งสำคัญต่อ cancellation-safety ไม่ใช่ต่อ memory safety
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ด async ที่ AI สร้างบางครั้งถือ `std::sync::MutexGuard` (หรือ lock guard แบบ synchronous อื่นใด) ข้าม `.await` โดยเฉพาะข้างใน helper function ที่ lock กับ await ห่างกันหลายบรรทัดและความเชื่อมโยงไม่ชัดเจนด้วยตา — รูปร่างเดียวกันเป๊ะกับที่ตัวอย่าง `MutexGuard` ของบทนี้แสดงให้เห็นตรง ๆ
+
+<SpotTheBug code={`use std::sync::Mutex;
+use std::time::Duration;
+
+struct Cache {
+    data: Mutex<Vec<i32>>,
+}
+
+impl Cache {
+    async fn refresh(&self, fetch: impl std::future::Future<Output = i32>) {
+        let mut data = self.data.lock().unwrap();
+        // "hold the lock while we fetch so no one reads stale data" -- AI-added comment
+        let value = fetch.await;
+        data.push(value);
+    }
+}
+`}>
+เจตนาของ comment (ไม่อยากให้ผู้อ่านเห็น cache ที่อัปเดตครึ่ง ๆ กลาง ๆ) สมเหตุสมผล แต่การถือ lock guard จริง ๆ ข้าม `fetch.await` เป็นวิธีที่ผิดในการทำแบบนั้น: ไม่ว่า `fetch` จะกำลัง await อะไรอยู่ -- network call, database query, อะไรก็ตามที่ใช้เวลาจริง -- ตอนนี้รันโดยถือ lock ไว้ตลอดเวลา บน multi-threaded runtime future นี้จะ compile ไม่ผ่านด้วย diagnostic "future cannot be sent between threads safely" แบบเดียวกับที่แสดงไว้ก่อนหน้าในบทนี้ด้วย เพราะ `std::sync::MutexGuard` ไม่ใช่ `Send` แม้จะมองข้าม compile error ไป ทุก task อื่นที่ต้องการ `self.data` -- รวมถึงการอ่าน -- ก็ block ตลอดระยะเวลาของ `fetch` บน executor thread ที่ควรจะว่างพอไปรันงานอื่น ทางแก้แยก critical section แบบ synchronous ออกจาก await ไปทั้งหมด: รัน `fetch.await` *ก่อน* โดยไม่ถือ lock เลย แล้วค่อยเอา lock ทีหลัง สั้น ๆ แค่เพื่อ push ค่าที่ fetch มาแล้วเข้าไป (`let value = fetch.await; self.data.lock().unwrap().push(value);`) -- ผู้อ่านยังเห็นค่าที่ "เก่า" ได้ระหว่าง fetch กำลังทำงาน ซึ่งจริงอยู่แล้วไม่ว่าจะทางไหน แต่ตอนนี้ไม่มีอะไรอื่นถูก block ระหว่างที่มันเกิดขึ้น
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`async fn` compile เป็น `Future` -- state machine ที่ไม่ทำอะไรเลยจนกว่าจะถูก poll -- และ `.await` คือจุด suspension ไม่ใช่การ block; cancellation ก็แค่ `Drop` และอะไรก็ตามที่ถูกถือไว้ข้าม `.await` (lock guard, ค่าที่ไม่ใช่ Send) กลายเป็นส่วนหนึ่งของ field ที่เก็บไว้ใน state machine นั้น ไม่ว่าจะดีหรือร้าย
+</Callout>
+
+export const quizAsyncRuntimeModel = [
+    {
+        q: "เกิดอะไรขึ้นจริง ๆ เมื่อคุณเรียก async fn ก่อนที่จะมี .await ใด ๆ บนผลลัพธ์?",
+        options: [
+            "Body ของ function เริ่มรันทันทีบน background thread",
+            "ยังไม่มีอะไรรันเลย -- การเรียกมันคืนค่า Future (state machine ที่คอมไพเลอร์ generate) เฉื่อยจนกว่าจะมีอะไรเรียก poll บนมัน",
+            "มัน block thread ปัจจุบันจนกว่า function จะจบ",
+            "มัน spawn OS thread ใหม่ทันทีเพื่อรัน function"
+        ],
+        answer: 1,
+        explain: "async fn คืน Future ทันทีโดยไม่รัน body ของมันเลย โค้ดข้างในจะรันก็ต่อเมื่อ executor (หรือ manual poll loop) ขับเคลื่อน future นั้นไปข้างหน้าจริง ๆ เท่านั้น"
+    },
+    {
+        q: "ทำไม poll ถึงรับ `self: Pin<&mut Self>` แทนที่จะเป็น `&mut self` ธรรมดา?",
+        options: [
+            "Pin เป็น syntax ที่จำเป็นแต่ไม่มีผลจริง",
+            "State machine ที่ generate ขึ้นมาอาจ self-referential ได้ (ถือทั้งค่าและ reference ไปยังค่านั้นข้าม .await) และ Pin รับประกันว่าสิ่งที่ชี้ไปจะไม่ถูก move ซึ่ง self-reference ต้องการเพื่อให้ยังถูกต้อง",
+            "Pin ทำให้ poll รันเร็วขึ้น",
+            "&mut self จะทำให้ future implement Send อัตโนมัติ"
+        ],
+        answer: 1,
+        explain: "การ move struct แบบ self-referential จะทิ้ง reference ข้างในไว้ให้ชี้ไปที่หน่วยความจำเดิมที่อาจถูกใช้ซ้ำไปแล้ว Pin<P> สัญญาว่าสิ่งที่ชี้ไปจะอยู่กับที่ ซึ่งเป็นการรับประกันที่ future ที่ generate แบบ self-referential ต้องการพอดี"
+    },
+    {
+        q: "ใน executor แบบ std-only ~40 บรรทัด ทำไม block_on ถึงวนเรียก poll ซ้ำ ๆ (busy-poll) แทนที่จะหลับ?",
+        options: [
+            "นี่เป็นสิ่งที่ trait Future เองบังคับไว้",
+            "Waker แบบ noop ของบทนี้ไม่ทำอะไรเลยเมื่อถูกปลุก จึงไม่มีกลไกให้รู้ว่าจะ poll อีกครั้งเมื่อไหร่ นอกจากลองอย่างต่อเนื่อง -- Waker ของ executor จริงปลุก thread ที่หลับอยู่จริง ๆ",
+            "Busy-polling ถูกต้องเสมอ แม้แต่ใน executor ของ production",
+            "poll เรียกได้แค่ครั้งเดียวต่อวินาทีตาม design"
+        ],
+        answer: 1,
+        explain: "Waker ของ executor จริง เมื่อถูกเรียก จะบอก scheduler ของ executor ให้ re-queue task ทำให้ thread ของ executor หลับระหว่างนั้นได้ Waker ของบทนี้เป็น no-op ดังนั้นวิธีเดียวที่จะเห็น Ready ในที่สุดคือเรียก poll ต่อไปเรื่อย ๆ"
+    },
+    {
+        q: "ทำไมโค้ดนี้ล้มเหลวด้วย 'future cannot be sent between threads safely' โดยไม่มี error code เลย?\n```rust\nuse std::rc::Rc;\nasync fn uses_rc() {\n    let val = Rc::new(5);\n    some_async_fn().await;\n    println!(\"{}\", val);\n}\nasync fn some_async_fn() {}\nfn assert_send<T: Send>(_t: T) {}\nfn main() { assert_send(uses_rc()); }\n```",
+        options: [
+            "Rc::new compile ไม่ผ่านเสมอข้างใน async fn",
+            "val (Rc<i32> ที่ไม่ใช่ Send) มีชีวิตอยู่ข้าม .await จึงกลายเป็น field ที่เก็บไว้ของ future ที่ generate ขึ้นมา -- ทำให้ future ทั้งตัวไม่ใช่ Send เพราะทุก field ที่เก็บไว้ต้องเป็น Send",
+            "async fn เรียก async fn อื่นไม่ได้",
+            "assert_send มี trait bound ที่ผิด"
+        ],
+        answer: 1,
+        explain: "Diagnostic ของคอมไพเลอร์เองระบุสิ่งนี้เป๊ะ: future ไม่ใช่ Send เพราะ val ซึ่งไม่ใช่ Send ถูกใช้ข้ามจุด await จึงกลายเป็นส่วนหนึ่งของข้อมูลใน state machine ที่ generate ขึ้นมา"
+    },
+    {
+        q: "ทำไมการถือ std::sync::MutexGuard ข้าม .await ถึงเป็นปัญหาในระดับ model นอกเหนือจากแค่ compile error เรื่อง Send ที่เป็นไปได้?",
+        options: [
+            "จริง ๆ แล้วไม่ใช่ปัญหาเลย -- error เรื่อง Send คือข้อกังวลเดียว",
+            "Lock ถูกถือไว้นานเท่ากับที่ operation ที่ await ใช้เวลา บน thread ที่ executor แชร์กับ task อื่น -- ทุก task อื่นที่ต้องการ lock เดียวกัน (หรือถูก schedule บน thread นั้น) ถูก block ตลอดระยะเวลานั้น",
+            "MutexGuard ทำให้ panic เสมอเมื่อใช้ข้างใน async fn",
+            "มันสำคัญแค่บน single-threaded executor เท่านั้น ไม่สำคัญบน multi-threaded"
+        ],
+        answer: 1,
+        explain: "แม้จะมองข้าม Send/compile error ไป การถือ lock ข้ามจุด suspension ก็ผูก lock นั้นไว้ (และถ้า executor thread ทำงานอื่นระหว่าง block-รออยู่ไม่ได้ ก็ผูก thread นั้นด้วย) นานเท่ากับที่ operation ที่ await ใช้เวลา -- ตรงกับสิ่งที่โค้ด async ควรหลีกเลี่ยงพอดี"
+    },
+    {
+        q: "ในตัวอย่าง cancellation future ถูก poll ครั้งเดียว (suspend ข้างใน .await บน future ที่ไม่เคยจบ) แล้วถูก drop เกิดอะไรขึ้นกับโค้ดหลัง .await นั้นใน body ของ async fn?",
+        options: [
+            "มันรันต่อไปอยู่ดี เพราะ Rust รับประกันว่า async function จะรันจนจบเสมอในที่สุด",
+            "มันไม่เคยรันเลย -- การ drop future หยุดการทำงานถาวรตรงจุด suspension เป๊ะ แม้ว่า Drop impl ของ local ที่ยังมีชีวิตอยู่ (เช่น guard) จะยังรันตามปกติก็ตาม",
+            "โปรแกรม panic",
+            "มันรันบน background thread หลังจาก main() จบ"
+        ],
+        answer: 1,
+        explain: "Cancellation ก็แค่ Drop body ของ future เองไม่เคย resume เกินจุดที่มันถูก suspend เลย -- แต่ RAII ธรรมดายังใช้ได้ ดังนั้น struct ใด ๆ ที่มี Drop impl ที่ future ยังถือไว้จะถูกทำความสะอาดตอนที่ field ของ future ถูก drop"
+    },
+    {
+        q: "ความต่างระหว่าง std::thread::sleep(...) กับ async timer อย่าง tokio::time::sleep(...).await ข้างใน async fn คืออะไร?",
+        options: [
+            "ไม่มีความต่างจริง -- ทั้งคู่หยุดการทำงานนานเท่ากัน",
+            "thread::sleep block OS thread ทั้งหมดที่ executor กำลังรันอยู่ ทำให้ task อื่นทุกตัวที่ถูก schedule บน thread นั้นแช่แข็งไป ส่วน async timer return Pending และปล่อยให้ executor รันงานอื่นระหว่างรอ",
+            "thread::sleep เร็วกว่าเสมอ",
+            "tokio::time::sleep ใช้กับ .await ไม่ได้"
+        ],
+        answer: 1,
+        explain: "thread::sleep block ทั้ง thread โดยไม่มีทางให้ executor ทำอะไรอย่างอื่นบนมัน Async sleep future คืนการควบคุมให้ executor (return Pending) เพื่อให้ task อื่นยังคืบหน้าต่อไปในขณะที่ timer กำลังทำงานอยู่"
+    }
+];
+
+<Quiz client:visible id="runtime-internals/async-runtime-model" questions={quizAsyncRuntimeModel} />
+
+<ProgressTracker client:visible id="runtime-internals/async-runtime-model" />

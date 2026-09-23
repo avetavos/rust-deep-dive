@@ -1,0 +1,224 @@
+---
+title: 'Why the Runtime Model Matters'
+description: 'Source, borrow-checked MIR, monomorphized codegen, binary — the four stages under every Rust program, and how this module''s five lessons connect.'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+## Why This Module Exists
+
+The previous seven modules taught you to *write* Rust: move a value, borrow it, implement a trait, propagate an error, iterate a collection, spawn a thread. That is enough to produce working programs by hand. It is not enough to confidently review Rust you did not write — and a growing share of the Rust in front of you today came from a tool that reproduces shapes it has seen before, not from a person who traced through what the compiler actually does with those shapes.
+
+AI-generated Rust that compiles is not the same claim as AI-generated Rust that is well-formed for the *reasons you think*. Code that boxes a tiny `Copy` value "for performance," a `dyn Trait` call believed to cost nothing, a `Rc<RefCell<T>>` reached for out of habit — all of it compiles, all of it runs, and none of the bugs are visible from the syntax alone. Telling correct-by-accident apart from correct-by-design means knowing what the compiler does to your source between typing it and running it. That is what this module is for.
+
+## Four Stages, One Program
+
+Every `.rs` file you write goes through the same pipeline before it becomes a binary:
+
+<Mermaid code={`flowchart LR
+    Source["Your source code\nAST"] --> MIR["MIR + borrow checker\nownership, lifetimes, exclusivity all verified here"]
+    MIR --> Codegen["Monomorphized codegen\none specialized copy of generic code per concrete type"]
+    Codegen --> Binary["Machine code\nthe binary you run"]`} title="What rustc does to your program before you ever run it" />
+
+Your source is first checked for borrow-checker violations against **MIR** (mid-level intermediate representation) — this is the stage that decides whether `E0502`, `E0499`, or a lifetime error fires, entirely before any machine code exists. Code that survives that stage is then **monomorphized**: every generic function is compiled into one specialized copy per concrete type it's actually called with, and every `dyn Trait` call is left as a single shared function reached through a vtable instead. Only after both of those stages does LLVM turn the result into the actual machine code in your binary.
+
+This module's five lessons walk that pipeline, plus what happens once the binary is actually running: [Memory Layout](/rust/en/runtime-internals/memory-layout/) covers what a value actually looks like in memory — stack vs heap, padding, niche optimization. [Drop & RAII](/rust/en/runtime-internals/drop-and-raii/) covers what the compiler inserts at scope exit and why. [The Borrow Checker Model](/rust/en/runtime-internals/borrow-checker-model/) goes past the compile errors you've already seen into *why* the MIR stage accepts or rejects the programs it does. [Monomorphization & Dispatch](/rust/en/runtime-internals/monomorphization-and-dispatch/) is about the codegen stage directly — what "zero-cost" actually means and measures as. [The Async Runtime Model](/rust/en/runtime-internals/async-runtime-model/) covers what `async fn` actually compiles into, since it is the single biggest gap between "code that reads sequentially" and "what the compiler and an executor actually do with it."
+
+## What the Compiler Says: Caught Before It Ever Reaches Codegen
+
+The MIR/borrow-check stage runs before monomorphization and codegen — a program that violates ownership rules never gets far enough to be compiled into machine code at all, no matter how the generic or dispatch choices downstream would have gone:
+
+```rust
+// @expect-error E0382
+fn main() {
+    let s = String::from("hello");
+    let t = s;
+    println!("{}", s);
+}
+```
+
+```text
+error[E0382]: borrow of moved value: `s`
+ --> src/main.rs:4:20
+  |
+2 |     let s = String::from("hello");
+  |         - move occurs because `s` has type `String`, which does not implement the `Copy` trait
+3 |     let t = s;
+  |             - value moved here
+4 |     println!("{}", s);
+  |                    ^ value borrowed here after move
+  |
+help: consider cloning the value if the performance cost is acceptable
+  |
+3 |     let t = s.clone();
+  |              ++++++++
+
+error: aborting due to 1 previous error
+```
+
+This is exactly the kind of error [The Borrow Checker Model](/rust/en/runtime-internals/borrow-checker-model/) explains from the inside: it is produced by analysis over MIR, not by pattern-matching your original source text — which is also why the diagnostic can point at `s`'s declared type and suggest a specific fix.
+
+## A Program That Proves the Model Is Real
+
+`std::any::type_name` and `std::mem::size_of` let you ask the compiler, at runtime, what it actually decided about a generic function once it specialized it for each caller:
+
+```rust
+use std::any::type_name;
+use std::mem::size_of;
+
+fn describe<T>(_val: &T) {
+    println!("T = {}, size_of::<T>() = {} bytes", type_name::<T>(), size_of::<T>());
+}
+
+fn main() {
+    describe(&42i32);
+    describe(&"hello");
+    describe(&3.14f64);
+    describe(&Some(7u8));
+}
+```
+
+```text
+T = i32, size_of::<T>() = 4 bytes
+T = &str, size_of::<T>() = 16 bytes
+T = f64, size_of::<T>() = 8 bytes
+T = core::option::Option<u8>, size_of::<T>() = 2 bytes
+```
+
+There is exactly one `describe` in the source, but four different `T`s at the four call sites, and the compiler answers a different, exact, concrete question for each one — `size_of` is not a runtime computation here, it is a fact baked in during codegen for that specific specialized copy. [Monomorphization & Dispatch](/rust/en/runtime-internals/monomorphization-and-dispatch/) proves that "one copy per type" claim directly; [Memory Layout](/rust/en/runtime-internals/memory-layout/) explains where numbers like `16` (a fat pointer) and `2` (a niche-optimized `Option<u8>`) actually come from.
+
+export const indexCode = `use std::any::type_name;
+use std::mem::size_of;
+
+fn describe<T>(_val: &T) {
+    println!("T = {}, size_of::<T>() = {} bytes", type_name::<T>(), size_of::<T>());
+}
+
+fn main() {
+    describe(&42i32);
+    describe(&"hello");
+    describe(&3.14f64);
+    describe(&Some(7u8));
+}`;
+
+<Playground code={indexCode} />
+
+<Callout title="Compiling has stages, and each one rules out a different class of bug">
+Ownership and lifetime violations are rejected before codegen exists at all. Generic dispatch cost is decided during codegen, once, per concrete type. Runtime behavior like drop order and async scheduling only exists after the binary starts running. Knowing which stage is responsible for a given behavior is most of what separates "I can read this Rust" from "I can review this Rust."
+</Callout>
+
+## Mental Model
+
+Think of compiling a Rust program as three inspectors on an assembly line, each empowered to reject the work outright, followed by a machine that only ever sees what already passed. The first inspector (borrow checking over MIR) checks ownership and lifetimes and can reject the program before any code generation happens at all. The second stage (monomorphization) does not reject anything — it duplicates: every generic function becomes one concrete copy per type it's used with, while every `dyn Trait` call stays as a single shared function reached indirectly. Only what survives both stages reaches LLVM, which turns it into the machine code that becomes your binary. None of this is visible in the source text you typed — it's the difference between what you wrote and what actually runs.
+
+## Trade-offs
+
+Understanding this pipeline costs you one more mental model on top of the language's syntax and semantics you already know. What it buys back is that "why did this fail to compile," "why is this call slower than that one," and "why did this run in a different order than I expected" all stop being separate mysteries and become the same question — *which stage is responsible* — with a specific, learnable answer instead of a fresh guess every time.
+
+## Common Misconceptions
+
+- **"If it compiles, the compiler didn't have to think very hard about it."** The opposite is often true — the borrow checker rejecting nothing is not the same as it doing nothing; MIR-level analysis runs on every program, successful or not, and it is the reason entire bug classes (data races, use-after-free, iterator invalidation) simply do not reach the codegen stage.
+- **"Generics and `dyn Trait` are basically the same feature with different syntax."** They are resolved at opposite pipeline stages: generics are resolved per call site during monomorphization (zero runtime dispatch cost, more generated code), `dyn Trait` is resolved once at runtime through a vtable (one indirection per call, one shared function). [Monomorphization & Dispatch](/rust/en/runtime-internals/monomorphization-and-dispatch/) measures the difference directly.
+- **"Rust has a garbage collector doing cleanup at runtime, like other memory-safe languages."** There is no separate runtime process; the compiler inserts specific, deterministic `drop` calls into the generated code at compile time, at points determined entirely by scope — [Drop & RAII](/rust/en/runtime-internals/drop-and-raii/) covers exactly what gets inserted and when.
+
+## Reading AI-generated Code
+
+Code that "obviously" should be faster or safer based on surface-level reasoning about the source text, without a model of which pipeline stage actually determines the outcome, is a common shape in generated Rust — it compiles, it runs, and the reasoning behind it is simply wrong.
+
+<SpotTheBug code={`// "Box it so it doesn't get copied every time we pass it to a function" -- AI-added comment
+fn process(counter: &Box<i32>) {
+    println!("count = {}", **counter);
+}
+
+fn main() {
+    let counter = Box::new(42);
+    process(&counter);
+    process(&counter);
+}
+`}>
+This compiles and runs fine, printing `count = 42` twice — and the comment's reasoning is backwards. `i32` is `Copy` and exactly 4 bytes; passing `&i32` directly would already avoid any copy of the boxed data, and it would avoid the heap allocation entirely. `Box::new(42)` here adds a heap allocation, a pointer indirection on every access (`**counter` needs two dereferences instead of one), and gains nothing — there was never a large value at risk of an expensive copy in the first place. [Memory Layout](/rust/en/runtime-internals/memory-layout/) covers exactly when boxing genuinely helps (a value too large to move around cheaply, or one whose size isn't known until runtime) versus when it's pure overhead, as it is here.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Every Rust program passes through the same four stages — source, borrow-checked MIR, monomorphized codegen, binary — and knowing which stage is responsible for a given piece of behavior is what turns "this compiles" into "I understand why this is correct."
+</Callout>
+
+export const quizIndex = [
+    {
+        q: "Which pipeline stage is responsible for rejecting a program that violates the borrow checker's exclusivity rule?",
+        options: [
+            "LLVM codegen",
+            "MIR-level borrow checking, before monomorphization or codegen ever runs",
+            "The linker, when it assembles the final binary",
+            "The Rust runtime, at program startup"
+        ],
+        answer: 1,
+        explain: "Borrow checking runs over MIR before any code generation happens. A program that fails this stage never reaches monomorphization or codegen at all."
+    },
+    {
+        q: "What does this print?\n```rust\nuse std::any::type_name;\nfn describe<T>(_val: &T) {\n    println!(\"{}\", type_name::<T>());\n}\nfn main() {\n    describe(&5i32);\n    describe(&\"hi\");\n}\n```",
+        options: [
+            "T\nT",
+            "i32\n&str",
+            "5\nhi",
+            "It fails to compile -- describe is only defined for one type"
+        ],
+        answer: 1,
+        explain: "describe<T> is monomorphized once per concrete type it's called with. type_name::<T>() reports the real, specific type the compiler resolved for that call site -- i32 for the first, &str for the second."
+    },
+    {
+        q: "Why does this fail to compile?\n```rust\nfn main() {\n    let s = String::from(\"hello\");\n    let t = s;\n    println!(\"{}\", s);\n}\n```",
+        options: [
+            "String does not implement the Display trait",
+            "error[E0382]: s was moved into t on the previous line, so using it again in println! borrows a moved value",
+            "t is never used, which Rust treats as a hard error",
+            "println! cannot accept variables, only literals"
+        ],
+        answer: 1,
+        explain: "let t = s; moves the String (it isn't Copy). The borrow checker rejects the later use of s at the MIR stage -- entirely before codegen -- with error[E0382]."
+    },
+    {
+        q: "What is the key difference between how generics and dyn Trait are handled in the compiler pipeline?",
+        options: [
+            "There is no real difference -- both compile to identical machine code",
+            "Generics are resolved once at runtime; dyn Trait is resolved per call site at compile time",
+            "Generics are resolved per concrete type during monomorphization (one specialized copy each, no dispatch cost); dyn Trait is resolved once at runtime through a shared function and a vtable lookup",
+            "dyn Trait is always faster because it avoids generating duplicate code"
+        ],
+        answer: 2,
+        explain: "Monomorphization happens at compile time, once per concrete type a generic is used with. dyn Trait keeps one function and defers the specific implementation to a runtime vtable lookup -- opposite trade-offs, covered in Monomorphization & Dispatch."
+    },
+    {
+        q: "Why is boxing a plain `i32` counter, purely to avoid it being 'copied on every function call,' usually a pessimization rather than an optimization?",
+        options: [
+            "i32 cannot be boxed at all -- it would fail to compile",
+            "i32 is Copy and only 4 bytes; passing &i32 directly already avoids copying it, so Box::new adds a heap allocation and an extra pointer indirection for no benefit",
+            "Box<i32> and i32 always compile to exactly the same machine code, so it makes no difference either way",
+            "Boxing only matters for types larger than 1024 bytes, and the compiler ignores it below that"
+        ],
+        answer: 1,
+        explain: "A bare &i32 is already the cheapest way to pass a 4-byte Copy value without copying it. Box::new(42) adds a real heap allocation and doubles the indirection to reach the value, with nothing gained."
+    },
+    {
+        q: "What does Rust's compile pipeline use in place of a garbage collector to free heap memory?",
+        options: [
+            "A background thread that scans for unreachable memory periodically, like a tracing GC",
+            "Reference counting inserted automatically into every type",
+            "Deterministic drop calls the compiler inserts at compile time, at points fully determined by scope and ownership -- no separate runtime process is involved",
+            "The operating system reclaims all memory only when the whole process exits"
+        ],
+        answer: 2,
+        explain: "There is no GC runtime. The compiler works out, statically, exactly where each value's owner goes out of scope and inserts the corresponding drop call directly into the generated code -- the subject of the Drop & RAII lesson."
+    }
+];
+
+<Quiz client:visible id="runtime-internals/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="runtime-internals/index" />
