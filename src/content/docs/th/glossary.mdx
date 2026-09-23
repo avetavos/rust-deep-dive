@@ -1,0 +1,148 @@
+---
+title: Glossary
+description: 'คำศัพท์ทั้งหมดของคอร์สนี้ในที่เดียว — ownership และ memory, type กับ trait, error, iterator กับ closure, concurrency, และ toolchain'
+sidebar:
+  order: 99
+---
+
+import ProgressTracker from '../../../components/ProgressTracker.tsx';
+
+Rust เอาคำธรรมดามาใช้ในความหมายทางเทคนิคที่เจาะจง — `move`, `borrow`, `drop` — และมีคำศัพท์ที่ไม่มีอยู่ในภาษาที่มี garbage collector เลย เช่น `lifetime` หรือ `dyn compatible` เวลาบทเรียนใช้คำที่ไม่แน่ใจความหมาย ให้กลับมาดูที่นี่
+
+## Ownership และ memory
+
+| Term | Meaning |
+|------|---------|
+| Move | การย้าย ownership ของค่าจาก binding หนึ่งไปยังอีก binding หนึ่ง หลังจาก `let s2 = s1;` สำหรับ type ที่ไม่ใช่ `Copy` ตัว `s1` จะใช้งานไม่ได้อีกต่อไป — การใช้มันคือ compile-time error (`E0382` "borrow of moved value") ไม่ใช่บั๊กตอน runtime ดู [Ownership และ Moves](/rust/th/ownership-borrowing/ownership-moves/) |
+| `Copy` | marker trait สำหรับ type ที่ถูกทำซ้ำแบบ bit-for-bit ตอน assign แทนที่จะ move — type เล็ก ๆ ที่อยู่บน stack อย่าง integer, `bool`, `char` type จะ derive `Copy` ได้ก็ต่อเมื่อทุก field เป็น `Copy` เอง และ `Copy` ต้องมี `Clone` เป็น supertrait ดู [Ownership และ Moves](/rust/th/ownership-borrowing/ownership-moves/) |
+| `Clone` | trait สำหรับทำ deep copy แบบชัดเจนผ่าน `.clone()` ซึ่งอาจมีต้นทุนสูง ต่างจาก `Copy` ตรงที่ clone ต้อง opt-in ด้วยการเรียก method เสมอ จึงเห็นได้ชัดเจนทุกจุดที่เรียกใช้ ดู [Ownership และ Moves](/rust/th/ownership-borrowing/ownership-moves/) |
+| Shared reference (`&T`) | borrow ที่ให้คุณอ่านค่าได้โดยไม่ต้องเป็นเจ้าของ มี shared reference กี่ตัวพร้อมกันก็ได้ แต่ไม่มีตัวไหน mutate ผ่านมันได้เลย ดู [References และ Borrowing](/rust/th/ownership-borrowing/references-borrowing/) |
+| Exclusive reference (`&mut T`) | borrow ที่ mutate ได้ โดยคอมไพเลอร์รับประกันว่ามันเป็น reference ตัวเดียว (ไม่ว่า shared หรือ exclusive) ที่ active อยู่กับค่านั้นตลอดช่วงที่มันยังมีชีวิตอยู่ ดู [Mutable Borrows](/rust/th/ownership-borrowing/mutable-borrows/) |
+| Lifetime | ขอบเขตที่ reference หนึ่งได้รับการรับประกันว่ายัง valid อยู่ เขียนเป็น generic parameter อย่าง `'a` lifetime ไม่ได้เปลี่ยนว่าค่านั้นมีชีวิตอยู่นานแค่ไหน แต่ให้คอมไพเลอร์เช็กว่า reference ไม่มีวันอยู่นานเกินกว่าสิ่งที่มันชี้ไป ดู [Lifetimes](/rust/th/traits-generics/lifetimes/) |
+| Lifetime elision | กฎสามข้อที่คอมไพเลอร์ใช้ infer lifetime annotation อัตโนมัติใน function signature แบบที่พบบ่อย ทำให้คุณไม่ต้องเขียน `'a` เองทุกที่ เมื่อกฎเหล่านี้หาคำตอบที่ไม่ซ้ำกันไม่ได้ คุณต้อง annotate เอง — นั่นคือ `E0106` "missing lifetime specifier" ดู [Lifetimes](/rust/th/traits-generics/lifetimes/) |
+| `'static` | lifetime ที่แปลว่า "valid ตลอดอายุโปรแกรม" — string literal และค่าที่ไม่มีข้อมูล borrow อยู่ข้างในจะเข้าเงื่อนไขนี้ มันไม่ใช่คำพ้องกับ "global" หรือ "leak" และการแปะ `'static` เพื่อทำให้ lifetime error ที่ไม่เกี่ยวข้องหายไป มักแค่ย้าย error ไปอยู่ที่อื่นแทน ดู [Lifetimes](/rust/th/traits-generics/lifetimes/) |
+| Non-Lexical Lifetimes (NLL) | โมเดล borrow checker (ตั้งแต่ Rust 2018) ที่ borrow หนึ่งจะจบลงที่จุดใช้งานจริงครั้งสุดท้าย ไม่ใช่ที่ท้าย block ที่ครอบมันอยู่ — ทำให้ borrow ใหม่เริ่มได้ทันทีหลังจากนั้น แม้จะอยู่ใน `{}` block เดียวกัน ดู [Mutable Borrows](/rust/th/ownership-borrowing/mutable-borrows/) |
+| Two-phase borrow | exclusive borrow แบบพิเศษ (ใช้กับกรณีอย่าง `v.push(v.len())`) ที่ถูก "จอง" ไว้ระหว่างที่ argument ของมันยัง evaluate อยู่ และจะ active เต็มตัวก็ตอนเรียกจริงเท่านั้น — ทำให้ shared read กับ exclusive borrow ที่ตามมาซ้อนกันได้โดยไม่ชน `E0502` ดู [Mutable Borrows](/rust/th/ownership-borrowing/mutable-borrows/) |
+| Reborrow | การสร้าง borrow ใหม่ที่อายุสั้นกว่าจาก reference ที่มีอยู่แล้ว (`&mut *r` หรือ reborrow แบบ implicit ตอนส่ง `&mut T` เข้าฟังก์ชัน) แทนที่จะ move reference เดิมไปเลย มันคือสิ่งที่ทำให้คุณใช้ `&mut T` ซ้ำได้มากกว่าหนึ่งครั้งโดยไม่ต้องสละมันไป ดู [Mutable Borrows](/rust/th/ownership-borrowing/mutable-borrows/) |
+| Drop / RAII | "Resource Acquisition Is Initialization" — `Drop::drop` ของค่าหนึ่งจะรันอัตโนมัติเมื่อมันออกจาก scope ตามลำดับย้อนกลับของการประกาศ คืนหน่วยความจำหรือปล่อย lock/file handle โดยไม่ต้องเรียก cleanup เองเลย ดู [Ownership และ Moves](/rust/th/ownership-borrowing/ownership-moves/) |
+| Slice | มุมมองที่ชี้ไปยังกลุ่มของ element ที่ต่อเนื่องกัน (`&[T]`, `&str`) โดยไม่ได้เป็นเจ้าของมัน เพราะมันคือ borrow คอมไพเลอร์จึงปฏิเสธโค้ดใด ๆ ที่จะ modify หรือ drop ข้อมูลข้างใต้ในขณะที่ slice ยังมีชีวิตอยู่ ดู [Slices](/rust/th/ownership-borrowing/slices/) |
+| Fat pointer | reference ที่พกข้อมูลมากกว่าหนึ่ง machine word: reference ของ slice คือ (pointer, length); reference ของ `&dyn Trait` คือ (pointer, vtable pointer) — 16 byte บน target 64-bit เทียบกับ `&T` ธรรมดาที่มี 8 byte ดู [Trait Objects](/rust/th/traits-generics/trait-objects/) |
+| Stack vs heap | การจองบน stack คือการขยับ pointer พร้อม cleanup อัตโนมัติตาม scope ส่วนการจองบน heap (ผ่าน `String`, `Vec<T>`, `Box<T>`) เป็นการจองแบบชัดเจน ขนาดกำหนดตอน runtime และถูกปล่อยด้วย `Drop` เมื่อเจ้าของออกจาก scope การ move ค่าที่เป็นเจ้าของ heap จะ copy แค่ header บน stack (pointer/length/capacity) ไม่เคย copy ข้อมูลบน heap เลย ดู [Ownership และ Moves](/rust/th/ownership-borrowing/ownership-moves/) |
+| `Box<T>` | smart pointer ที่เอาค่าไปไว้บน heap โดยเป็นเจ้าของแบบเดียว — วิธีที่ง่ายที่สุดในการเก็บค่าที่ไม่รู้ขนาดจนกว่าจะถึง runtime หรือทำให้ค่ามีขนาดคงที่เล็ก ๆ บน stack ไม่ว่าข้างในจะเป็นอะไรก็ตาม ดู [Threads](/rust/th/concurrency-testing-cargo/threads/) |
+| `Rc<T>` / `Arc<T>` | smart pointer แบบนับ reference สำหรับแชร์ ownership ของค่าบน heap: มีเจ้าของได้หลายตัว และจะถูกปล่อยเมื่อ count เป็นศูนย์ `Rc<T>` ใช้ counter ธรรมดาที่ไม่ atomic (single-thread เท่านั้น); `Arc<T>` ("Atomically Reference Counted") ใช้ counter แบบ atomic ซึ่งเป็นสิ่งที่ทำให้ clone และส่งข้าม thread ได้อย่างปลอดภัย ดู [Threads](/rust/th/concurrency-testing-cargo/threads/) |
+| `RefCell<T>` | type ที่ย้ายกฎ borrow ของ Rust จาก compile time ไปเป็น runtime: `.borrow()`/`.borrow_mut()` จะ panic (`already borrowed: BorrowMutError`) แทนที่จะ compile ไม่ผ่าน ถ้ากฎ exclusivity ถูกละเมิด ดู [Threads](/rust/th/concurrency-testing-cargo/threads/) |
+| Interior mutability | การ mutate ข้อมูลผ่าน shared reference (`&T`) โดยผลักการเช็ก exclusivity ไปเป็น runtime แทนที่จะเช็กตอน compile time — สิ่งที่ `RefCell<T>`, `Cell<T>`, `Mutex<T>`, และ atomic ทุกตัวให้มา แต่ละตัวมีต้นทุนและการรับประกันต่างกัน ดู [Threads](/rust/th/concurrency-testing-cargo/threads/) |
+
+## Type และ trait
+
+| Term | Meaning |
+|------|---------|
+| Struct | data type ที่มีชื่อและรูปร่างคงที่ รวม field ที่เกี่ยวข้องกันไว้ด้วยกัน — ใกล้เคียงกับ class ที่สุดใน Rust แต่ไม่มี inheritance ดู [Structs](/rust/th/structs-enums-matching/structs/) |
+| Enum | type ที่เป็นได้เพียงหนึ่งใน variant ที่มีชื่อไว้ตายตัว แต่ละ variant พกข้อมูลของตัวเองได้ enum ของ Rust ใกล้เคียงกับ tagged union มากกว่า enum แบบ C ดู [Enums](/rust/th/structs-enums-matching/enums/) |
+| Tuple / unit type | tuple (`(i32, bool)`) รวมค่าหลาย type เข้าด้วยกันตามตำแหน่งโดยไม่มีชื่อ field unit type `()` คือ tuple ที่มีศูนย์ element — return type โดย implicit ของฟังก์ชันที่ไม่มี `-> ...` คล้าย `void` แต่เป็น type จริงที่มีค่าเดียวคือ `()` ดู [Data Types](/rust/th/basics/data-types/) และ [Functions](/rust/th/basics/functions/) |
+| `Option<T>` | enum ที่มี variant `Some(T)` กับ `None` ใช้ทุกที่ที่ค่าอาจจะไม่มีอยู่ แทนการใช้ null reference ระบบประเภทบังคับให้ทุก caller ต้องจัดการกรณี `None` ก่อนจะเข้าถึงค่าจริง ดู [Option](/rust/th/structs-enums-matching/option/) |
+| `Result<T, E>` | enum ที่มี variant `Ok(T)` กับ `Err(E)` กลไกของ Rust สำหรับความล้มเหลวที่กู้คืนได้ ฟังก์ชันที่ล้มเหลวได้จะคืนค่าเป็น `Result` แทนที่จะ panic และ signature จะบอก error type ที่เป็นไปได้ไว้ตรง ๆ ดู [Result](/rust/th/error-handling/result/) |
+| Trait | กลุ่ม method ที่มีชื่อ ซึ่ง type หนึ่ง implement ได้ กลไกของ Rust สำหรับ behavior ที่ใช้ร่วมกันข้าม type ที่ไม่เกี่ยวข้องกัน — ใกล้เคียง interface มากกว่า base class ดู [Traits](/rust/th/traits-generics/traits/) |
+| Generic | ฟังก์ชัน struct หรือ enum ที่เขียนครั้งเดียวแล้ว parameterize ด้วย type placeholder (`T`) ทำให้คอมไพเลอร์สร้างโค้ดที่ใช้งานได้จริงสำหรับ concrete type ใดก็ตามที่ถูกเรียกใช้ ดู [Generics](/rust/th/traits-generics/generics/) |
+| Trait bound | ข้อจำกัดบน generic parameter (`fn largest<T: PartialOrd>(...)`) ที่จำกัด `T` ให้เป็น type ที่ implement trait ที่ระบุไว้ ทำให้คอมไพเลอร์ยอมเฉพาะ operation ที่ trait นั้นรับประกัน ดู [Generics](/rust/th/traits-generics/generics/) |
+| `impl Trait` | syntax ที่แปลว่า "concrete type บางตัวที่ implement trait นี้ ตัดสิน ณ compile time" ตอนเป็น argument type มันคือ sugar ของ generic bound ตอนเป็น return type มันให้ฟังก์ชัน return closure หรือ iterator ได้โดยไม่ต้องเอ่ยชื่อ type ของมัน ดู [Trait Objects](/rust/th/traits-generics/trait-objects/) |
+| `dyn Trait` | trait ที่ใช้เป็น type ได้ด้วยตัวเอง ต้องอยู่หลัง pointer เสมอ (`&dyn Trait`, `Box<dyn Trait>`) การเรียก method จะ resolve ณ runtime ผ่าน vtable แทนที่จะตัดสิน ณ compile time ซึ่งเป็นสิ่งที่ทำให้ value จาก concrete type ต่างกันอยู่ใน `Vec` เดียวกันได้ ดู [Trait Objects](/rust/th/traits-generics/trait-objects/) |
+| Dyn compatibility | trait หนึ่งกลายเป็นค่า `dyn Trait` ได้หรือไม่ เอกสารเก่าอาจยังเรียกว่า "object safety" — เป็นชื่อเก่าของข้อกำหนดเดียวกัน (คร่าว ๆ คือ ห้ามมี generic method ห้าม return `Self` แบบ value) trait ที่ไม่ผ่านจะขึ้น compiler error `E0038` ว่า "is not dyn compatible" ไม่ใช่ "is not object safe" bound `where Self: Sized` ตัดเฉพาะ method ที่เป็นปัญหาออกได้ ทำให้ trait ที่เหลือ dyn compatible กลับมาอีกครั้ง ดู [Trait Objects](/rust/th/traits-generics/trait-objects/) |
+| Vtable | "virtual method table" — ตารางของ function pointer ที่เก็บไว้คู่กับ pointer ข้อมูลของค่า `dyn Trait` ใช้ค้นหา method implementation ที่ถูกต้อง ณ runtime มันคือคำที่สองของ fat pointer ที่ทำให้ trait object ทำงานได้ ดู [Trait Objects](/rust/th/traits-generics/trait-objects/) |
+| Monomorphization | การที่คอมไพเลอร์สร้างโค้ดสำเนาแยกต่างหากที่ specialize เต็มตัวของฟังก์ชัน generic สำหรับทุก concrete type ที่ถูกเรียกใช้ ทำให้การเรียกผ่าน generic ไม่มีต้นทุน dispatch ตอน runtime เลย — แลกกับ binary ที่ใหญ่ขึ้นเมื่อ generic ตัวเดียวถูก instantiate ด้วยหลาย type ดู [Generics](/rust/th/traits-generics/generics/) |
+| `#[derive(...)]` | attribute ที่ generate trait implementation ให้ struct หรือ enum อัตโนมัติ — `Debug`, `Clone`, `Copy`, `PartialEq`, `Default` และอื่น ๆ — แทนที่จะเขียน boilerplate เอง บาง derive มีเงื่อนไขก่อน: `Copy` ต้องการให้ทุก field เป็น `Copy` อยู่แล้ว (และ `Clone`) ดู [Structs](/rust/th/structs-enums-matching/structs/) |
+| Orphan rule | กฎ coherence ที่คุณ implement trait ให้ type ได้ก็ต่อเมื่อคุณเป็นเจ้าของ trait นั้น type นั้น หรือทั้งคู่ — ไม่ใช่ trait ต่างเจ้าของกับ type ต่างเจ้าของพร้อมกัน มันคือสิ่งที่กันไม่ให้ crate สองตัวเขียน `impl` ที่ขัดแย้งกันให้ type เดียวกัน ดู [Traits](/rust/th/traits-generics/traits/) |
+| Auto trait (`Send` / `Sync`) | marker trait ที่คอมไพเลอร์ implement ให้ type อัตโนมัติตาม field ของมัน โดยไม่ต้องเขียน `impl` เอง `Send` แปลว่าค่าย้ายไปยัง thread อื่นได้ `Sync` แปลว่า shared reference ไปยังค่านั้นส่งข้าม thread ได้ `Rc<T>` และ `RefCell<T>` ไม่ใช่ทั้งคู่ ดังนั้นการแชร์มันข้าม thread คือ `E0277` ตอน compile time ไม่ใช่ data race ตอน runtime ดู [Threads](/rust/th/concurrency-testing-cargo/threads/) |
+| `Sized` | marker trait สำหรับ type ที่รู้ขนาด ณ compile time — เป็น bound default ของทุก generic type parameter ค่า `dyn Trait` **ไม่** implement `Sized` (เพราะ concrete type ของมันเปลี่ยนไปได้) ซึ่งเป็นเหตุผลที่มันต้องอยู่หลัง pointer เสมอ ดู [Trait Objects](/rust/th/traits-generics/trait-objects/) |
+| Associated type | type placeholder ที่ประกาศไว้ข้างใน trait (`type Item;` ใน `Iterator`) และถูกกำหนดโดยแต่ละ implementor แทนที่จะให้ caller ส่งเข้ามาแบบ generic parameter มันทำให้ trait หนึ่งมี implementation ได้แบบเดียวต่อ type แทนที่จะมีหลายแบบ ดู [Traits](/rust/th/traits-generics/traits/) |
+| Newtype | tuple struct ที่มี field เดียว (`struct Meters(f64);`) ใช้ห่อ type ที่มีอยู่แล้วให้กลายเป็น type ใหม่ที่มีชื่อแยกต่างหาก — newtype สองตัวที่ห่อ underlying type เดียวกันใช้แทนกันไม่ได้ ต่างจาก type alias ธรรมดา ดู [Structs](/rust/th/structs-enums-matching/structs/) |
+
+## Error
+
+| Term | Meaning |
+|------|---------|
+| Panic | วิธีที่ Rust บอกว่า "สถานการณ์นี้คือบั๊ก — ฉันไม่สามารถดำเนินการต่อได้อย่างปลอดภัย" เมื่อ panic เกิดขึ้น Rust จะคลายสแต็กการเรียก รัน destructor และยุติเธรดปัจจุบัน (ในโปรแกรมแบบ single-thread หมายความว่าโปรเซสทั้งหมดจะออก) panic hook จะพิมพ์ `thread 'main' (<id>) panicked at file:line:col: ...` ก่อนที่สิ่งนั้นจะเกิด ดู [Panic](/rust/th/error-handling/panic/) |
+| Unwind vs abort | สองวิธีที่ panic จบเธรดหนึ่ง: unwind จะเดินย้อนขึ้นสแต็กพร้อมรัน `Drop` ทุกตัวระหว่างทาง (ค่า default, `panic = "unwind"`); abort จะฆ่าโปรเซสทันทีโดยไม่ cleanup อะไรเลย (`panic = "abort"`) ซึ่งเร็วกว่าและได้ binary เล็กกว่า แต่ข้าม destructor ไปเลย ดู [Panic](/rust/th/error-handling/panic/) |
+| `?` operator | sugar ของ "ถ้า expression นี้เป็น `Err`/`None` ให้ return ออกไปเลย ไม่งั้น unwrap ค่าให้" ใช้ได้เฉพาะในฟังก์ชันที่ return `Result` หรือ `Option` และมันเรียก `From::from` อัตโนมัติเพื่อแปลงระหว่าง error type ระหว่างทาง ดู [The `?` Operator](/rust/th/error-handling/question-mark/) |
+| `From` | conversion trait (`From<A> for B`) ที่ทำให้ `?` แปลง error type หนึ่งเป็นอีกแบบอัตโนมัติ ตราบใดที่มีการ implement conversion ไว้ครั้งเดียว ตัวมัน (ไม่ใช่ `?` เอง) คือกลไกที่ทำการแปลง type จริง ๆ ดู [Custom Errors](/rust/th/error-handling/custom-errors/) |
+| `Box<dyn Error>` | error box แบบ type-erased ที่เก็บ type อะไรก็ได้ที่ implement `std::error::Error` — สะดวกใน `main` ของ binary ที่ไม่สนว่า concrete error type ไหนล้มเหลว แต่เป็นตัวเลือกที่ไม่ดีสำหรับ public API ของ library เพราะ caller จะเสียความสามารถ match กับ error variant เฉพาะเจาะจงไป ดู [Custom Errors](/rust/th/error-handling/custom-errors/) |
+| `Error::source` | method ที่ไม่บังคับบน trait `Error` ที่เปิดเผยสาเหตุที่แท้จริงของ error ให้ caller (หรือการ print แบบ debug) เดินไล่ตาม chain ของความล้มเหลวที่ซ้อนกันกลับไปจนถึง root cause ได้ ดู [Custom Errors](/rust/th/error-handling/custom-errors/) |
+| Poisoning | สิ่งที่เกิดกับ `Mutex<T>`/`RwLock<T>` เมื่อ thread ที่ถือ lock อยู่ panic ระหว่างถือ lock: lock นั้นจะกลาย "poisoned" และ `.lock()`/`.read()`/`.write()` ครั้งต่อ ๆ ไปจะคืนค่าเป็น `Err` (ซึ่ง pattern `.unwrap()` ที่ใช้กันทั่วไปจะแปลงเป็น panic รอบสองทันที) แทนที่จะแจก data ที่อาจไม่สอดคล้องกันออกไปแบบเงียบ ๆ ดู [Threads](/rust/th/concurrency-testing-cargo/threads/) |
+| `unwrap()` / `expect()` | method ที่ดึงค่า `Ok`/`Some` ออกมา หรือ panic ถ้าเจอ `Err`/`None` — `expect(msg)` เพิ่ม message เองได้ ใช้ได้ดีในสคริปต์เร็ว ๆ หรือ test แต่ในโค้ด production ที่ผ่านขั้น prototype ไปแล้ว แต่ละจุดที่ใช้คือจุดที่เปลี่ยน error ที่กู้คืนได้ให้กลายเป็น crash ดู [Result](/rust/th/error-handling/result/) |
+
+## Iterator และ closure
+
+| Term | Meaning |
+|------|---------|
+| Laziness | chain ของ iterator adaptor (`.map(...).filter(...)`) ไม่ทำงานอะไรเลยตอนที่คุณสร้างมันขึ้นมา — มันแค่บรรยาย transformation เอาไว้ ไม่มีอะไรรันจนกว่า consumer จะขับเคลื่อน chain นั้น ซึ่งเป็นสิ่งที่ทำให้ chain ยาว ๆ มีต้นทุนเท่ากับ loop ที่เขียนมือตัวเดียว ดู [Iterators](/rust/th/collections-iterators/iterators/) |
+| Adapter vs consumer | adapter (`map`, `filter`, `zip`, `enumerate`, ...) แปลง iterator หนึ่งเป็นอีก iterator หนึ่งแบบ lazy ส่วน consumer (`collect`, `sum`, `fold`, `for` loop) ดึงค่าผ่านทั้ง chain แล้วสร้างผลลัพธ์สุดท้ายที่เป็นรูปธรรม ดู [Iterators](/rust/th/collections-iterators/iterators/) |
+| `collect()` | consumer ที่กว้างที่สุด: รวบรวม item ของ iterator เข้า collection โดย target type infer จาก context หรือระบุด้วย turbofish ก็ได้ `.collect::<Result<Vec<_>, _>>()` ยัง short-circuit ตั้งแต่เจอ `Err` ตัวแรกด้วย ดู [Iterators](/rust/th/collections-iterators/iterators/) |
+| Turbofish | syntax `::<T>` (`.collect::<Vec<i32>>()`) ใช้ระบุ generic type ตรง ๆ เมื่อคอมไพเลอร์ infer จาก context เองไม่ได้ ดู [Iterators](/rust/th/collections-iterators/iterators/) |
+| `Fn` / `FnMut` / `FnOnce` | trait สามตัวของ closure บอกว่า closure ใช้สิ่งที่ capture มายังไง: `Fn` แค่ borrow (`&T`) เรียกได้กี่ครั้งก็ได้ `FnMut` borrow แบบ mutable (`&mut T`) `FnOnce` เอา ownership ไปเลย (`T`) เรียกได้ครั้งเดียว closure ทุกตัว implement `FnOnce` เป็นอย่างน้อย ดู [Closures](/rust/th/collections-iterators/closures/) |
+| Capture | ชุดของตัวแปรใน environment ที่ closure อ้างถึงใน body ของมัน ซึ่งคอมไพเลอร์จะ borrow (หรือ move ด้วย `move`) เข้าไปใน struct ที่ generate ให้ closure — เลือกโหมดที่จำกัดน้อยที่สุด (`Fn` ก่อน `FnMut` ก่อน `FnOnce`) ที่การใช้งานของแต่ละตัวแปรอนุญาต ดู [Closures](/rust/th/collections-iterators/closures/) |
+| `move` closures | keyword `move` บังคับให้ closure เอา ownership ของทุกตัวแปรที่ capture มา ไม่ว่า body จะแค่อ่านมันหรือไม่ก็ตาม จำเป็นเมื่อ closure ต้องมีชีวิตอยู่นานกว่า scope ที่มันถูกสร้างขึ้น — ที่พบบ่อยที่สุดคือตัวที่ส่งให้ `thread::spawn` ดู [Closures](/rust/th/collections-iterators/closures/) |
+
+## Concurrency
+
+| Term | Meaning |
+|------|---------|
+| Thread | OS-level thread ที่มี stack ของตัวเอง สร้างด้วย `thread::spawn` `JoinHandle::join()` จะ block thread ที่เรียกจนกว่ามันจะจบและคืนผลลัพธ์ (หรือ payload ของ panic ถ้ามัน panic) ดู [Threads](/rust/th/concurrency-testing-cargo/threads/) |
+| Scoped thread | thread ที่ lifetime ของมันถูกจำกัดขอบเขตไว้ใน `thread::scope` block ที่ครอบมันอยู่อย่างพิสูจน์ได้ ทำให้มัน borrow ข้อมูล local ที่ไม่ใช่ `'static` ได้อย่างปลอดภัย — ต่างจาก `thread::spawn` ธรรมดาที่ทุกอย่างที่ capture มาต้องเป็น `'static` หรือเป็นเจ้าของเอง ดู [Threads](/rust/th/concurrency-testing-cargo/threads/) |
+| `Mutex<T>` / `RwLock<T>` | type แบบ interior-mutability ที่เพิ่ม mutual exclusion ตอน runtime: `Mutex<T>` ยอมให้มีผู้ถือ lock ได้ทีละหนึ่ง (อ่านหรือเขียนก็ตาม); `RwLock<T>` ยอมให้มีผู้อ่านพร้อมกันหลายคน หรือผู้เขียนคนเดียว ทั้งคู่มักใช้คู่กับ `Arc<T>` เพื่อแชร์ mutable state ข้าม thread ดู [Threads](/rust/th/concurrency-testing-cargo/threads/) |
+| Channel / `sync_channel` | `std::sync::mpsc` ให้ channel แบบ multi-producer, single-consumer: การ `send` ค่าหนึ่งจะย้าย ownership ของมันไปยัง thread ที่รับในที่สุด นี่คือเหตุผลที่ channel ปลอดจาก data race โดยโครงสร้าง `mpsc::channel()` ไม่มีขอบเขต (unbounded); `mpsc::sync_channel(n)` จำกัด buffer ไว้ที่ `n` และทำให้ `send` block เมื่อเต็ม — เป็น backpressure ที่ตั้งใจ แทนที่จะให้ memory โตไม่มีขอบเขต ดู [Channels](/rust/th/concurrency-testing-cargo/channels/) |
+| Atomic | type ใน `std::sync::atomic` (หรือ reference count ข้างในของ `Arc<T>`) ที่รองรับ operation แบบ read-modify-write ที่ไม่ต้อง lock และแบ่งแยกไม่ได้ (indivisible) ตรงบน hardware เลย — ถูกกว่า `Mutex` สำหรับ counter หรือ flag ตัวเดียว แต่ไม่สามารถขยายไปป้องกันมากกว่าหนึ่งค่าพร้อมกันได้ ดู [Threads](/rust/th/concurrency-testing-cargo/threads/) |
+| Data race vs race condition | data race คือสิ่งที่เป็นไปไม่ได้ตั้งแต่ compile time ใน safe Rust — สอง thread เข้าถึง memory เดียวกันโดยมีอย่างน้อยหนึ่งฝั่งเขียนและไม่มีการ synchronize ถูกกันไว้ด้วย `Send`/`Sync` ส่วน race condition คือบั๊กเชิง logic (เช่น สอง operation ที่ปลอดภัยแยกกันแต่ให้ผลลัพธ์ผิดขึ้นอยู่กับลำดับ) ที่ระบบประเภทจับไม่ได้และไม่ได้ออกแบบมาให้จับ ดู [Concurrency, Testing & Cargo](/rust/th/concurrency-testing-cargo/) |
+| `async` / Future / executor / `.await` | `async fn` ไม่รัน body ของมันตอนถูกเรียก — มันคืน `Future` ค่าที่แทนงานที่ยังทำไม่เสร็จ `.await` จะพักการทำงานของ `async fn` ปัจจุบันไว้จนกว่า future นั้นจะ resolve โดยไม่ block OS thread เลย executor (เช่น tokio) คือ runtime ที่ poll future จนเสร็จจริง ๆ — ถ้าไม่มี executor, body ของ `async fn` จะไม่มีวันรันเลย ดู [Async Introduction](/rust/th/concurrency-testing-cargo/async-intro/) |
+| `Pin` | wrapper ที่คอมไพเลอร์ต้องใช้เพื่อ poll `Future` ได้อย่างปลอดภัย เพราะ state machine ที่คอมไพเลอร์ generate ให้ `async fn` อาจมี self-reference ข้างในที่ต้องไม่ถูกย้ายตำแหน่งใน memory เมื่อเริ่ม poll แล้ว คุณจะเจอมันผ่าน `.await` และโค้ดที่ generate ให้เป็นหลัก มากกว่าจะเขียนมันเองตอนนี้ ดู [Async Introduction](/rust/th/concurrency-testing-cargo/async-intro/) |
+
+## Toolchain
+
+| Term | Meaning |
+|------|---------|
+| Cargo | build tool และ package manager ของ Rust: `cargo build`, `cargo run`, `cargo test` และการจัดการ dependency ทั้งหมดผ่านมันแทนที่จะมี build script แยกต่อโปรเจกต์ ดู [Cargo & Tests](/rust/th/concurrency-testing-cargo/cargo-tests/) |
+| Crate | หน่วย compilation หนึ่งหน่วย — เป็น binary (มี `main`) หรือ library ก็ได้ สิ่งที่ภาษาอื่นส่วนใหญ่เรียกว่า "package" Cargo เรียกว่า crate โปรเจกต์ Cargo เดียวมี library crate หนึ่งตัวบวก binary หลายตัวได้ ดู [Cargo & Tests](/rust/th/concurrency-testing-cargo/cargo-tests/) |
+| Edition | key `edition` ใน `Cargo.toml` (`"2024"`, `"2021"`, ...) เลือก dialect ของ syntax และพฤติกรรม default ที่ crate จะถูก compile ด้วย edition ทำให้ภาษาพัฒนาต่อได้โดยไม่ทำให้ crate ที่ไม่ opt-in พัง crate ที่อยู่คนละ edition ยัง link เข้าด้วยกันได้ปกติ ดู [Cargo & Tests](/rust/th/concurrency-testing-cargo/cargo-tests/) |
+| `Cargo.lock` | ไฟล์ที่ pin เวอร์ชันที่ resolve แล้วของทุก dependency ทั้ง direct และ transitive ทำให้ build reproducible ข้ามเครื่อง commit มันไว้สำหรับ binary; สำหรับ library มักไม่ commit เพราะ crate ปลายทางจะ resolve เวอร์ชันของตัวเอง ดู [Cargo & Tests](/rust/th/concurrency-testing-cargo/cargo-tests/) |
+| `rust-version` / MSRV | `rust-version` ใน `Cargo.toml` ประกาศ Minimum Supported Rust Version ของ crate การ resolve dependency แบบรู้จัก MSRV เป็นกลไกแยกต่างหากของ Cargo ที่ต้อง opt-in เอง ควบคุมด้วย `resolver.incompatible-rust-versions` (ค่า default คือ `"fallback"` ตั้งแต่ Cargo 1.84) — ไม่เกี่ยวกับ `edition` เลย ดู [Cargo & Tests](/rust/th/concurrency-testing-cargo/cargo-tests/) |
+| Clippy | `cargo clippy` — เครื่องมือ lint ทางการของ Rust ที่เช็กมากกว่าคอมไพเลอร์เองเยอะ รวมถึงหลายตัวที่จับ smell ตรงในตารางด้านล่างพอดี (`clippy::redundant_clone`, `clippy::unwrap_used` และอื่น ๆ) ดู [Cargo & Tests](/rust/th/concurrency-testing-cargo/cargo-tests/) |
+| Rustfmt | `cargo fmt` — formatter มาตรฐานที่เขียน source file ใหม่ให้เป็น style เดียวกันทั้งหมด ตัดปัญหาถกเถียงเรื่อง formatting ออกจาก code review ไปเลย ดู [Cargo & Tests](/rust/th/concurrency-testing-cargo/cargo-tests/) |
+| Feature | ส่วนที่มีชื่อของ functionality ของ crate ที่เปิดใช้แบบ optional ประกาศไว้ใต้ `[features]` ใน `Cargo.toml` เปิดได้ต่อ dependency (`crate = { version = "1", features = ["x"] }`) ทำให้ consumer จ่ายต้นทุนเฉพาะ code path ที่ใช้จริง ดู [Cargo & Tests](/rust/th/concurrency-testing-cargo/cargo-tests/) |
+| Workspace | `[workspace]` ใน `Cargo.toml` ราก ที่รวม crate หลายตัวให้ใช้ `Cargo.lock` และ `target` directory ร่วมกัน — คำตอบของ Cargo สำหรับ monorepo ดู [Cargo & Tests](/rust/th/concurrency-testing-cargo/cargo-tests/) |
+| `cargo test` attributes | `#[test]` ทำเครื่องหมายฟังก์ชันว่าเป็น test case; `#[should_panic(expected = "...")]` ยืนยันว่ามัน panic ด้วย message ที่ตรงกัน (ถ้าละ `expected` ไว้ มันจะผ่านทันทีที่ panic *อะไรก็ได้* ไม่ใช่แค่เหตุผลที่ตั้งใจ); `#[ignore]` ข้ามมันโดย default; `cargo test -- --nocapture` แสดง output ของ `println!` แม้แต่จาก test ที่ผ่าน ดู [Cargo & Tests](/rust/th/concurrency-testing-cargo/cargo-tests/) |
+
+## อ่านโค้ดที่ AI เขียน: smell ที่ควรระวัง
+
+โค้ด Rust ที่ generate มามัก compile ผ่านมากกว่าที่มัน idiomatic หรือถูกต้องจริง ๆ ภายใต้ edge case — นี่คือ pattern ที่มีโอกาสสูงที่สุดที่จะทำให้ borrow checker พอใจ แต่ซ่อนปัญหาการออกแบบไว้แบบเงียบ ๆ
+
+| Pattern | Why it's a smell | Covered in |
+|---------|-------------------|------------|
+| `.clone()` เพื่อทำให้ borrow checker เงียบ | ทางแก้ที่คอมไพเลอร์แนะนำเองสำหรับ move error มักเป็น `.clone()` — แต่การหยิบมันมาใช้ทุกครั้งแบบอัตโนมัติ โดยไม่ถามว่าโค้ดควร borrow (`&x`) ตั้งแต่แรกหรือเปล่า ซ่อนปัญหาการออกแบบไว้หลังต้นทุน runtime จริง (แม้จะเล็ก) | [Ownership และ Moves](/rust/th/ownership-borrowing/ownership-moves/) |
+| `unwrap()` / `expect()` โรยเต็มไปหมด | โค้ด generated มักจัดการทุก `Result`/`Option` แบบเดียวกัน: unwrap แล้วไปต่อ พอพ้นสคริปต์เร็ว ๆ ไปแล้ว `unwrap()` แต่ละจุดคือ crash ที่รอ input ที่ happy path ไม่คาดถึง ซึ่งจุดนั้นควรใช้ `match`, `?`, หรือ default จริง ๆ เพื่อกู้คืนแทน | [Result](/rust/th/error-handling/result/) |
+| parameter เป็น `String` ทั้งที่ `&str` พอ | รับ `s: String` บังคับให้ caller ทุกคนต้อง allocate หรือ move owned string เข้ามา แม้ฟังก์ชันจะแค่อ่านมันเท่านั้น `&str` รับได้ทั้ง `&String` (ผ่าน coercion อัตโนมัติ) และ string literal จึงเป็น parameter type ที่ยืดหยุ่นกว่า | [Vec และ String](/rust/th/collections-iterators/vec-string/) |
+| parameter เป็น `&String` / `&Vec<T>` แทนที่จะเป็น `&str` / `&[T]` | reference ไปยัง owned type บังคับให้ caller ต้องมี `String`/`Vec<T>` อยู่จริง ทั้งที่ฟังก์ชันแค่ต้องการอ่าน slice — `&str`/`&[T]` รับ slice ของอะไรก็ได้ รวมถึง literal หรือ array ผ่าน coercion อัตโนมัติ | [Slices](/rust/th/ownership-borrowing/slices/) |
+| `Rc<RefCell<T>>` เป็นตัวเลือกแรกทันที | หยิบ state แบบแชร์ mutable และนับ reference มาใช้ ก่อนที่จะเช็กว่า ownership กับ borrowing ธรรมดา (หรือข้าม thread คือ `Arc<Mutex<T>>` หรือ channel) พอไหม มัน compile ผ่านก็จริง แต่มันสละการรับประกันตอน compile time ที่เป็นจุดคุ้มค่าของโมเดล ownership ของ Rust ไปเลย | [Threads](/rust/th/concurrency-testing-cargo/threads/) |
+| arm `_ =>` แบบครอบคลุมทุกอย่างบน enum match | arm `_` compile ผ่านสวยกับ variant ที่มีอยู่วันนี้ แต่ "จัดการ" variant ที่เพิ่มมาทีหลังแบบเงียบ ๆ ด้วย — รวมถึงตัวที่ควรมี logic เฉพาะของตัวเอง การ match ทุก variant ตามชื่อ (หรือทำเครื่องหมาย enum ด้วย `#[non_exhaustive]` อย่างตั้งใจ) เปลี่ยน case ที่พลาดในอนาคตให้กลายเป็น compile error (`E0004`) แทนที่จะเป็นพฤติกรรมผิดแบบเงียบ ๆ | [Pattern Matching](/rust/th/structs-enums-matching/pattern-matching/) |
+| ตัด byte ของ text ด้วย range ที่ hardcode ไว้ | `&s[0..1]` index เข้าไปใน *byte* แบบ UTF-8 ของ `String` ไม่ใช่ตัวอักษร — สำหรับ text ที่ไม่ใช่ ASCII มัน panic ทันทีด้วย "byte index ... is not a char boundary" เมื่อตัวอักษรหลาย byte อยู่คร่อมจุดตัด `.chars()`, `.char_indices()`, หรือ crate ที่รองรับ Unicode หลีกเลี่ยงปัญหานี้ได้ทั้งหมด | [Vec และ String](/rust/th/collections-iterators/vec-string/) |
+| แปะ `'static` เพื่อทำให้ lifetime error เงียบ | เติม `'static` ให้ reference หรือ bound เพราะคอมไพเลอร์บ่น โดยไม่เข้าใจว่าทำไม จะยัง compile ไม่ผ่านด้วยเหตุผลอื่นที่ไม่เกี่ยวกัน หรือไม่ก็บังคับให้ caller ต้องส่งเฉพาะข้อมูลที่มีชีวิตอยู่ตลอดทั้งโปรแกรมเท่านั้น — ซึ่งมักไม่ใช่สิ่งที่ต้องการจริง ๆ | [Lifetimes](/rust/th/traits-generics/lifetimes/) |
+| `Box<dyn Error>` เป็น return type ของ public API ใน library | สะดวกใน `main` ของ binary แต่ใน library API มันลบความสามารถของ caller ที่จะ `match` ว่าความล้มเหลวไหนเกิดขึ้นจริง — enum error แบบ concrete ที่ implement `Error` (พร้อม `From` ให้แต่ละ error ต้นทาง) เก็บข้อมูลนั้นไว้ครบ | [Custom Errors](/rust/th/error-handling/custom-errors/) |
+| `#[should_panic]` ที่ไม่มี `expected = "..."` | `#[should_panic]` เปล่า ๆ จะผ่านทันทีที่ฟังก์ชัน panic *อะไรก็ได้* — รวมถึงจากบั๊กที่ไม่เกี่ยวข้องกันเลย แทนที่จะพิสูจน์ว่ามัน panic ด้วยเหตุผลที่ test อ้างว่าจะเช็ก | [Cargo & Tests](/rust/th/concurrency-testing-cargo/cargo-tests/) |
+
+## เมื่อไม่ควรใช้ literal Thai translation
+
+| หลีกเลี่ยง | ใช้แทน |
+|------------|--------|
+| การยืม / ผู้ยืม | borrow |
+| การขว้าง (สำหรับ panic) | panic |
+| ตัวชี้อัจฉริยะ | smart pointer (`Box`, `Rc`, `Arc`) |
+| ความไม่แน่นอนของข้อมูล (สำหรับ interior mutability) | interior mutability |
+| ตารางเสมือน | vtable |
+| ลักษณะ (สำหรับ trait) | trait |
+| ทั่วไป / สามัญ (สำหรับ generic) | generic |
+| อายุการใช้งาน | lifetime |
+| ท่อส่งข้อความ | channel |
+| ตัวดำเนินการล่วงหน้า (สำหรับ iterator adapter) | adapter |
+| กล่อง (สำหรับ `Box<T>`) | `Box<T>` |
+| หีบห่อ (สำหรับ crate) | crate |
+| รุ่น (สำหรับ edition) | edition |
+
+<ProgressTracker client:visible id="th/glossary" />
