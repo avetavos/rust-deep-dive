@@ -5,6 +5,7 @@
 //   // @skip-verify <reason>       — illustrative fragment / needs crates / stdin
 //   // @no-run                     — compile only (long-running, threads with sleep, etc.)
 //   // @expect-panic               — compiles, and the run must exit non-zero (panic)
+// Snippets containing #[test] are built with `rustc --test` and the test binary is run (all tests must pass).
 // A snippet without `fn main` is wrapped in `fn main() { ... }` for the check (reported as WRAP).
 // Usage: node tools/verify-snippets.mjs [pathFilter] [--emit]
 //   --emit writes each named literal's real stdout to .verify/outputs.json (file -> name -> output).
@@ -34,16 +35,19 @@ for (const f of files) {
     const expect = (first.match(/^\/\/ @expect-error (.+)$/)?.[1] ?? '').split(/\s+/).filter(Boolean).sort();
     const noRun = /^\/\/ @no-run/.test(first);
     const expectPanic = /^\/\/ @expect-panic/.test(first);
-    const wrap = !/\bfn\s+main\s*\(/.test(body);
+    // Snippets with #[test] are compiled as a test harness (`rustc --test`) and the test binary is run,
+    // so code inside #[cfg(test)] is really type-checked instead of being cfg'd away.
+    const isTest = /#\[test\]/.test(body);
+    const wrap = !isTest && !/\bfn\s+main\s*\(/.test(body);
     const code = wrap ? `fn main() {\n${body}\n}\n` : body;
     const dir = `.verify/${f.replace(/[\/.]/g, '_')}`;
     mkdirSync(dir, { recursive: true });
     const srcFile = `${dir}/snippet${i}.rs`, bin = `${dir}/snippet${i}.bin`;
     writeFileSync(srcFile, code);
-    const c = spawnSync('rustc', ['--edition', '2024', '-A', 'warnings', '-o', bin, srcFile], { encoding: 'utf8', timeout: 120000 });
+    const c = spawnSync('rustc', ['--edition', '2024', '-A', 'warnings', ...(isTest ? ['--test'] : []), '-o', bin, srcFile], { encoding: 'utf8', timeout: 120000 });
     const cerr = (c.stdout ?? '') + (c.stderr ?? '');
     const codes = codesOf(cerr);
-    let ok, line = `${f}#${i}${name ? ` (${name})` : ''}${wrap ? ' WRAP' : ''}`;
+    let ok, line = `${f}#${i}${name ? ` (${name})` : ''}${wrap ? ' WRAP' : ''}${isTest ? ' TEST' : ''}`;
     if (expect.length) {
       ok = c.status !== 0 && JSON.stringify(codes) === JSON.stringify(expect);
       line += ` expect[${expect}] got[${codes}]`;
