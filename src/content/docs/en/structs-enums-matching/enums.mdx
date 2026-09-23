@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Basic Enums
 
@@ -64,6 +66,16 @@ enum Message {
 }
 ```
 
+<Mermaid code={`flowchart LR
+    subgraph "Shape (tagged union, one value at a time)"
+    T["tag: which variant?"] --> V0["Circle: f64"]
+    T --> V1["Rectangle: f64, f64"]
+    T --> V2["Triangle: f64, f64, f64"]
+    end
+    note["size_of::&lt;Shape&gt;() = size of the tag + size of the LARGEST variant's data"]`} title="An enum's memory layout is a tag plus the largest variant" />
+
+A `Shape` value is never "a Circle and a Rectangle at once" — it is a small tag (which variant is this?) plus enough space for whichever variant's data is largest. `std::mem::size_of::<Shape>()` reflects that: the enum is roughly the size of its biggest variant, not the sum of all variants' sizes.
+
 ## `impl` on Enums
 
 You can add methods to enums the same way you add them to structs — with an `impl` block and a `match` inside:
@@ -97,7 +109,96 @@ enum Option<T> {
 }
 ```
 
-`Some(value)` wraps a present value; `None` represents the absence of a value. The compiler forces you to handle both cases before you can use the inner value, eliminating null-pointer bugs at compile time.
+`Some(value)` wraps a present value; `None` represents the absence of a value. The compiler forces you to handle both cases before you can use the inner value, eliminating null-pointer bugs at compile time. The [next lesson](/rust/en/structs-enums-matching/option/) covers `Option<T>` in depth.
+
+## Enum Discriminants
+
+Every enum variant has a hidden integer **discriminant**, even a data-carrying one. By default it starts at `0` and counts up in declaration order, but you can set it explicitly, and cast a *unit-only* enum to an integer with `as`:
+
+```rust
+enum StatusCode {
+    Ok = 200,
+    NotFound = 404,
+    ServerError = 500,
+}
+
+#[repr(u8)]
+enum Priority {
+    Low = 1,
+    Medium = 5,
+    High = 10,
+}
+
+fn main() {
+    println!("NotFound as i32: {}", StatusCode::NotFound as i32);
+    println!("Priority::High as u8: {}", Priority::High as u8);
+    println!("size_of StatusCode: {}", std::mem::size_of::<StatusCode>());
+    println!("size_of Priority: {}", std::mem::size_of::<Priority>());
+}
+```
+
+```text
+NotFound as i32: 404
+Priority::High as u8: 10
+size_of StatusCode: 2
+size_of Priority: 1
+```
+
+`#[repr(u8)]` pins the discriminant's underlying integer type to `u8` (and requires every discriminant to fit in it); without a `#[repr(...)]`, the compiler is free to pick whatever integer type is large enough to hold the discriminants it needs — here, `StatusCode`'s largest value `500` needs two bytes, so `size_of` is `2` even though nothing else was declared about its representation.
+
+### What the Compiler Says: Duplicate Discriminants Are Rejected
+
+Two variants cannot share the same discriminant value — the whole point of a discriminant is to tell variants apart:
+
+```rust
+// @expect-error E0081
+enum Flag {
+    A = 1,
+    B = 1,
+}
+
+fn main() {
+    println!("{}", Flag::A as i32);
+}
+```
+
+```text
+error[E0081]: discriminant value `1` assigned more than once
+ --> src/main.rs:2:1
+  |
+2 | enum Flag {
+  | ^^^^^^^^^
+3 |     A = 1,
+  |         - `1` assigned here
+4 |     B = 1,
+  |         - `1` assigned here
+
+error: aborting due to 1 previous error
+```
+
+Data-carrying variants (`Circle(f64)`) also have discriminants internally — that is how `match` and `as` (on the unit-only subset) tell them apart — but you cannot `as`-cast a data-carrying enum to an integer at all, since the cast would have nowhere to put the data.
+
+export const discriminantCode = `enum StatusCode {
+    Ok = 200,
+    NotFound = 404,
+    ServerError = 500,
+}
+
+#[repr(u8)]
+enum Priority {
+    Low = 1,
+    Medium = 5,
+    High = 10,
+}
+
+fn main() {
+    println!("NotFound as i32: {}", StatusCode::NotFound as i32);
+    println!("Priority::High as u8: {}", Priority::High as u8);
+    println!("size_of StatusCode: {}", std::mem::size_of::<StatusCode>());
+    println!("size_of Priority: {}", std::mem::size_of::<Priority>());
+}`;
+
+<Playground code={discriminantCode} />
 
 export const enumsCode = `#[derive(Debug)]
 enum Shape {
@@ -146,7 +247,82 @@ fn main() {
 
 <Playground code={enumsCode} />
 
-export const enumsQuiz = [
+## Enums With Data vs. Duplicating a Struct
+
+`Shape` above uses one enum with per-variant data. A common AI-generated alternative is a giant enum where **every** variant repeats the same struct-shaped fields, with only one or two actually differing:
+
+```rust
+enum Event {
+    Click { x: i32, y: i32, button: u8, timestamp: u64 },
+    KeyPress { x: i32, y: i32, button: u8, timestamp: u64, key: char },
+    Scroll { x: i32, y: i32, button: u8, timestamp: u64, delta: f64 },
+}
+```
+
+Every arm of every `match` on `Event` has to repeat `x, y, button, timestamp` even when it only cares about `key` or `delta`. The fix is to factor the shared fields into a struct and let the enum hold only what actually varies:
+
+```rust
+struct EventInfo {
+    x: i32,
+    y: i32,
+    button: u8,
+    timestamp: u64,
+}
+
+enum EventKind {
+    Click,
+    KeyPress(char),
+    Scroll(f64),
+}
+
+struct Event {
+    info: EventInfo,
+    kind: EventKind,
+}
+```
+
+Now a `match event.kind` only has to name the field that differs, and adding a new common field (say, `device_id`) means editing `EventInfo` once instead of every variant.
+
+## Mental Model
+
+An enum's variants are not independent types glued together — they are one type with a hidden tag saying which shape is currently live, sized to fit the *largest* variant. Every variant, whether unit (`Quit`), tuple (`Write(String)`), or struct-like (`Move { x, y }`), is really just "the tag, plus that variant's own fields" — which is exactly what makes a single `match self { ... }` able to handle all of them uniformly.
+
+## Trade-offs
+
+An enum's size is fixed to its largest variant — a `Circle(f64)` next to a `Triangle(f64, f64, f64)` means every `Shape` value reserves triangle-sized space even when it's holding a circle. This is usually a fine trade for the alternative (a `Box<dyn Trait>` per shape, with a heap allocation and dynamic dispatch for every value) unless one variant is dramatically larger than the rest, in which case boxing just that variant's data keeps the common case small. Factoring shared fields into a struct (as in `EventInfo`) costs one extra level of nesting (`event.info.x` instead of destructuring `x` directly in every arm) in exchange for a single edit point when a shared field changes.
+
+## Common Misconceptions
+
+- **"An enum takes as much memory as the sum of all its variants."** It takes roughly the size of its *largest* variant plus a small tag — variants are alternatives, never held simultaneously, so there is no reason to reserve space for all of them at once.
+- **"You can `as`-cast any enum to an integer to get its discriminant."** Only enums where every variant is a plain unit variant (no data) support this. `Shape::Circle(3.0) as i32` is not valid — a data-carrying variant's discriminant is an internal implementation detail the language does not expose through `as`.
+- **"Two variants with different fields but the same overall meaning should just be separate top-level structs, not variants."** That throws away the compiler's exhaustiveness check — with one enum, adding a new kind forces every `match` to be updated; with unrelated structs, nothing connects them and a caller can easily forget to handle a new case.
+
+## Reading AI-generated code
+
+AI-generated event/message types often duplicate the same handful of fields across every variant instead of factoring them into a shared struct, because it's the easiest thing to type when adding "just one more variant" to an existing enum.
+
+<SpotTheBug code={`enum Event {
+    Click { x: i32, y: i32, button: u8, timestamp: u64 },
+    KeyPress { x: i32, y: i32, button: u8, timestamp: u64, key: char },
+    Scroll { x: i32, y: i32, button: u8, timestamp: u64, delta: f64 },
+}
+
+fn describe(e: &Event) -> String {
+    match e {
+        Event::Click { x, y, .. } => format!("click at ({x}, {y})"),
+        Event::KeyPress { key, .. } => format!("key {key}"),
+        Event::Scroll { delta, .. } => format!("scroll {delta}"),
+    }
+}
+`}>
+This compiles and works, but `x`, `y`, `button`, and `timestamp` are copy-pasted into all three variants. Adding a fourth event kind means retyping all four shared fields again, and adding a new shared field (say, `device_id`) means editing every variant instead of one place. The fix factors the shared fields into a struct (`EventInfo`) held once, with the enum reduced to only the part that actually varies per kind (`EventKind::Click`, `EventKind::KeyPress(char)`, `EventKind::Scroll(f64)`) — the same relationship a struct with an embedded enum field already models elsewhere in this lesson.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+An enum is a tag plus room for its largest variant, never all variants at once — and when every variant repeats the same handful of fields, that repetition is a signal to factor those fields into a struct the enum wraps, not a reason to keep copy-pasting.
+</Callout>
+
+export const quizEnums = [
     {
         q: 'Which of these is a valid way to construct a data-carrying enum variant?',
         options: [
@@ -156,6 +332,7 @@ export const enumsQuiz = [
             'Shape { Circle: 3.0 }',
         ],
         answer: 2,
+        explain: "Enum variants are namespaced under the enum type with ::, and a tuple-style variant like Circle(f64) is constructed by calling it like a function: Shape::Circle(3.0).",
     },
     {
         q: "What does Rust's Option<T> replace compared to other languages?",
@@ -166,6 +343,7 @@ export const enumsQuiz = [
             'Dynamic dispatch',
         ],
         answer: 1,
+        explain: "Option<T>'s Some/None makes 'this value might be absent' part of the type system, replacing the null/nil references common in many other languages.",
     },
     {
         q: 'Can you define methods on an enum in Rust?',
@@ -176,9 +354,54 @@ export const enumsQuiz = [
             'Only if the enum derives Default.',
         ],
         answer: 1,
+        explain: "impl blocks work identically for enums and structs — you can define both instance methods (&self, &mut self, self) and associated functions.",
+    },
+    {
+        q: 'What does this fail to compile with?\n```rust\nenum Flag {\n    A = 1,\n    B = 1,\n}\nfn main() {\n    println!("{}", Flag::A as i32);\n}\n```',
+        options: [
+            'It compiles fine — discriminants can repeat',
+            'error[E0081]: discriminant value `1` assigned more than once',
+            'error[E0308]: mismatched types',
+            'error[E0004]: non-exhaustive patterns',
+        ],
+        answer: 1,
+        explain: "Each unit variant needs a distinct discriminant so the compiler (and `as`-casts) can tell variants apart; assigning the same value to two variants is E0081.",
+    },
+    {
+        q: 'Roughly how much memory does an enum like `enum Shape { Circle(f64), Rectangle(f64, f64), Triangle(f64, f64, f64) }` use per value?',
+        options: [
+            'The sum of the sizes of all three variants',
+            'Roughly the size of its largest variant (Triangle) plus a small tag',
+            'Always exactly 8 bytes, regardless of variants',
+            'It depends on which variant was constructed first at runtime',
+        ],
+        answer: 1,
+        explain: "An enum value is only ever one variant at a time, so the compiler only needs to reserve space for the largest variant's data plus a tag saying which one is live — not the sum of every variant.",
+    },
+    {
+        q: 'What is the main problem with an enum where every variant repeats the same struct-shaped fields (like `Event` with `x, y, button, timestamp` copied into Click, KeyPress, and Scroll)?',
+        options: [
+            'It fails to compile',
+            'It runs slower than a struct-based design',
+            'Adding or changing a shared field means editing every variant instead of one place',
+            'Rust enums cannot have more than 2 fields per variant',
+        ],
+        answer: 2,
+        explain: "The code compiles and runs fine; the problem is maintainability — a shared field lives in N places instead of one, so factoring it into a struct the enum wraps (or holds alongside) removes the duplication.",
+    },
+    {
+        q: 'Which unit-only enum can be cast to an integer with `as`?\n```rust\nenum A { X = 1, Y = 2 }\nenum B { Circle(f64), Square(f64) }\n```',
+        options: [
+            'Only B, because it carries data',
+            'Only A, because every variant is a plain unit variant with no data',
+            'Both A and B',
+            'Neither — `as` never works on enums',
+        ],
+        answer: 1,
+        explain: "as-casting an enum to an integer only works when every variant is a unit variant (no payload). B's variants carry f64 payloads, so there is no single integer that could represent a B value.",
     },
 ];
 
-<Quiz client:visible id="structs-enums-matching/enums" questions={enumsQuiz} />
+<Quiz client:visible id="structs-enums-matching/enums" questions={quizEnums} />
 
 <ProgressTracker client:visible id="structs-enums-matching/enums" />

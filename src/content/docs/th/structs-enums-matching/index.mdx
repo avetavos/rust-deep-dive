@@ -6,8 +6,11 @@ sidebar:
 ---
 
 import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## ภาพรวมโมดูล
 
@@ -20,6 +23,14 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 **`match`** คือ expression สำหรับ pattern matching ของ Rust โดยแตกสาขาตามรูปร่างของค่า ดึงข้อมูลออกจาก variant ของ enum และตรวจสอบความครบถ้วนโดยคอมไพเลอร์ — ทุกกรณีที่เป็นไปได้ต้องได้รับการจัดการ
 
 เมื่อใช้ร่วมกัน ฟีเจอร์ทั้งสามนี้ช่วยให้คุณกำหนดโมเดลข้อมูลที่ชัดเจน อ่านง่าย และเขียน control flow ที่คอมไพเลอร์ตรวจสอบให้คุณเอง
+
+<Mermaid code={`flowchart TD
+    Q{What are you modeling?} -->|A record with named fields, all present at once| S[struct]
+    Q -->|One of several distinct choices, maybe with different data each| E[enum]
+    Q -->|You already have an enum or Option/Result value| M["match / if let"]
+    S -->|"add behavior"| I["impl block: methods + Self"]
+    E -->|"branch on which variant it is"| M
+    M -->|"compiler checks every variant is handled"| Ex["exhaustiveness"]`} title="เลือกระหว่าง struct, enum และ match" />
 
 export const indexCode = `#[derive(Debug)]
 struct Point { x: f64, y: f64 }
@@ -52,11 +63,87 @@ fn main() {
 
 <Playground code={indexCode} />
 
+## Compiler บอกว่าอย่างไร: ประเภทข้อมูลที่กำหนดเองไม่มีวิธี print เริ่มต้น
+
+Struct หรือ enum ที่คุณกำหนดเองไม่มี format ที่มนุษย์อ่านได้ในตัว `println!("{}", value)` ต้องการ trait `Display` ส่วน `println!("{:?}", value)` ต้องการ `Debug` — ทั้งสองไม่มีอยู่จนกว่าคุณจะให้มัน ส่วนใหญ่ด้วย `#[derive(Debug)]`:
+
+```rust
+// @expect-error E0277
+struct Point { x: f64, y: f64 }
+
+fn main() {
+    let p = Point { x: 1.0, y: 2.0 };
+    println!("{}", p);
+}
+```
+
+```text
+error[E0277]: `Point` doesn't implement `std::fmt::Display`
+ --> src/main.rs:5:20
+  |
+5 |     println!("{}", p);
+  |               --   ^ `Point` cannot be formatted with the default formatter
+  |               |
+  |               required by this formatting parameter
+  |
+help: the trait `std::fmt::Display` is not implemented for `Point`
+ --> src/main.rs:1:1
+  |
+1 | struct Point { x: f64, y: f64 }
+  | ^^^^^^^^^^^^
+  = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+
+error: aborting due to 1 previous error
+```
+
+ข้อเสนอแนะของคอมไพเลอร์เอง — ลอง `{:?}` — เลื่อนปัญหาไปแค่ก้าวเดียว เพราะ `{:?}` ต้องการ `Debug` ซึ่งก็ไม่มีเช่นกันจนกว่าคุณจะ `#[derive(Debug)]` นี่ไม่ใช่ข้อจำกัดพิเศษสำหรับ struct และ enum: มันคือกฎเดียวกันกับ "ไม่มี implicit conversion ไม่มี implicit อะไรเลย" ที่คุณจะเห็นตลอดทั้ง Rust ประเภทหนึ่งคือสิ่งที่คุณประกาศไว้เป๊ะๆ ไม่มีอะไรมากไปกว่านั้น จนกว่าคุณจะ opt in เอง
+
+## Mental Model
+
+`struct` คือ record ที่มีรูปร่างตายตัว: ทุก instance มีทุก field เสมอ `enum` คือทางเลือกระหว่างรูปร่าง: ทุก instance เป็น *variant เดียวเท่านั้น* ในบรรดา variant ทั้งหมด และแต่ละ variant สามารถพกข้อมูลที่ต่างกันโดยสิ้นเชิง `match` คือวิธีที่ทำให้คอมไพเลอร์พิสูจน์ว่าคุณจัดการทุกรูปร่างเหล่านั้นแล้ว — มันไม่ใช่ chain `if`/`else if` แบบ runtime ที่แฝงตัวมา แต่เป็นการตรวจสอบแบบ static ที่ทำงานตอน compile time ก่อนที่โปรแกรมจะรันด้วยซ้ำ
+
+## Trade-offs
+
+`struct` ไม่มีต้นทุนอะไรสำหรับการจำลอง "field ที่คงที่ มีอยู่เสมอ" แต่ไม่สามารถแทน "หนึ่งในหลายทางเลือก" ได้โดยไม่ต้องใช้ field แบบ `Option<T>` ที่งุ่มง่าม (ซึ่งส่วนใหญ่จะเป็น `None` ในเวลาใดเวลาหนึ่ง) หรือฝัง field แบบ enum เข้าไป — ซึ่งนั่นคือสิ่งที่ `enum` มีไว้สำหรับ `enum` มีต้นทุนคือต้อง `match` (หรือ `if let`) ทุกจุดที่คุณต้องใช้ค่านั้น เพราะคอมไพเลอร์จะไม่ยอมให้คุณสมมติว่า variant ไหนที่คุณมี แต่แลกมาด้วยการที่การเพิ่ม variant ใหม่ในภายหลังจะปรากฏเป็น compile error ในทุกจุดที่ต้องอัปเดต แทนที่จะเป็นเรื่องเซอร์ไพรส์ตอน runtime
+
+## Common Misconceptions
+
+- **"enum ใน Rust ก็เหมือนกับ enum ใน C หรือ Java"** enum แบบ C คือจำนวนเต็มที่มีชื่อ variant ของ enum ใน Rust สามารถพกข้อมูลของตัวเองได้ (`Circle(f64)`, `Message::Move { x: i32, y: i32 }`) ทำให้ใกล้เคียงกับสิ่งที่ภาษาอื่นเรียกว่า tagged union หรือ algebraic data type มากกว่า
+- **"`match` ก็แค่ `switch` statement ที่ดูดีกว่า"** `switch` fall through โดยค่าเริ่มต้นและไม่บังคับให้จัดการทุก case `match` เป็น *expression* (มันสร้างค่าออกมา) และคอมไพเลอร์จะปฏิเสธมันทันทีถ้ามีค่าใดของ type ที่จับคู่ถูกทิ้งไว้ไม่จัดการ
+- **"ผมสามารถ print struct ใดๆ ด้วย `{}` ได้เมื่อมัน derive `Debug` แล้ว"** `{}` ต้องการ `Display`; `{:?}` ต้องการ `Debug` การ derive `Debug` ไม่เคยตอบสนอง format specifier `{}` เลย — มันเป็นสอง trait ที่ต่างกัน มี format specifier ต่างกัน
+
+## อ่านโค้ดที่ AI เขียน
+
+AI มักจะจำลองทางเลือกที่ตายตัวด้วย `&str` เทียบด้วย `==` เพราะมัน "ใช้งานได้" โดยไม่ต้องกำหนด type ใหม่ — แต่คอมไพเลอร์ไม่สามารถจับ typo ในสตริงได้เหมือนที่มันจับ enum variant สะกดผิด
+
+<SpotTheBug code={`fn move_player(direction: &str) {
+    if direction == "north" {
+        println!("moving north");
+    } else if direction == "south" {
+        println!("moving south");
+    } else {
+        println!("unknown direction: {}", direction);
+    }
+}
+
+fn main() {
+    move_player("north");
+    move_player("nroth"); // typo: silently falls into the "unknown" branch
+}
+`}>
+`"nroth"` compile ผ่านสบายๆ — มันคือ string ที่ถูกต้องสมบูรณ์ — และตกลงไปที่ branch `else` แบบเงียบๆ ตอน runtime ไม่มีอะไรจับได้จนกว่าจะมีคนสังเกตเห็นพฤติกรรมที่ผิด ทางแก้คือ `enum Direction { North, South, East, West }` ที่ match ครบทุก case: `Direction::Nrogh` ไม่ใช่ typo ที่คอมไพเลอร์จะปล่อยผ่าน เพราะมันไม่ใช่ variant ใดๆ ของ enum เลย — `rustc` จะปฏิเสธมันก่อนที่โปรแกรมจะรันด้วยซ้ำ
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+จำลอง "field ที่มีอยู่เสมอ" ด้วย struct จำลอง "หนึ่งในรูปร่างเหล่านี้เท่านั้น" ด้วย enum และให้ `match` บังคับให้คอมไพเลอร์พิสูจน์ว่าทุกรูปร่างถูกจัดการแล้ว — typo ใน string comparison compile ผ่าน แต่ typo ในชื่อ enum variant ไม่ผ่าน
+</Callout>
+
 export const quizIndex = [
     {
         q: 'keyword ใดที่ใช้ประกาศ named struct ใน Rust?',
         options: ['type', 'struct', 'class', 'record'],
         answer: 1,
+        explain: "struct คือ keyword สำหรับ record type ที่มีชื่อและรูปร่างตายตัวใน Rust ส่วน type สร้าง type alias ไม่ใช่ type ใหม่ ส่วน class และ record ไม่มีอยู่ใน Rust",
     },
     {
         q: 'match expression ใน Rust มีคุณสมบัติใดที่ภาษาอื่นหลายภาษาขาดไป?',
@@ -67,6 +154,51 @@ export const quizIndex = [
             'คอมไพล์เป็น jump table เสมอ',
         ],
         answer: 1,
+        explain: "match ถูกตรวจสอบความครบถ้วนตอน compile time — การเว้น case ไว้คือ compile error ไม่ใช่ fall-through แบบ runtime เหมือน switch แบบ C",
+    },
+    {
+        q: 'โค้ดนี้ print อะไร (หรือ compile ไม่ผ่าน)?\n```rust\nstruct Point { x: f64, y: f64 }\nfn main() {\n    let p = Point { x: 1.0, y: 2.0 };\n    println!("{}", p);\n}\n```',
+        options: [
+            'Point { x: 1.0, y: 2.0 }',
+            '(1.0, 2.0)',
+            'compile ไม่ผ่าน: error[E0277] — Point ไม่ implement Display',
+            'print string ว่างเปล่า',
+        ],
+        answer: 2,
+        explain: "println!(\"{}\", ...) แบบธรรมดาต้องการ trait Display struct ที่กำหนดเองไม่ implement ทั้ง Display และ Debug โดยค่าเริ่มต้น นี่จึงเป็น E0277 ไม่ใช่ output ตอน runtime",
+    },
+    {
+        q: 'การเพิ่ม `#[derive(Debug)]` ให้ struct ทำให้คุณทำอะไรได้?',
+        options: [
+            'print ด้วย `{}`',
+            'print ด้วย `{:?}`',
+            'เปรียบเทียบสอง instance ด้วย `==`',
+            'implement Default ให้อัตโนมัติ',
+        ],
+        answer: 1,
+        explain: "#[derive(Debug)] implement trait Debug ซึ่งเป็นสิ่งที่ format specifier {:?} ต้องการ มันไม่มีผลต่อ {} (Display), == (PartialEq) หรือ Default",
+    },
+    {
+        q: 'ทำไมการแทนทางเลือกที่ตายตัวด้วยการเทียบ `&str` (`if direction == "north"`) จึงอ่อนกว่าการใช้ enum?',
+        options: [
+            'string comparison ช้ากว่าตอน runtime ซึ่งเป็นข้อเสียเดียว',
+            'typo อย่าง `"nrogh"` compile ผ่านและตกไป branch ที่ผิดแบบเงียบๆ ส่วน typo ในชื่อ enum variant ถูกปฏิเสธตอน compile time',
+            '&str เปรียบเทียบด้วย == ไม่ได้ใน Rust',
+            'enum เก็บข้อมูล string ไม่ได้ จึงต้องเปรียบเทียบแบบนี้',
+        ],
+        answer: 1,
+        explain: "string ใดๆ ก็เป็น &str ที่ถูกต้อง ดังนั้นตัวเลือกที่พิมพ์ผิดจึง compile ผ่านและ fail แค่ตอน runtime (หรือไม่มีใครสังเกตเลย) ส่วนชื่อ enum variant ถูกตรวจกับรายชื่อ variant จริงของ type ตอน compile time",
+    },
+    {
+        q: 'โค้ดนี้ print อะไร (หรือ compile ไม่ผ่าน)?\n```rust\nstruct Point { x: f64, y: f64 }\nfn main() {\n    let p = Point { x: 1.0, y: 2.0 };\n    println!("{:?}", p);\n}\n```',
+        options: [
+            'Point { x: 1.0, y: 2.0 }',
+            'compile ไม่ผ่าน: error[E0277] — Point ไม่ implement Debug',
+            '{x: 1.0, y: 2.0}',
+            'print memory address ของ p',
+        ],
+        answer: 1,
+        explain: "{:?} ต้องการ Debug ซึ่งไม่ implement เว้นแต่ struct จะ derive มัน (หรือ implement เอง) หากไม่มี #[derive(Debug)] นี่คือ E0277 ตระกูลเดียวกับการ print ด้วย {} โดยไม่มี Display",
     },
 ];
 

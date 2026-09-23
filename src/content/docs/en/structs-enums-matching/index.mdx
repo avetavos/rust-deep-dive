@@ -6,8 +6,11 @@ sidebar:
 ---
 
 import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Module Overview
 
@@ -20,6 +23,14 @@ This module introduces three of Rust's most important building blocks for modeli
 **`match`** is Rust's pattern-matching expression. It branches on the shape of a value, binds data from enum variants, and is checked exhaustively by the compiler — every possible case must be handled.
 
 Together, these three features let you define precise, self-documenting data models and write control flow that the compiler verifies for you.
+
+<Mermaid code={`flowchart TD
+    Q{What are you modeling?} -->|A record with named fields, all present at once| S[struct]
+    Q -->|One of several distinct choices, maybe with different data each| E[enum]
+    Q -->|You already have an enum or Option/Result value| M["match / if let"]
+    S -->|"add behavior"| I["impl block: methods + Self"]
+    E -->|"branch on which variant it is"| M
+    M -->|"compiler checks every variant is handled"| Ex["exhaustiveness"]`} title="Choosing between struct, enum, and match" />
 
 export const indexCode = `#[derive(Debug)]
 struct Point { x: f64, y: f64 }
@@ -52,11 +63,87 @@ fn main() {
 
 <Playground code={indexCode} />
 
+## What the Compiler Says: Custom Types Have No Default Way to Print
+
+A struct or enum you define has no built-in human-readable format. `println!("{}", value)` asks for the `Display` trait, and `println!("{:?}", value)` asks for `Debug` — neither exists until you provide it, usually with `#[derive(Debug)]`:
+
+```rust
+// @expect-error E0277
+struct Point { x: f64, y: f64 }
+
+fn main() {
+    let p = Point { x: 1.0, y: 2.0 };
+    println!("{}", p);
+}
+```
+
+```text
+error[E0277]: `Point` doesn't implement `std::fmt::Display`
+ --> src/main.rs:5:20
+  |
+5 |     println!("{}", p);
+  |               --   ^ `Point` cannot be formatted with the default formatter
+  |               |
+  |               required by this formatting parameter
+  |
+help: the trait `std::fmt::Display` is not implemented for `Point`
+ --> src/main.rs:1:1
+  |
+1 | struct Point { x: f64, y: f64 }
+  | ^^^^^^^^^^^^
+  = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+
+error: aborting due to 1 previous error
+```
+
+The compiler's own suggestion — try `{:?}` — only moves the problem one step, since `{:?}` needs `Debug`, which is equally absent until you `#[derive(Debug)]`. This is not a special-case restriction on structs and enums: it is the same "no implicit conversion, no implicit anything" rule you will see throughout Rust. A type is exactly what you declared it to be, nothing more, until you opt in.
+
+## Mental Model
+
+A `struct` is a fixed-shape record: every instance has every field, always. An `enum` is a choice between shapes: every instance is *exactly one* of its variants, and different variants can carry completely different data. `match` is how you get the compiler to prove you handled every one of those shapes — it is not a runtime `if`/`else if` chain in disguise, it is a static check that runs at compile time, before your program ever executes.
+
+## Trade-offs
+
+A `struct` costs you nothing to model "always-present, fixed fields," but it cannot represent "one of several alternatives" without either an awkward set of `Option<T>` fields (most of which are `None` at any given time) or an embedded enum field — which is exactly what an `enum` is for. An `enum` costs you a `match` (or `if let`) at every point you need to use the value, since the compiler will not let you assume which variant you have; in exchange, adding a new variant later surfaces every place that needs updating, as a compile error, instead of a runtime surprise.
+
+## Common Misconceptions
+
+- **"An enum in Rust is basically the same as an enum in C or Java."** A C-style enum is a named integer. A Rust enum variant can carry its own data (`Circle(f64)`, `Message::Move { x: i32, y: i32 }`), making it closer to what other languages call a tagged union or algebraic data type.
+- **"`match` is just a fancier `switch` statement."** `switch` falls through by default and does not require every case to be handled. `match` is an *expression* (it produces a value) and the compiler rejects it outright if any possible value of the matched type is left unhandled.
+- **"I can print any struct with `{}` once it derives `Debug`."** `{}` asks for `Display`; `{:?}` asks for `Debug`. Deriving `Debug` never satisfies a `{}` format specifier — they are two different traits with two different format specifiers.
+
+## Reading AI-generated code
+
+AI assistants often model a fixed set of choices as a `&str` compared with `==`, because it "just works" without defining a new type — but the compiler cannot catch a typo in a string the way it catches a misspelled enum variant.
+
+<SpotTheBug code={`fn move_player(direction: &str) {
+    if direction == "north" {
+        println!("moving north");
+    } else if direction == "south" {
+        println!("moving south");
+    } else {
+        println!("unknown direction: {}", direction);
+    }
+}
+
+fn main() {
+    move_player("north");
+    move_player("nroth"); // typo: silently falls into the "unknown" branch
+}
+`}>
+`"nroth"` compiles fine — it is a perfectly valid string — and silently falls through to the `else` branch at runtime. Nothing catches this until a human notices the wrong behavior. The fix is an `enum Direction { North, South, East, West }` matched exhaustively: `Direction::Nrogh` is not a typo the compiler lets through, because it is not one of the enum's variants at all — `rustc` rejects it before the program ever runs.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Model "always these fields" with a struct, "exactly one of these shapes" with an enum, and let `match` force the compiler to prove every shape is handled — a typo in a string comparison compiles, but a typo in an enum variant name does not.
+</Callout>
+
 export const quizIndex = [
     {
         q: 'Which keyword introduces a named struct in Rust?',
         options: ['type', 'struct', 'class', 'record'],
         answer: 1,
+        explain: "struct is the keyword for a named, fixed-shape record type in Rust. type creates a type alias, not a new type; class and record do not exist in Rust.",
     },
     {
         q: 'What property does a Rust match expression have that many other languages lack?',
@@ -67,6 +154,51 @@ export const quizIndex = [
             'It compiles to a jump table.',
         ],
         answer: 1,
+        explain: "match is checked for exhaustiveness at compile time — leaving out a case is a compile error, not a runtime fall-through as in a C-style switch.",
+    },
+    {
+        q: 'What does this print (or does it fail to compile)?\n```rust\nstruct Point { x: f64, y: f64 }\nfn main() {\n    let p = Point { x: 1.0, y: 2.0 };\n    println!("{}", p);\n}\n```',
+        options: [
+            'Point { x: 1.0, y: 2.0 }',
+            '(1.0, 2.0)',
+            'It fails to compile: error[E0277] — Point does not implement Display',
+            'It prints an empty string',
+        ],
+        answer: 2,
+        explain: "A plain println!(\"{}\", ...) requires the Display trait. A custom struct implements neither Display nor Debug by default, so this is E0277, not a runtime output.",
+    },
+    {
+        q: 'What does adding `#[derive(Debug)]` to a struct let you do?',
+        options: [
+            'Print it with `{}`',
+            'Print it with `{:?}`',
+            'Compare two instances with `==`',
+            'Automatically implement Default',
+        ],
+        answer: 1,
+        explain: "#[derive(Debug)] implements the Debug trait, which is what the {:?} format specifier requires. It has no effect on {} (Display), == (PartialEq), or Default.",
+    },
+    {
+        q: 'Why is representing a fixed set of choices with `&str` comparisons (`if direction == "north"`) weaker than using an enum?',
+        options: [
+            'String comparisons are slower at runtime, which is the only downside.',
+            'A typo like `"nrogh"` compiles and silently falls into the wrong branch; a typo in an enum variant name is rejected at compile time.',
+            '&str cannot be compared with == in Rust.',
+            'Enums cannot hold string data, so this comparison is required.',
+        ],
+        answer: 1,
+        explain: "Any string is a valid &str, so a mistyped choice compiles and only fails at runtime (or never gets noticed). An enum variant name is checked against the type's actual variant list at compile time.",
+    },
+    {
+        q: 'What does this print (or does it fail to compile)?\n```rust\nstruct Point { x: f64, y: f64 }\nfn main() {\n    let p = Point { x: 1.0, y: 2.0 };\n    println!("{:?}", p);\n}\n```',
+        options: [
+            'Point { x: 1.0, y: 2.0 }',
+            'It fails to compile: error[E0277] — Point does not implement Debug',
+            '{x: 1.0, y: 2.0}',
+            'It prints the memory address of p',
+        ],
+        answer: 1,
+        explain: "{:?} requires Debug, which is not implemented unless the struct derives it (or implements it by hand). Without #[derive(Debug)], this is E0277, the same family of error as printing with {} and no Display.",
     },
 ];
 

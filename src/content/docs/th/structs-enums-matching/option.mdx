@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Rust ไม่มี Null
 
@@ -103,6 +105,57 @@ fn main() {
 
 เรื่องนี้ผูกกับ edition ถ้าเอาโค้ดเดียวกันไปรันบน `edition = "2021"` จะถูกปฏิเสธด้วย `error: let chains are only allowed in Rust 2024 or later`
 
+## `let else` — Bind หรือ Bail ในบรรทัดเดียว
+
+`let else` bind กรณี `Some` ตรงๆ และบังคับให้ branch `else` ของมัน**ต้อง diverge** (`return`, `break`, `continue` หรือ `panic!`) เพื่อให้ทุกอย่างหลังจาก `let` นั้นถือว่า binding นั้นไม่มีเงื่อนไข — ไม่ต้องซ้อน `if let` ไม่ต้องมี scope ของ `else` แยกให้จัดการ:
+
+```rust
+fn first_word(s: &str) -> Option<&str> {
+    s.split_whitespace().next()
+}
+
+fn shout_first_word(s: &str) {
+    let Some(word) = first_word(s) else {
+        println!("nothing to shout");
+        return;
+    };
+    println!("{}!", word.to_uppercase());
+}
+
+fn main() {
+    shout_first_word("hello world");
+    shout_first_word("   ");
+}
+```
+
+```text
+HELLO!
+nothing to shout
+```
+
+## `matches!` — ทดสอบ Boolean โดยไม่ต้อง Destructure
+
+`matches!(value, pattern)` ตรวจว่าค่าตรงกับ pattern หรือไม่ และคืน `true`/`false` โดยไม่ bind อะไรเลย เป็นเครื่องมือที่เหมาะเมื่อคุณต้องการแค่คำตอบ ใช่/ไม่ใช่ สำหรับ "นี่คือ `Some` ไหม? อยู่ในช่วงไหม?":
+
+```rust
+fn main() {
+    let maybe: Option<i32> = Some(7);
+    println!("is some: {}", matches!(maybe, Some(_)));
+    println!("is some and positive: {}", matches!(maybe, Some(n) if n > 0));
+
+    let none: Option<i32> = None;
+    println!("none is some: {}", matches!(none, Some(_)));
+}
+```
+
+```text
+is some: true
+is some and positive: true
+none is some: false
+```
+
+`matches!` desugar ไปเป็น `match value { pattern => true, _ => false }` แบบเดียวกับที่คุณจะเขียนเองพอดี — มันมีไว้เพื่อลด boilerplate สำหรับกรณีทั่วไปแบบ "บอกแค่ใช่หรือไม่ใช่"
+
 ## `unwrap_or` — ให้ค่า Default
 
 `unwrap_or(default)` คืนค่าภายในหาก `Some` หรือค่า default ที่กำหนดหาก `None`:
@@ -113,6 +166,10 @@ let value = maybe.unwrap_or(0); // 0
 ```
 
 นี่คือรูปแบบที่ปลอดภัยที่สุดของ "ให้ค่าหรือ fallback" หลีกเลี่ยง `.unwrap()` แบบธรรมดาใน production code เพราะ panic กับ `None`
+
+<Callout title="unwrap_or เทียบกับ unwrap_or_else">
+`unwrap_or(default)` evaluate `default` เสมอ — แม้ตอนที่ `Option` เป็น `Some` และ fallback ไม่ได้ถูกใช้เลย `unwrap_or(expensive_computation())` จ่ายต้นทุนนั้นทุกครั้งที่เรียก ไม่ว่าจะเป็น `Some` หรือไม่ก็ตาม `unwrap_or_else(|| expensive_computation())` รับ closure แทน ดังนั้น fallback จะถูกคำนวณ**เฉพาะ**ตอนที่จำเป็นจริงๆ เลือกใช้ `unwrap_or` เฉพาะกับค่าที่คำนวณไว้แล้วและถูก (`0`, `""`, clone ของอะไรเล็กๆ) หันไปใช้ `unwrap_or_else` ทันทีที่ fallback เกี่ยวข้องกับการเรียกฟังก์ชัน การ allocate หรืออะไรที่ไม่ธรรมดา
+</Callout>
 
 ## `map` — แปลงค่าภายใน
 
@@ -129,6 +186,156 @@ let still_none = nothing.map(|x| x * 2); // None
 <Callout title="Rust ไม่มี null">
 `Option<T>` ทำให้ความเป็นไปได้ของการขาดหายชัดเจนใน type system ค่าประเภท `i32` คือจำนวนเต็มที่ถูกต้องเสมอ — ไม่มีทางเป็น null เฉพาะค่าประเภท `Option<i32>` เท่านั้นที่อาจขาดหายได้ สิ่งนี้บังคับให้ผู้เรียกทุกคนต้องรับรู้และจัดการกรณีการขาดหาย กำจัด crash ทั้ง class ใน runtime
 </Callout>
+
+## Combinator แบบครบชุด
+
+นอกจาก `map` และ `unwrap_or` แล้ว `Option<T>` ยังมีตระกูล combinator สำหรับ chain logic ที่อาจล้มเหลวโดยไม่ต้องเรียก `.unwrap()` เลย:
+
+```rust
+fn first_word(s: &str) -> Option<&str> {
+    s.split_whitespace().next()
+}
+
+fn parse_first_word_len(s: &str) -> Option<usize> {
+    let word = first_word(s)?; // ? on Option: return None early
+    Some(word.len())
+}
+
+fn main() {
+    // and_then: chain another Option-returning step (like flatMap)
+    let nested: Option<i32> = Some(4).and_then(|n| if n > 0 { Some(n * n) } else { None });
+    println!("and_then: {:?}", nested);
+
+    // ok_or: Option -> Result, supplying an error for None
+    let maybe_id: Option<u32> = None;
+    let result: Result<u32, &str> = maybe_id.ok_or("missing id");
+    println!("ok_or: {:?}", result);
+
+    // ? on Option: propagate None early, same shape as ? on Result
+    println!("? on Option: {:?}", parse_first_word_len("hello world"));
+    println!("? on Option: {:?}", parse_first_word_len(""));
+
+    // as_ref: Option<T> -> Option<&T> without consuming the original
+    let owned: Option<String> = Some(String::from("hi"));
+    let len = owned.as_ref().map(|s| s.len());
+    println!("as_ref: {:?}, owned still usable: {:?}", len, owned);
+
+    // as_deref: Option<String> -> Option<&str>
+    let maybe_string: Option<String> = Some(String::from("deref me"));
+    let as_str: Option<&str> = maybe_string.as_deref();
+    println!("as_deref: {:?}", as_str);
+
+    // take: move the value out of the Option, leaving None behind
+    let mut slot: Option<i32> = Some(10);
+    let taken = slot.take();
+    println!("take: taken={:?} slot={:?}", taken, slot);
+
+    // zip: combine two Options into Option<(A, B)>, None if either is None
+    let a: Option<i32> = Some(1);
+    let b: Option<&str> = Some("one");
+    println!("zip: {:?}", a.zip(b));
+    let c: Option<i32> = None;
+    println!("zip with None: {:?}", a.zip(c));
+}
+```
+
+```text
+and_then: Some(16)
+ok_or: Err("missing id")
+? on Option: Some(5)
+? on Option: None
+as_ref: Some(2), owned still usable: Some("hi")
+as_deref: Some("deref me")
+take: taken=Some(10) slot=None
+zip: Some((1, "one"))
+zip with None: None
+```
+
+`and_then` สำหรับ `Option` ก็เหมือน `flat_map` สำหรับ iterator: closure เองคืนค่าเป็น `Option` ดังนั้น `and_then` จึงหลีกเลี่ยง `Option<Option<T>>` ที่คุณจะได้จาก `map` ด้วย closure ที่คืน `Option` `as_ref`/`as_deref` สำคัญเพราะ `map` ธรรมดาบน `Option<String>` ที่เป็นเจ้าของจะ**consume**มันไป การ borrow ก่อนทำให้คุณตรวจค่าภายในได้โดยที่ `Option` เดิมยังใช้ได้ต่อ `take()` เป็นวิธีมาตรฐานในการย้ายค่าออกจาก field ของ `struct` ที่เก็บ `Option<T>` — มันทิ้ง `None` ไว้แทนที่จะต้องทำให้ struct ทั้งก้อนอยู่ในสถานะไม่ถูกต้องชั่วคราว
+
+### Compiler บอกว่าอย่างไร: `?` ทำงานเฉพาะภายใน Return Type ที่ตรงกัน
+
+Operator `?` บน `Option` จะ compile ได้เฉพาะภายในฟังก์ชันที่คืนค่าเป็น `Option` เอง (หรือ type อื่นที่ implement กลไก short-circuit เดียวกัน):
+
+```rust
+// @expect-error E0277
+fn first_word(s: &str) -> Option<&str> {
+    s.split_whitespace().next()
+}
+
+fn bad(s: &str) -> usize {
+    let word = first_word(s)?;
+    word.len()
+}
+
+fn main() {
+    println!("{}", bad("hi"));
+}
+```
+
+```text
+error[E0277]: the `?` operator can only be used in a function that returns `Result` or `Option` (or another type that implements `FromResidual`)
+ --> src/main.rs:7:29
+  |
+6 | fn bad(s: &str) -> usize {
+  | ------------------------ this function should return `Result` or `Option` to accept `?`
+7 |     let word = first_word(s)?;
+  |                             ^ cannot use the `?` operator in a function that returns `usize`
+
+error: aborting due to 1 previous error
+```
+
+`?` ไม่ใช่ "unwrap หรือคืนค่า default" มันจะ propagate ผ่าน *wrapper ชนิดเดียวกัน* ที่ฟังก์ชันคืนค่าเสมอ ฟังก์ชันที่คืน `usize` ธรรมดาไม่มีกรณี `None` ให้คืนเข้าไป ดังนั้นคอมไพเลอร์จะปฏิเสธมันเลย แทนที่จะเดาว่าคุณหมายถึงอะไร
+
+export const combinatorCode = `fn first_word(s: &str) -> Option<&str> {
+    s.split_whitespace().next()
+}
+
+fn parse_first_word_len(s: &str) -> Option<usize> {
+    let word = first_word(s)?;
+    Some(word.len())
+}
+
+fn main() {
+    let nested: Option<i32> = Some(4).and_then(|n| if n > 0 { Some(n * n) } else { None });
+    println!("and_then: {:?}", nested);
+
+    let maybe_id: Option<u32> = None;
+    let result: Result<u32, &str> = maybe_id.ok_or("missing id");
+    println!("ok_or: {:?}", result);
+
+    println!("? on Option: {:?}", parse_first_word_len("hello world"));
+    println!("? on Option: {:?}", parse_first_word_len(""));
+
+    let owned: Option<String> = Some(String::from("hi"));
+    let len = owned.as_ref().map(|s| s.len());
+    println!("as_ref: {:?}, owned still usable: {:?}", len, owned);
+
+    let maybe_string: Option<String> = Some(String::from("deref me"));
+    let as_str: Option<&str> = maybe_string.as_deref();
+    println!("as_deref: {:?}", as_str);
+
+    let mut slot: Option<i32> = Some(10);
+    let taken = slot.take();
+    println!("take: taken={:?} slot={:?}", taken, slot);
+
+    let a: Option<i32> = Some(1);
+    let b: Option<&str> = Some("one");
+    println!("zip: {:?}", a.zip(b));
+}`;
+
+<Playground code={combinatorCode} />
+
+<Mermaid code={`flowchart TD
+    A[You have an Option] --> B{What do you need?}
+    B -->|"just yes/no, no binding"| M["matches!(opt, Some(_))"]
+    B -->|"a value or a cheap fallback"| U1[".unwrap_or(default)"]
+    B -->|"a value or an expensive/computed fallback"| U2[".unwrap_or_else(|| ...)"]
+    B -->|"transform the inner value, stay in Option"| MA[".map(...)"]
+    B -->|"chain another Option-returning step"| AT[".and_then(...)"]
+    B -->|"need a Result instead, with an error for None"| OK[".ok_or(err) / .ok_or_else(...)"]
+    B -->|"bind now or bail out of the function"| LE["let ... else { return/break/continue }"]
+    B -->|"inside a function that itself returns Option"| Q["? propagates None"]`} title="เลือก combinator ของ Option" />
 
 export const optionCode = `fn divide(a: f64, b: f64) -> Option<f64> {
     if b == 0.0 { None } else { Some(a / b) }
@@ -168,6 +375,37 @@ fn main() {
 
 <Playground code={optionCode} />
 
+## Mental Model
+
+`Option<T>` เปลี่ยน "อาจไม่มีอยู่ตรงนี้" ให้เป็นค่าที่คุณต้องเปิดก่อนจะใช้ได้ — ทุก combinator (`map`, `and_then`, `unwrap_or_else`, `?`) คือวิธีเปิดมันที่ต่างกัน เลือกตามสิ่งที่คุณต้องการให้เกิดขึ้นเมื่อเป็น `None` ไม่มีทางใช้ `T` ภายในโดยไม่ผ่านวิธีใดวิธีหนึ่งเหล่านี้เลย ซึ่งเป็นกลไกทั้งหมดที่ทำให้ bug แบบ null-pointer เป็นไปไม่ได้: คอมไพเลอร์จะไม่ยอมให้คุณลืมว่า branch `None` มีอยู่
+
+## Trade-offs
+
+`match` เป็นรูปแบบที่ชัดเจนที่สุดและอ่านถูกต้องได้ไม่ว่าคนอ่านจะรู้จัก combinator กี่ชื่อก็ตาม แลกกับพื้นที่แนวตั้งสำหรับ chain ของขั้นตอนที่อาจล้มเหลวยาวๆ Combinator บีบอัด chain นั้นให้เหลือ expression เดียว แต่แต่ละตัว (`and_then`, `ok_or_else`, `zip`) คือคำศัพท์ที่ผู้อ่านต้องรู้ก่อนบรรทัดนั้นจะเข้าใจได้ `let else` อยู่ตรงกลาง — อ่านง่ายเท่า `match` สำหรับ "bind หรือ bail" แต่ใช้ได้เฉพาะตอนที่ failure path diverge ได้จริงๆ ซึ่งตัดออกทันทีที่คุณต้องการ*ค่า*ตอน failure แทนที่จะ return ทันที `matches!` เป็นตัวเลือกที่ถูกที่สุดเมื่อคุณต้องการแค่ boolean จริงๆ แต่ทันทีที่คุณต้องการค่าภายในด้วย คุณต้องกลับไปที่ `if let`/`match`
+
+## Common Misconceptions
+
+- **"`is_some()` ตามด้วย `unwrap()` panic ไม่ได้ จึงปลอดภัยพอๆ กับ `if let`"** จริงที่มันจะไม่ panic ในรูปแบบนั้นเป๊ะๆ แต่มันตรวจ variant สองครั้ง (ครั้งหนึ่งผ่าน `is_some()` อีกครั้งภายใน `unwrap()`) และต่างจาก `if let Some(x) = opt` มันไม่ให้ที่ที่คอมไพเลอร์บังคับให้จัดการ `None` เลย — reviewer ต้องสังเกต `else` ที่หายไปเอง
+- **"`unwrap_or(x)` และ `unwrap_or_else(|| x)` ทำสิ่งเดียวกันเสมอ"** จริง *ถ้า* `x` เป็นค่าที่คำนวณไว้แล้วธรรมดา ทันทีที่ `x` เป็นการเรียกฟังก์ชันหรือการ allocate `unwrap_or` จ่ายต้นทุนนั้นทุกครั้งที่เรียก ไม่ว่า `Some` หรือ `None` ขณะที่ closure ของ `unwrap_or_else` รันเฉพาะตอน `None` เท่านั้น
+- **"`?` บน `Option` unwrap มัน หรือ panic เหมือน `.unwrap()` เมื่อล้มเหลว"** มันไม่ panic เลย เมื่อเป็น `None` มันจะ return `None` ทันทีจาก*ฟังก์ชันที่ล้อมรอบอยู่* ซึ่งเป็นเหตุผลว่าทำไมมันจะ compile ได้เฉพาะในฟังก์ชันที่คืนค่าเป็น `Option` เอง (หรือ `Result` สำหรับ `?` บน `Result`)
+
+## อ่านโค้ดที่ AI เขียน
+
+AI มักเขียน `if x.is_some() { x.unwrap() }` เพราะมัน "เห็นชัดๆ" ว่า panic ไม่ได้ — แต่มันทำแบบ manual และแย่กว่า สิ่งที่ pattern match ตัวเดียวทำได้แบบ atomic และเป็นสำนวนอยู่แล้ว พร้อม branch `else` ที่เตือนผู้อ่านว่า `None` ก็ต้องจัดการเช่นกัน
+
+<SpotTheBug code={`fn print_balance(account: Option<i32>) {
+    if account.is_some() {
+        println!("balance: {}", account.unwrap());
+    }
+}
+`}>
+โค้ดนี้ compile ผ่านและไม่ panic เลย แต่มันแย่กว่าเวอร์ชันที่เป็นสำนวนอย่างชัดเจน: ไม่มี branch จัดการ `None` เลย (ผู้เรียกที่ส่ง `None` มาจะได้ความเงียบสนิท ไม่มีแม้แต่ log line) และ variant ถูกตรวจสองครั้ง — ครั้งหนึ่งผ่าน `is_some()` อีกครั้งภายใน `unwrap()` ทางแก้คือ `if let Some(balance) = account { println!("balance: {}", balance); } else { println!("balance unavailable"); }` — หรือดีกว่านั้น เปลี่ยนฟังก์ชันให้คืน `String`/`Option<String>` ที่ format แล้ว เพื่อให้*ผู้เรียก*เป็นคนตัดสินใจว่า "unavailable" ควรมีหน้าตาแบบไหน แทนที่จะฝังข้อความไว้ใน `print_balance`
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+อย่า derive variant ของ `Option` ซ้ำด้วย `.is_some()`/`.is_none()` ก่อนดึงค่าออกมา — pattern-match, `let else` หรือ chain combinator เพื่อให้คอมไพเลอร์พิสูจน์ว่าการดึงค่าปลอดภัยในขั้นตอนเดียวกับที่ตรวจสอบ และหันไปใช้ `unwrap_or_else` แทน `unwrap_or` ทันทีที่ fallback มีต้นทุนมากกว่า literal
+</Callout>
+
 export const quizOption = [
     {
         q: "let chain แบบ `if let Some(x) = opt && x > 2` ต้องใช้ edition ไหนของ Rust?",
@@ -177,7 +415,8 @@ export const quizOption = [
             "Rust 2021",
             "Rust 2024"
         ],
-        answer: 3
+        answer: 3,
+        explain: "Let chain (การรวม if let binding เข้ากับเงื่อนไข && ใน if เดียว) ผูกกับ edition 2024 เท่านั้น — โค้ดเดียวกันภายใต้ edition = \"2021\" จะถูกปฏิเสธด้วย 'let chains are only allowed in Rust 2024 or later'",
     },
     {
         q: 'Option<T> ใน Rust แทนอะไร?',
@@ -188,36 +427,62 @@ export const quizOption = [
             'type alias ของ nullable pointer',
         ],
         answer: 1,
+        explain: "Option<T> เป็น enum ที่มีสอง variant พอดี คือ Some(T) และ None ใช้ทุกที่ที่ค่าอาจขาดหายแทน null reference",
     },
     {
-        q: 'unwrap_or(default) ทำอะไรเมื่อเรียกกับ None?',
+        q: '`unwrap_or_else(|| expensive())` ต่างจาก `unwrap_or(expensive())` อย่างไรเมื่อ Option เป็น Some?',
         options: [
-            'panic พร้อมข้อความ',
-            'คืนค่าภายใน Some',
-            'คืนค่า default ที่กำหนด',
-            'แปลง None เป็น empty string',
-        ],
-        answer: 2,
-    },
-    {
-        q: 'map ทำอะไรเมื่อเรียกกับค่า None?',
-        options: [
-            'panic',
-            'เรียก closure ด้วยค่า default',
-            'คืน None โดยไม่เรียก closure',
-            'แปลง None เป็น Some(())',
-        ],
-        answer: 2,
-    },
-    {
-        q: 'ทำไม Rust จึงใช้ Option<T> แทน null?',
-        options: [
-            'เพราะ null จะทำให้คอมไพเลอร์ช้าลง',
-            'เพื่อให้คอมไพเลอร์บังคับการจัดการค่าที่ขาดหาย กำจัด null-pointer crash',
-            'เพราะ Option<T> ใช้หน่วยความจำน้อยกว่า nullable pointer',
-            'เพื่อให้ compatible กับ C FFI',
+            'ทำงานเหมือนกันทุกกรณี',
+            'unwrap_or_else ไม่เรียก expensive() เลย ส่วน unwrap_or เรียกเสมอ แม้ผลลัพธ์จะถูกทิ้งไป',
+            'unwrap_or_else panic ถ้า Option เป็น Some',
+            'unwrap_or เร็วกว่าเสมอไม่ว่า Option จะเป็น variant ไหน',
         ],
         answer: 1,
+        explain: "argument ของ unwrap_or ถูก evaluate แบบ eager ทุกครั้ง ไม่ว่าจะถูกใช้หรือไม่ unwrap_or_else รับ closure ที่รันเฉพาะตอน Option เป็น None จริงๆ จึงหลีกเลี่ยงต้นทุนบน path ของ Some",
+    },
+    {
+        q: 'โค้ดนี้ print อะไร?\n```rust\nfn main() {\n    let x: Option<i32> = Some(7);\n    println!("{}", matches!(x, Some(n) if n > 10));\n}\n```',
+        options: [
+            'true',
+            'false',
+            'Some(7)',
+            'compile ไม่ผ่าน',
+        ],
+        answer: 1,
+        explain: "matches! ตรวจ pattern รวม guard ด้วย Some(7) ตรงกับ Some(n) แต่ guard n > 10 เป็น false สำหรับ n = 7 ดังนั้น matches! ทั้งหมดจึงเป็น false",
+    },
+    {
+        q: "โค้ดนี้ compile ไม่ผ่านเพราะอะไร?\n```rust\nfn first_word(s: &str) -> Option<&str> {\n    s.split_whitespace().next()\n}\nfn bad(s: &str) -> usize {\n    let word = first_word(s)?;\n    word.len()\n}\n```",
+        options: [
+            'first_word ขาด lifetime annotation',
+            'error[E0277]: the ? operator can only be used in a function that returns Result or Option แต่ bad คืน usize',
+            'split_whitespace() ไม่มีอยู่บน &str',
+            'compile ผ่านสบายๆ และคืน 0 เมื่อ Option เป็น None',
+        ],
+        answer: 1,
+        explain: "? propagate None โดย return ทันทีจากฟังก์ชันที่ล้อมรอบด้วย wrapper ชนิดเดียวกัน bad คืน usize ธรรมดาซึ่งไม่มีกรณี None ให้ return เข้าไป จึงเป็น E0277",
+    },
+    {
+        q: 'ทำไม `if x.is_some() { x.unwrap() }` ถึงถือว่าเป็น smell เมื่อเทียบกับ `if let Some(v) = x { ... }`?',
+        options: [
+            'is_some() allocate หน่วยความจำ ทำให้ช้ากว่า',
+            'มันตรวจ variant สองครั้งและไม่มี branch จัดการ None',
+            'is_some() และ unwrap() เรียกบน Option เดียวกันไม่ได้',
+            'ใช้ได้กับ Result เท่านั้น ไม่ใช่ Option',
+        ],
+        answer: 1,
+        explain: "รูปแบบ pattern-match พิสูจน์และดึงค่าออกมาในขั้นตอนเดียว และบังคับให้ตัดสินใจ (หรือละเว้นอย่างตั้งใจ) เกี่ยวกับกรณี None; is_some() + unwrap() ตรวจซ้ำและไม่ทำอะไรเลยแบบเงียบๆ เมื่อ Option เป็น None",
+    },
+    {
+        q: '`Some(1).zip(None::<&str>)` ประเมินค่าเป็นอะไร?',
+        options: [
+            'Some((1, ""))',
+            'None',
+            'Some(1)',
+            'compile ไม่ผ่าน — zip ต้องการทั้งสองฝั่งเป็น Some',
+        ],
+        answer: 1,
+        explain: "zip รวมสอง Option เป็น Option<(A, B)> แต่ต่อเมื่อ*ทั้งคู่*เป็น Some ถ้าฝั่งใดฝั่งหนึ่งเป็น None ผลลัพธ์ทั้งหมดจะเป็น None",
     },
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## No Null in Rust
 
@@ -103,6 +105,57 @@ Every `let` in the chain binds for the rest of the chain and for the body, so `u
 
 This one is edition-gated. The same code on `edition = "2021"` is rejected with `error: let chains are only allowed in Rust 2024 or later`.
 
+## `let else` — Bind or Bail, in One Line
+
+`let else` binds the `Some` case directly and requires its `else` branch to **diverge** (`return`, `break`, `continue`, or `panic!`), so everything after the `let` can treat the binding as unconditional — no nested `if let` block, no separate `else` scope to manage:
+
+```rust
+fn first_word(s: &str) -> Option<&str> {
+    s.split_whitespace().next()
+}
+
+fn shout_first_word(s: &str) {
+    let Some(word) = first_word(s) else {
+        println!("nothing to shout");
+        return;
+    };
+    println!("{}!", word.to_uppercase());
+}
+
+fn main() {
+    shout_first_word("hello world");
+    shout_first_word("   ");
+}
+```
+
+```text
+HELLO!
+nothing to shout
+```
+
+## `matches!` — a Boolean Test Without Destructuring
+
+`matches!(value, pattern)` checks whether a value matches a pattern and returns `true`/`false`, without binding anything. It is the right tool when you only need a yes/no answer to "is this `Some`? is this in range?":
+
+```rust
+fn main() {
+    let maybe: Option<i32> = Some(7);
+    println!("is some: {}", matches!(maybe, Some(_)));
+    println!("is some and positive: {}", matches!(maybe, Some(n) if n > 0));
+
+    let none: Option<i32> = None;
+    println!("none is some: {}", matches!(none, Some(_)));
+}
+```
+
+```text
+is some: true
+is some and positive: true
+none is some: false
+```
+
+`matches!` desugars to exactly the `match value { pattern => true, _ => false }` you would otherwise write by hand — it exists purely to remove that boilerplate for the common "just tell me yes or no" case.
+
 ## `unwrap_or` — Providing a Default
 
 `unwrap_or(default)` returns the inner value if `Some`, or the given default if `None`:
@@ -113,6 +166,10 @@ let value = maybe.unwrap_or(0); // 0
 ```
 
 This is the safest form of "just give me a value or a fallback." Avoid plain `.unwrap()` in production code — it panics on `None`.
+
+<Callout title="unwrap_or vs unwrap_or_else">
+`unwrap_or(default)` always evaluates `default` — even when the `Option` is `Some` and the fallback is never used. `unwrap_or(expensive_computation())` pays that cost on every call, `Some` or not. `unwrap_or_else(|| expensive_computation())` takes a closure instead, so the fallback is computed **only** when it's actually needed. Prefer `unwrap_or` only for cheap, already-computed values (`0`, `""`, a clone of something small); reach for `unwrap_or_else` the moment the fallback involves a function call, allocation, or anything non-trivial.
+</Callout>
 
 ## `map` — Transforming the Inner Value
 
@@ -129,6 +186,156 @@ let still_none = nothing.map(|x| x * 2); // None
 <Callout title="Rust has no null">
 `Option<T>` makes the possibility of absence explicit in the type system. A value of type `i32` is always a valid integer — it can never be null. Only a value of type `Option<i32>` might be absent. This forces every caller to acknowledge and handle the absence case, eliminating an entire class of runtime crashes.
 </Callout>
+
+## The Full Combinator Tour
+
+Beyond `map` and `unwrap_or`, `Option<T>` has a family of combinators for chaining fallible logic without ever calling `.unwrap()`:
+
+```rust
+fn first_word(s: &str) -> Option<&str> {
+    s.split_whitespace().next()
+}
+
+fn parse_first_word_len(s: &str) -> Option<usize> {
+    let word = first_word(s)?; // ? on Option: return None early
+    Some(word.len())
+}
+
+fn main() {
+    // and_then: chain another Option-returning step (like flatMap)
+    let nested: Option<i32> = Some(4).and_then(|n| if n > 0 { Some(n * n) } else { None });
+    println!("and_then: {:?}", nested);
+
+    // ok_or: Option -> Result, supplying an error for None
+    let maybe_id: Option<u32> = None;
+    let result: Result<u32, &str> = maybe_id.ok_or("missing id");
+    println!("ok_or: {:?}", result);
+
+    // ? on Option: propagate None early, same shape as ? on Result
+    println!("? on Option: {:?}", parse_first_word_len("hello world"));
+    println!("? on Option: {:?}", parse_first_word_len(""));
+
+    // as_ref: Option<T> -> Option<&T> without consuming the original
+    let owned: Option<String> = Some(String::from("hi"));
+    let len = owned.as_ref().map(|s| s.len());
+    println!("as_ref: {:?}, owned still usable: {:?}", len, owned);
+
+    // as_deref: Option<String> -> Option<&str>
+    let maybe_string: Option<String> = Some(String::from("deref me"));
+    let as_str: Option<&str> = maybe_string.as_deref();
+    println!("as_deref: {:?}", as_str);
+
+    // take: move the value out of the Option, leaving None behind
+    let mut slot: Option<i32> = Some(10);
+    let taken = slot.take();
+    println!("take: taken={:?} slot={:?}", taken, slot);
+
+    // zip: combine two Options into Option<(A, B)>, None if either is None
+    let a: Option<i32> = Some(1);
+    let b: Option<&str> = Some("one");
+    println!("zip: {:?}", a.zip(b));
+    let c: Option<i32> = None;
+    println!("zip with None: {:?}", a.zip(c));
+}
+```
+
+```text
+and_then: Some(16)
+ok_or: Err("missing id")
+? on Option: Some(5)
+? on Option: None
+as_ref: Some(2), owned still usable: Some("hi")
+as_deref: Some("deref me")
+take: taken=Some(10) slot=None
+zip: Some((1, "one"))
+zip with None: None
+```
+
+`and_then` is to `Option` what `flat_map` is to iterators: the closure itself returns an `Option`, so `and_then` avoids the `Option<Option<T>>` you'd get from `map` with an `Option`-returning closure. `as_ref`/`as_deref` matter specifically because plain `map` on an owned `Option<String>` would **consume** it; borrowing first lets you inspect the inner value while keeping the original `Option` usable afterward. `take()` is the standard way to move a value out of a `struct` field that holds an `Option<T>` — it leaves `None` behind instead of requiring the whole struct to be temporarily invalid.
+
+### What the Compiler Says: `?` Only Works Inside a Matching Return Type
+
+The `?` operator on `Option` only compiles inside a function that itself returns `Option` (or another type implementing the same short-circuit mechanism):
+
+```rust
+// @expect-error E0277
+fn first_word(s: &str) -> Option<&str> {
+    s.split_whitespace().next()
+}
+
+fn bad(s: &str) -> usize {
+    let word = first_word(s)?;
+    word.len()
+}
+
+fn main() {
+    println!("{}", bad("hi"));
+}
+```
+
+```text
+error[E0277]: the `?` operator can only be used in a function that returns `Result` or `Option` (or another type that implements `FromResidual`)
+ --> src/main.rs:7:29
+  |
+6 | fn bad(s: &str) -> usize {
+  | ------------------------ this function should return `Result` or `Option` to accept `?`
+7 |     let word = first_word(s)?;
+  |                             ^ cannot use the `?` operator in a function that returns `usize`
+
+error: aborting due to 1 previous error
+```
+
+`?` is not "unwrap or return a default" — it always propagates through the *same kind* of wrapper the function returns. A function returning a plain `usize` has no `None` case to return into, so the compiler rejects it outright rather than guessing what you meant.
+
+export const combinatorCode = `fn first_word(s: &str) -> Option<&str> {
+    s.split_whitespace().next()
+}
+
+fn parse_first_word_len(s: &str) -> Option<usize> {
+    let word = first_word(s)?;
+    Some(word.len())
+}
+
+fn main() {
+    let nested: Option<i32> = Some(4).and_then(|n| if n > 0 { Some(n * n) } else { None });
+    println!("and_then: {:?}", nested);
+
+    let maybe_id: Option<u32> = None;
+    let result: Result<u32, &str> = maybe_id.ok_or("missing id");
+    println!("ok_or: {:?}", result);
+
+    println!("? on Option: {:?}", parse_first_word_len("hello world"));
+    println!("? on Option: {:?}", parse_first_word_len(""));
+
+    let owned: Option<String> = Some(String::from("hi"));
+    let len = owned.as_ref().map(|s| s.len());
+    println!("as_ref: {:?}, owned still usable: {:?}", len, owned);
+
+    let maybe_string: Option<String> = Some(String::from("deref me"));
+    let as_str: Option<&str> = maybe_string.as_deref();
+    println!("as_deref: {:?}", as_str);
+
+    let mut slot: Option<i32> = Some(10);
+    let taken = slot.take();
+    println!("take: taken={:?} slot={:?}", taken, slot);
+
+    let a: Option<i32> = Some(1);
+    let b: Option<&str> = Some("one");
+    println!("zip: {:?}", a.zip(b));
+}`;
+
+<Playground code={combinatorCode} />
+
+<Mermaid code={`flowchart TD
+    A[You have an Option] --> B{What do you need?}
+    B -->|"just yes/no, no binding"| M["matches!(opt, Some(_))"]
+    B -->|"a value or a cheap fallback"| U1[".unwrap_or(default)"]
+    B -->|"a value or an expensive/computed fallback"| U2[".unwrap_or_else(|| ...)"]
+    B -->|"transform the inner value, stay in Option"| MA[".map(...)"]
+    B -->|"chain another Option-returning step"| AT[".and_then(...)"]
+    B -->|"need a Result instead, with an error for None"| OK[".ok_or(err) / .ok_or_else(...)"]
+    B -->|"bind now or bail out of the function"| LE["let ... else { return/break/continue }"]
+    B -->|"inside a function that itself returns Option"| Q["? propagates None"]`} title="Choosing an Option combinator" />
 
 export const optionCode = `fn divide(a: f64, b: f64) -> Option<f64> {
     if b == 0.0 { None } else { Some(a / b) }
@@ -168,6 +375,37 @@ fn main() {
 
 <Playground code={optionCode} />
 
+## Mental Model
+
+`Option<T>` turns "might not be here" into a value you must open before you can use — every combinator (`map`, `and_then`, `unwrap_or_else`, `?`) is a different way of opening it, chosen by what you want to happen on `None`. There is no way to accidentally use the inner `T` without going through one of these, which is the entire mechanism that makes null-pointer-style bugs impossible: the compiler will not let you forget the `None` branch exists.
+
+## Trade-offs
+
+`match` is the most explicit form and reads correctly to anyone regardless of how many combinator names they know, at the cost of vertical space for a long chain of fallible steps. Combinators compress that chain into one expression, but each one (`and_then`, `ok_or_else`, `zip`) is a piece of vocabulary the reader needs before the line makes sense. `let else` sits in between — as readable as `match` for "bind or bail," but only usable when the failure path can genuinely diverge, which rules it out the moment you need a *value* on failure instead of an early return. `matches!` is the cheapest option when you truly only need a boolean, but the moment you also need the inner value, you're back to `if let`/`match`.
+
+## Common Misconceptions
+
+- **"`is_some()` followed by `unwrap()` cannot panic, so it's just as safe as `if let`."** True that it cannot panic in that exact shape, but it checks the variant twice (once via `is_some()`, once inside `unwrap()`), and unlike `if let Some(x) = opt`, it gives you no compiler-enforced place to handle `None` — a reviewer has to notice the missing `else` themselves.
+- **"`unwrap_or(x)` and `unwrap_or_else(|| x)` always do the same thing."** They do, *if* `x` is a plain, already-computed value. The moment `x` is a function call or an allocation, `unwrap_or` pays that cost on every invocation — `Some` or `None` — while `unwrap_or_else`'s closure only runs on `None`.
+- **"`?` on an `Option` unwraps it, or panics like `.unwrap()` does on failure."** It never panics. On `None` it returns `None` immediately from the *enclosing function* — which is why it only compiles inside a function whose own return type is `Option` (or `Result`, for `?` on a `Result`).
+
+## Reading AI-generated code
+
+AI assistants frequently write `if x.is_some() { x.unwrap() }` because it "obviously" cannot panic — but it does manually, and worse, what a single pattern match already does atomically and idiomatically, with an `else` branch reminding the reader that `None` needs handling too.
+
+<SpotTheBug code={`fn print_balance(account: Option<i32>) {
+    if account.is_some() {
+        println!("balance: {}", account.unwrap());
+    }
+}
+`}>
+This compiles and never panics, but it is strictly worse than the idiomatic version: there is no branch handling `None` at all (a caller passing `None` gets total silence, not even a log line), and the variant is checked twice — once via `is_some()`, once implicitly inside `unwrap()`. The fix is `if let Some(balance) = account { println!("balance: {}", balance); } else { println!("balance unavailable"); }` — or, better, changing the function to return the formatted `String`/`Option<String>` so the *caller* decides what "unavailable" should look like, instead of the message being buried inside `print_balance`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Never re-derive an `Option`'s variant with `.is_some()`/`.is_none()` before extracting the value — pattern-match, `let else`, or chain combinators so the compiler proves the extraction is safe in the same step that checks it, and reach for `unwrap_or_else` instead of `unwrap_or` the moment the fallback costs more than a literal.
+</Callout>
+
 export const quizOption = [
     {
         q: "Which Rust edition is required for a let chain like `if let Some(x) = opt && x > 2`?",
@@ -177,7 +415,8 @@ export const quizOption = [
             "Rust 2021",
             "Rust 2024"
         ],
-        answer: 3
+        answer: 3,
+        explain: "Let chains (combining if let bindings with && conditions in one if) are gated to the 2024 edition — the same code under edition = \"2021\" is rejected with 'let chains are only allowed in Rust 2024 or later'.",
     },
     {
         q: "What does Option<T> represent in Rust?",
@@ -188,36 +427,62 @@ export const quizOption = [
             'A type alias for a nullable pointer.',
         ],
         answer: 1,
+        explain: "Option<T> is an enum with exactly two variants, Some(T) and None, used everywhere a value might be absent instead of a null reference.",
     },
     {
-        q: 'What does unwrap_or(default) do when called on None?',
+        q: 'What does `unwrap_or_else(|| expensive())` do differently from `unwrap_or(expensive())` when the Option is Some?',
         options: [
-            'It panics with a message.',
-            'It returns the inner Some value.',
-            'It returns the provided default value.',
-            'It converts None to an empty string.',
-        ],
-        answer: 2,
-    },
-    {
-        q: 'What does map do when called on a None value?',
-        options: [
-            'It panics.',
-            'It calls the closure with a default value.',
-            'It returns None without calling the closure.',
-            'It converts None to Some(()).',
-        ],
-        answer: 2,
-    },
-    {
-        q: "Why does Rust use Option<T> instead of null?",
-        options: [
-            'Because null would slow down the compiler.',
-            'So the compiler can enforce handling of absent values, eliminating null-pointer crashes.',
-            'Because Option<T> uses less memory than a nullable pointer.',
-            'To remain compatible with C FFI.',
+            'They behave identically in every case',
+            'unwrap_or_else never calls expensive() at all; unwrap_or always calls it, even though the result is discarded',
+            'unwrap_or_else panics if the Option is Some',
+            'unwrap_or is always faster regardless of the Option variant',
         ],
         answer: 1,
+        explain: "unwrap_or's argument is evaluated eagerly every time, whether or not it's used. unwrap_or_else takes a closure that only runs when the Option is actually None, avoiding the cost on the Some path.",
+    },
+    {
+        q: 'What does this print?\n```rust\nfn main() {\n    let x: Option<i32> = Some(7);\n    println!("{}", matches!(x, Some(n) if n > 10));\n}\n```',
+        options: [
+            'true',
+            'false',
+            'Some(7)',
+            'It fails to compile',
+        ],
+        answer: 1,
+        explain: "matches! checks the pattern including its guard. Some(7) matches Some(n), but the guard n > 10 is false for n = 7, so the whole matches! expression is false.",
+    },
+    {
+        q: "Why does this fail to compile?\n```rust\nfn first_word(s: &str) -> Option<&str> {\n    s.split_whitespace().next()\n}\nfn bad(s: &str) -> usize {\n    let word = first_word(s)?;\n    word.len()\n}\n```",
+        options: [
+            'first_word is missing a lifetime annotation',
+            'error[E0277]: the ? operator can only be used in a function that returns Result or Option, but bad returns usize',
+            'split_whitespace() does not exist on &str',
+            'It compiles fine and returns 0 when the Option is None',
+        ],
+        answer: 1,
+        explain: "? propagates None by returning early from the enclosing function using the SAME wrapper type. bad returns a plain usize, which has no None case to return into, so this is E0277.",
+    },
+    {
+        q: 'Why is `if x.is_some() { x.unwrap() }` considered a smell compared to `if let Some(v) = x { ... }`?',
+        options: [
+            'is_some() allocates memory, making it slower',
+            'It checks the variant twice and provides no branch for handling None',
+            'is_some() and unwrap() cannot both be called on the same Option',
+            'It only works for Result, not Option',
+        ],
+        answer: 1,
+        explain: "The pattern-match form proves and extracts the value in one step and forces a decision (or deliberate omission) about the None case; is_some() + unwrap() duplicates the check and silently does nothing when the Option is None.",
+    },
+    {
+        q: 'What does `Some(1).zip(None::<&str>)` evaluate to?',
+        options: [
+            'Some((1, ""))',
+            'None',
+            'Some(1)',
+            'It fails to compile — zip requires both sides to be Some',
+        ],
+        answer: 1,
+        explain: "zip combines two Options into Option<(A, B)>, but only if BOTH are Some. If either side is None, the whole result is None.",
     },
 ];
 

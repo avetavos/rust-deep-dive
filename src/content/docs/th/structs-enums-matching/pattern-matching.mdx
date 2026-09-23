@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## `match` Expression
 
@@ -26,6 +28,15 @@ println!("{}", description); // three
 ```
 
 Pattern `_` จับคู่กับค่าใดก็ตามที่คุณยังไม่ได้ระบุ หากไม่มี (และไม่ครอบคลุมทุกกรณี) โค้ดจะไม่ compile
+
+<Mermaid code={`flowchart TD
+    V["match value"] --> P1{"pattern 1 matches?"}
+    P1 -->|yes| A1["run arm 1, produce its value"]
+    P1 -->|no| P2{"pattern 2 matches?"}
+    P2 -->|yes| A2["run arm 2, produce its value"]
+    P2 -->|no| PN{"... every remaining pattern?"}
+    PN -->|none match, no wildcard| CE["compile error: E0004 non-exhaustive"]
+    PN -->|"_ wildcard present"| AW["run wildcard arm"]`} title="ขั้นตอนการตัดสินใจของ match — ทุก branch หรือ compile error" />
 
 ## การจับคู่ Enum Variant และการ Bind ข้อมูล
 
@@ -61,6 +72,35 @@ let grade = match score {
 println!("{}", grade); // B
 ```
 
+## `@` Bindings — Bind และทดสอบในคำสั่ง Pattern เดียว
+
+Binding ธรรมดา (`x @ pattern`) ทั้งจับคู่ pattern และตั้งชื่อค่าที่ตรงกันในเวลาเดียวกัน ทำให้การตรวจช่วงและ binding ที่ใช้งานได้อยู่ใน arm เดียวกัน แทนที่จะต้องอ่านค่านั้นซ้ำใน body ของ arm:
+
+```rust
+fn main() {
+    let n = 5;
+    match n {
+        x @ 1..=5   => println!("small: {}", x),
+        x @ 6..=10  => println!("medium: {}", x),
+        x           => println!("other: {}", x),
+    }
+
+    enum Msg { Hello { id: u32 } }
+    let msg = Msg::Hello { id: 7 };
+    match msg {
+        Msg::Hello { id: id_var @ 3..=7 } => println!("in range: {}", id_var),
+        Msg::Hello { id }                 => println!("out of range: {}", id),
+    }
+}
+```
+
+```text
+small: 5
+in range: 7
+```
+
+ถ้าไม่มี `@`, `1..=5 => println!("small")` จะจับคู่ช่วงได้แต่ไม่ให้ชื่อว่า*ค่าไหน*ในช่วงนั้นที่ตรงกัน — คุณจะต้องอ่าน `n` จาก scope ภายนอกใหม่แทนที่จะใช้จาก pattern เอง
+
 ## Wildcard `_`
 
 `_` เป็น catch-all ที่จับคู่กับทุกอย่างโดยไม่ bind วางไว้ท้ายสุด arm ใดๆ หลัง `_` จะ unreachable และคอมไพเลอร์จะเตือน
@@ -92,6 +132,77 @@ match number {
 ```
 
 Guard ทำงานหลังจาก structural pattern ตรงกันแล้ว ดังนั้น binding (`n`) จึงใช้ได้ภายในเงื่อนไข guard
+
+## Match Ergonomics และ Rust 2024 Edition
+
+เมื่อคุณ `match` *reference* ของ enum (`&Option<i32>` แทนที่จะเป็น `Option<i32>`) ด้วย pattern แบบ non-reference ธรรมดา (`Some(x)`) Rust จะสลับเข้าสู่ "default binding mode" อัตโนมัติ: binding ภายใน pattern นั้นกลายเป็น reference โดยไม่ต้องเขียน `&` หรือ `ref` ที่ไหนเลย นี่คือเหตุผลที่ `Some(x) => ...` บน `&Option<i32>` ให้คุณได้ `x: &i32` ฟรีๆ — เรียกว่า *match ergonomics*
+
+Rust 2024 edition เข้มงวดกฎมากขึ้นสำหรับสิ่งที่เกิดขึ้นเมื่อคุณผสม pattern `&` แบบชัดเจน หรือ binding `mut` เข้าไปในจุดที่คอมไพเลอร์ใส่ไว้ใน implicit by-reference mode แล้ว บน Rust 2021 ทั้งสองแบบถูกยอมรับแบบเงียบๆ:
+
+```rust
+// @skip-verify edition-specific: this compiles under --edition 2021; the harness always checks --edition 2024, where the identical code is the hard error shown below
+fn main() {
+    let opt_ref: &Option<&i32> = &Some(&5);
+    match opt_ref {
+        Some(&val) => println!("val={val}"),
+        None => println!("none"),
+    }
+}
+```
+
+บน edition 2024 โค้ดเดียวกันเป็น compile error แข็งๆ:
+
+```rust
+// @skip-verify no E-code (plain hard error, not error[EXXXX] — verified with rustc 1.96.1 --edition 2024)
+fn main() {
+    let opt_ref: &Option<&i32> = &Some(&5);
+    match opt_ref {
+        Some(&val) => println!("val={val}"), // ERROR on 2024
+        None => println!("none"),
+    }
+}
+```
+
+```text
+error: cannot explicitly dereference within an implicitly-borrowing pattern
+ --> src/main.rs:4:14
+  |
+4 |         Some(&val) => println!("val={val}"),
+  |              ^ reference pattern not allowed when implicitly borrowing
+  |
+  = note: for more information, see <https://doc.rust-lang.org/reference/patterns.html#binding-modes>
+note: matching on a reference type with a non-reference pattern implicitly borrows the contents
+ --> src/main.rs:4:9
+  |
+4 |         Some(&val) => println!("val={val}"),
+  |         ^^^^^^^^^^ this non-reference pattern matches on a reference type `&_`
+help: match on the reference with a reference pattern to avoid implicitly borrowing
+  |
+4 |         &Some(&val) => println!("val={val}"),
+  |         +
+
+error: aborting due to 1 previous error
+```
+
+ทางแก้ที่คอมไพเลอร์แนะนำคือประเด็นทั้งหมดของกฎ 2024: ให้ชัดเจนว่าคุณกำลัง dereference ระดับไหนกันแน่ แทนที่จะผสม implicit borrow (จากการ match `opt_ref` เอง ซึ่งเป็น reference) กับ pattern `&` แบบชัดเจนอีกระดับหนึ่งลึกลงไป:
+
+```rust
+fn main() {
+    let opt_ref: &Option<&i32> = &Some(&5);
+    match opt_ref {
+        &Some(&val) => println!("val={val}"),
+        &None => println!("none"),
+    }
+}
+```
+
+```text
+val=5
+```
+
+การเข้มงวดแบบเดียวกันนี้ใช้กับ binding `mut` ที่เขียนไว้ในpatternที่ implicitly borrow (`Some(mut y)` ที่ match `&Option<i32>`) ซึ่งตอนนี้ก็ fail บน 2024 เช่นกันด้วย `error: cannot mutably bind by value within an implicitly-borrowing pattern` ในทางปฏิบัติ สิ่งนี้แทบไม่กระทบโค้ดที่ match ค่าตรงๆ (`match some_option { Some(x) => ... }` ซึ่งเป็นโค้ดจริงส่วนใหญ่ท่วมท้น) — มันจะปรากฏเฉพาะตอนที่ pattern พึ่งพา implicit borrow ของคอมไพเลอร์อยู่แล้ว *และ* เพิ่ม `&`/`mut` แบบชัดเจนอีกระดับหนึ่งเข้าไปใน pattern เดียวกันนั้น ซึ่ง edition 2024 ตอนนี้ขอให้คุณเขียนให้ชัดเจนไม่กำกวมแทน
+
+## Wildcard `_` ที่ต้องระวัง
 
 <Callout title="match ต้องครอบคลุมทุกกรณี">
 Rust กำหนดให้ `match` expression ครอบคลุมทุกค่าที่เป็นไปได้ของประเภทที่จับคู่ หากคุณพลาดกรณีใด คอมไพเลอร์จะส่ง error — ไม่ใช่แค่ warning
@@ -166,6 +277,10 @@ fn main() {
 
 โค้ดนี้ compile ผ่านสะอาด — ไม่มี error ไม่มี warning — และพิมพ์ `1`, `5`, `0` ทั้งที่ `Quarter` ควรมีค่า 25 เซนต์ แต่ไม่มีอะไรบอกว่าต้องอัปเดต `value_in_cents` ตอนเพิ่ม variant นี้เข้ามา `_` เงียบๆ ดูดซับมันไปและ return คำตอบที่ผิด ถ้าคุณต้องการการรับประกันแบบ "variant ใหม่ต้องถูกจัดการที่ไหนสักแห่ง" ให้ match ทุก variant ด้วยชื่อ แล้วใส่ `_` เฉพาะตอนที่ "กรณีอื่นๆ ทั้งหมด" คือ behavior ที่ตั้งใจจริงๆ ไม่ใช่ปฏิกิริยาอัตโนมัติ
 
+### `#[non_exhaustive]` — บังคับ Wildcard ให้คนอื่น
+
+`_` arm caveat ด้านบนเป็นสิ่งที่*คุณ*เลือกทำเองในโค้ดของตัวเอง `#[non_exhaustive]` ซึ่งครอบคลุมแบบลึกใน[บทเรียน custom errors ของโมดูล error-handling](/rust/th/error-handling/custom-errors/) คือกลไก `E0004` เดียวกันที่กลับด้าน: เมื่อวางไว้บน enum แบบ public มันบังคับให้ทุก crate*อื่นนอกจากของคุณ*ต้องเขียน wildcard arm เพื่อให้คุณเพิ่ม variant ทีหลังได้โดยไม่ทำให้ build ของพวกเขาพังทันที มันไม่มีผลต่อโค้ดภายใน crate ที่กำหนด enum เอง — เฉพาะผู้เรียกภายนอกเท่านั้นที่ถูกบังคับให้เพิ่ม `_`
+
 export const patternMatchingCode = `#[derive(Debug)]
 enum Coin {
     Penny,
@@ -219,6 +334,38 @@ fn main() {
 
 <Playground code={patternMatchingCode} />
 
+## Mental Model
+
+`match` คือข้อพิสูจน์แบบ static เพียงข้อเดียว: "ทุกรูปร่างที่เป็นไปได้ของค่านี้ถูกจัดการอยู่ที่ไหนสักแห่งใน expression นี้" Guard, `@` binding และ range pattern ล้วนจำกัดว่า*ค่าไหน*ที่ arm จะรับ แต่ไม่มีตัวไหนลดข้อผูกมัดนั้นลงเลย — มีแค่ `_` เท่านั้นที่ทำ เพราะในมุมมองของ exhaustiveness checker แล้ว `_` ครอบคลุมทุกอย่างจริงๆ รวมถึงรูปร่างที่ยังไม่มีอยู่ด้วยซ้ำ
+
+## Trade-offs
+
+การ match ทุก variant ด้วยชื่อต้องเขียนมากกว่าและต้องอัปเดตเมื่อ variant ใหม่ปรากฏ แต่ภาระการอัปเดตนั้นคือประเด็นทั้งหมด — มันเปลี่ยน "มีใครจำได้ไหมว่าต้องจัดการกรณีใหม่" ให้เป็น compile error แทนที่จะเป็นคำตอบผิดแบบเงียบๆ `_` แลกการรับประกันนั้นด้วยความกระชับ ซึ่งเป็นทางเลือกที่ถูกต้องเมื่อ "กรณีอื่นๆ" ตั้งใจให้ทำงานเหมือนกันไปตลอดจริงๆ และเป็นทางเลือกที่ผิดทันทีที่ variant ในอนาคตอาจต้องการการจัดการที่ต่างออกไป การเข้มงวดของ match ergonomics ใน 2024 แลกความยืดหยุ่นเดิมเล็กน้อย (`&`/`mut` แบบชัดเจนที่ซ้อนอยู่ใน implicitly-borrowing pattern) กับ pattern ที่ binding mode ไม่กำกวมแค่อ่านก็เข้าใจ โดยไม่ต้องไล่ตามกฎ implicit-borrow ของคอมไพเลอร์
+
+## Common Misconceptions
+
+- **"ถ้า `match` ของผม compile ผ่าน มันจัดการ variant ในอนาคตของ enum ได้ถูกต้องด้วย"** เฉพาะตอนที่ไม่มี arm `_` เท่านั้น arm `_` compile ผ่านวันนี้และจะยัง compile ผ่านต่อไป — แบบเงียบๆ ไม่มี warning — หลังจาก variant ใหม่ถูกเพิ่มเข้ามา อาจจัดการ variant ใหม่นั้นผิดก็ได้
+- **"Match ergonomics หมายความว่าผมไม่ต้องเขียน `&` หรือ `ref` ใน pattern เลย"** มันหมายถึงคุณ*มักจะ*ไม่ต้องเขียน ตอนที่ match reference ด้วย pattern ธรรมดา ทันทีที่คุณผสม pattern `&` แบบชัดเจนเข้าไปในจุดที่ Rust ใส่ไว้ใน implicit-reference mode แล้ว edition 2024 จะขอให้คุณชัดเจนกับทั้ง pattern แทน
+- **"`@` binding เป็น syntax ที่แทบไม่มีใครใช้และไม่มี use case จริง"** มันเป็นวิธีมาตรฐานในการรวมการตรวจ range หรือ structural เข้ากับชื่อที่ใช้งานได้สำหรับค่าที่ตรงกัน หลีกเลี่ยงการอ่าน expression เดิมซ้ำเป็นครั้งที่สองภายใน body ของ arm
+
+## อ่านโค้ดที่ AI เขียน
+
+`match` arm ของ `Option<&String>` (หรือ `Option` ของ reference-to-owned-type ใดๆ) ที่ AI เขียนมักจะ `.clone()` ค่าภายในในทุก arm เพื่อให้ได้ `String` ที่เป็นเจ้าของสำหรับ return แม้ `&str` แบบ borrowed จะเพียงพอสำหรับทุกผู้เรียกก็ตาม
+
+<SpotTheBug code={`fn describe(name: Option<&String>) -> String {
+    match name {
+        Some(n) => n.clone(),
+        None => String::from("anonymous"),
+    }
+}
+`}>
+โค้ดนี้ compile และทำงานได้ แต่ `n.clone()` allocate `String` ใหม่ทุกครั้งที่มีชื่ออยู่ เพียงเพื่อตอบสนอง return type แบบ `String` ซึ่งตั้งแต่แรกไม่จำเป็นต้องเป็นเจ้าของเลย ถ้าผู้เรียกแค่ print หรือเปรียบเทียบผลลัพธ์ ฟังก์ชันสามารถคืน `&str` แทนได้: `fn describe(name: Option<&String>) -> &str { match name { Some(n) => n.as_str(), None => "anonymous" } }` — ไม่มี allocation บน path ของ `Some` เลย และ `"anonymous"` ก็เป็น `&'static str` literal อยู่แล้ว ใช้ `.clone()` ตรงนี้เฉพาะตอนที่ผู้เรียกต้องเป็นเจ้าของผลลัพธ์เกิน lifetime ของ `name` ที่ borrow มาจริงๆ เท่านั้น
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+match ต้องครอบคลุมทุก variant เสมอ — ใช้ `_` เฉพาะตอนที่ "กรณีอื่นๆ" ตั้งใจให้ทำงานเหมือนกันจริงๆ ไปตลอด และภายใต้ edition 2024 ห้ามผสม `&`/`mut` เข้าไปในจุดที่คอมไพเลอร์ implicitly borrow ไว้แล้วโดยไม่เขียนให้ชัดเจน
+</Callout>
+
 export const quizPatternMatching = [
     {
         q: 'จะเกิดอะไรขึ้นหาก match expression ไม่ครอบคลุมค่าที่เป็นไปได้ทั้งหมดของประเภทที่จับคู่?',
@@ -229,6 +376,7 @@ export const quizPatternMatching = [
             'arm สุดท้ายถูกใช้เป็น fallback อัตโนมัติ',
         ],
         answer: 2,
+        explain: "match ถูกตรวจสอบความครบถ้วนตอน compile time กรณีที่ขาดหายเป็น compile error แข็งๆ (E0004) ไม่เคยเป็น panic ตอน runtime หรือถูกข้ามแบบเงียบๆ",
     },
     {
         q: 'pattern _ ใน match arm ทำอะไร?',
@@ -239,6 +387,7 @@ export const quizPatternMatching = [
             'เป็น syntax error',
         ],
         answer: 1,
+        explain: "_ เป็น wildcard pattern ที่จับคู่กับค่าใดก็ได้และทิ้งมันไป มันไม่ bind ชื่อใดๆ ต่างจาก identifier pattern ธรรมดา",
     },
     {
         q: 'ควรใช้ if let แทน match แบบเต็มเมื่อใด?',
@@ -249,6 +398,7 @@ export const quizPatternMatching = [
             'เมื่อค่าที่จับคู่เป็น reference',
         ],
         answer: 1,
+        explain: "if let คือ sugar สำหรับ match ที่มี arm ที่มีความหมายแค่อันเดียวและมี catch-all โดยนัย — เหมาะเมื่อคุณสนใจแค่ pattern เดียวจริงๆ",
     },
     {
         q: 'match guard คืออะไร?',
@@ -259,6 +409,40 @@ export const quizPatternMatching = [
             'การตรวจสอบ compile-time ว่า match ครบถ้วน',
         ],
         answer: 1,
+        explain: "guard คือ `if condition` ที่เขียนต่อจาก pattern (`n if n < 0 => ...`) มันรันหลังจาก structural pattern ตรงกันแล้วเท่านั้น และสามารถปฏิเสธ arm ได้แม้ pattern จะตรงกัน",
+    },
+    {
+        q: '`x @ 1..=5` ให้คุณทำอะไรที่ pattern `1..=5` ธรรมดาทำไม่ได้?',
+        options: [
+            'จับคู่ช่วงค่าที่กว้างขึ้น',
+            'bind ค่าที่ตรงกันกับชื่อ x เพื่อใช้ภายใน arm นอกเหนือจากการตรวจช่วง',
+            'รัน arm เฉพาะตอนที่ x เท่ากับ 1 พอดี',
+            'ไม่มีอะไรต่าง — เทียบเท่ากันทุกประการ',
+        ],
+        answer: 1,
+        explain: "@ รวมการตรวจ pattern กับ binding เข้าด้วยกัน: 1..=5 เดี่ยวๆ แค่ทดสอบช่วง ส่วน x @ 1..=5 ยังให้ชื่อสำหรับค่าไหนในช่วงนั้นที่ตรงกันจริงๆ ด้วย",
+    },
+    {
+        q: 'โค้ดนี้ print อะไร กำหนดว่า enum นี้ถูกเขียนก่อนที่ `Quarter` จะมีอยู่และไม่เคยอัปเดต?\n```rust\nenum Coin { Penny, Nickel, Quarter }\nfn value(coin: &Coin) -> u32 {\n    match coin {\n        Coin::Penny => 1,\n        Coin::Nickel => 5,\n        _ => 0,\n    }\n}\nfn main() {\n    println!("{}", value(&Coin::Quarter));\n}\n```',
+        options: [
+            'compile ไม่ผ่าน: error[E0004] non-exhaustive patterns',
+            '25 — คอมไพเลอร์เดาว่า Quarter มีค่า 25 เซนต์',
+            '0 — arm _ ดูดซับ Quarter ไปเงียบๆ ด้วยค่าที่ผิด',
+            'panic ตอน runtime เพราะ Quarter ไม่ถูกจัดการ',
+        ],
+        answer: 2,
+        explain: "arm _ เป็น pattern ที่ถูกต้องและตรงกันในมุมมองคอมไพเลอร์ ดังนั้นโค้ดนี้ compile ผ่านสะอาดและคืน 0 สำหรับ Quarter — ผิดแบบเงียบๆ ไม่มี error หรือ warning เลย",
+    },
+    {
+        q: 'บน Rust 2024 edition ทำไม `Some(&val) => ...` compile ไม่ผ่านเมื่อ match `&Option<&i32>`?\n```rust\nlet opt_ref: &Option<&i32> = &Some(&5);\nmatch opt_ref {\n    Some(&val) => println!("{val}"),\n    None => {}\n}\n```',
+        options: [
+            'Option<&i32> ไม่ใช่ type ที่ถูกต้องใน Rust',
+            'การ match opt_ref (ซึ่งเป็น reference) ทำให้ pattern เข้าสู่ implicit by-reference binding mode อยู่แล้ว การเพิ่ม pattern & แบบชัดเจนอีกระดับหนึ่งเข้าไปตอนนี้ถูกปฏิเสธว่ากำกวม',
+            'val เป็นตัวแปรที่ไม่ได้ใช้ ซึ่งเป็น hard error บน 2024',
+            'มัน compile ไม่ผ่านทุก edition ไม่ใช่แค่ 2024',
+        ],
+        answer: 1,
+        explain: "โค้ดนี้ compile ผ่านบน edition 2021 แต่เป็น hard error บน 2024: 'cannot explicitly dereference within an implicitly-borrowing pattern' ทางแก้คือ match reference ชั้นนอกแบบชัดเจนด้วย: &Some(&val)",
     },
 ];
 

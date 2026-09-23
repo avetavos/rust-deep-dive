@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Defining Structs
 
@@ -43,9 +45,172 @@ fn main() {
 }
 ```
 
-## Struct Update Syntax
+## `#[derive]` in Full
 
-When you want a new instance that shares most fields with an existing one, use the `..` update syntax:
+`#[derive(Debug)]` is one of several attributes that generate a trait implementation for you instead of you writing the boilerplate by hand. The most common derives, and what they give you:
+
+| Derive | Gives you |
+|--------|-----------|
+| `Debug` | The `{:?}` format |
+| `Clone` | An explicit `.clone()` method that duplicates the value |
+| `Copy` | Implicit bitwise duplication on assignment/pass, instead of a move |
+| `PartialEq` | `==` and `!=` |
+| `Eq` | A promise that `==` is fully reflexive (`x == x` always true) — needed as a bound for `HashMap`/`HashSet` keys |
+| `Hash` | The ability to be a `HashMap`/`HashSet` key |
+| `Default` | `T::default()`, a zero/empty value built from each field's own `Default` |
+| `PartialOrd`, `Ord` | `<`, `>`, `.sort()`, `.max()` — compares fields in declaration order |
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() {
+    let a = Point { x: 1, y: 2 };
+    let b = a; // Copy: a is still usable after this
+    println!("a={:?} b={:?}", a, b);
+    println!("a == b: {}", a == b);
+    println!("default: {:?}", Point::default());
+
+    let mut pts = vec![Point { x: 3, y: 1 }, Point { x: 1, y: 5 }, Point { x: 1, y: 2 }];
+    pts.sort();
+    println!("sorted: {:?}", pts);
+}
+```
+
+Every derive here is generated purely from the struct's fields: `PartialEq` compares field-by-field, `Ord` compares fields in the order they're declared (so `x` is compared before `y`), and `Default` calls `i32::default()` (which is `0`) for each field. None of this is magic — it is exactly the code you would otherwise write by hand.
+
+### What the Compiler Says: `Copy` Has Preconditions
+
+`Copy` is not a derive you can add to just any type. It has two real requirements, and the compiler checks both:
+
+**1. The type must also implement `Clone`** — `Copy` is defined as `trait Copy: Clone`, so deriving `Copy` alone, without `Clone`, fails:
+
+```rust
+// @expect-error E0277
+#[derive(Copy)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() {
+    let p = Point { x: 1, y: 2 };
+    println!("{} {}", p.x, p.y);
+}
+```
+
+```text
+error[E0277]: the trait bound `Point: Clone` is not satisfied
+   --> src/main.rs:1:10
+    |
+  1 | #[derive(Copy)]
+    |          ^^^^ the trait `Clone` is not implemented for `Point`
+    |
+note: required by a bound in `Copy`
+   --> /rustc/.../library/core/src/marker.rs:454:17
+    |
+454 | pub trait Copy: Clone {
+    |                 ^^^^^ required by this bound in `Copy`
+help: consider annotating `Point` with `#[derive(Clone)]`
+    |
+  2 + #[derive(Clone)]
+  3 | struct Point {
+    |
+
+error: aborting due to 1 previous error
+```
+
+**2. Every field must itself be `Copy`.** Even with `Clone` also derived, a single non-`Copy` field (like `String`, which owns a heap allocation) blocks the whole struct:
+
+```rust
+// @expect-error E0204
+#[derive(Clone, Copy)]
+struct User {
+    name: String,
+    age: u32,
+}
+
+fn main() {
+    let u = User { name: String::from("Ada"), age: 30 };
+    println!("{}", u.name);
+}
+```
+
+```text
+error[E0204]: the trait `Copy` cannot be implemented for this type
+ --> src/main.rs:2:8
+  |
+1 | #[derive(Clone, Copy)]
+  |                 ---- in this derive macro expansion
+2 | struct User {
+  |        ^^^^
+3 |     name: String,
+  |     ------------ this field does not implement `Copy`
+
+error: aborting due to 1 previous error
+```
+
+This is not an arbitrary restriction: `Copy` means "duplicating this value is just copying its bytes, with no side effects" — but duplicating a `String`'s bytes would produce two owners of the same heap buffer, which is exactly the double-free `Copy` exists to rule out. `Clone` stays available (an explicit `.clone()` performs a real, possibly-expensive heap copy); `Copy` cannot.
+
+## PartialEq on Floats, and Why `f64` Cannot Be a `HashMap` Key
+
+Deriving `PartialEq` compares floating-point fields with `==`, which behaves correctly for ordinary values but has one well-known exception: `NaN` is not equal to itself.
+
+```rust
+#[derive(Debug, PartialEq)]
+struct Measurement {
+    value: f64,
+}
+
+fn main() {
+    let a = Measurement { value: 1.0 };
+    let b = Measurement { value: 1.0 };
+    println!("a == b: {}", a == b);
+
+    let m = Measurement { value: f64::NAN };
+    println!("m == m: {}", m == m); // false — NaN breaks reflexivity
+}
+```
+
+```text
+a == b: true
+m == m: false
+```
+
+That single broken guarantee — `x == x` should always be `true` — is precisely why `f64` implements `PartialEq` but not `Eq`, and why it implements `PartialOrd` but not `Ord`, and why the standard library refuses to let it be a `HashMap` or `HashSet` key at all: both require `Eq + Hash`, and `f64` has neither. See the [collections-iterators lesson](/rust/en/collections-iterators/hashmap/) for the exact `E0599` the compiler gives when you try to `.insert()` an `f64` key anyway. The fix, when you genuinely need floats as keys, is to wrap them in a newtype that defines a total order (commonly by disallowing `NaN` at construction, or by using an ordered-float crate) rather than trying to derive your way past the restriction.
+
+## Default and Struct Update
+
+`#[derive(Default)]` builds a "zero value" from each field's own `Default` (`0` for numbers, `""` for `String`, `false` for `bool`, `None` for `Option`). Combined with `..Default::default()`, you can build a mostly-default value and override only the fields you care about — the same `..` update syntax used above, just with `Default::default()` as the source instead of an existing instance:
+
+```rust
+#[derive(Debug, Default)]
+struct Config {
+    host: String,
+    port: u16,
+    verbose: bool,
+}
+
+fn main() {
+    let base = Config::default();
+    println!("base: {:?}", base);
+
+    let custom = Config { port: 9090, ..Default::default() };
+    println!("custom: {:?}", custom);
+}
+```
+
+```text
+base: Config { host: "", port: 0, verbose: false }
+custom: Config { host: "", port: 9090, verbose: false }
+```
+
+### Struct Update Syntax From an Existing Value
+
+When you want a new instance that shares most fields with an *existing* one (not a fresh default), use `..` with that instance instead:
 
 ```rust
 struct Point {
@@ -91,6 +256,109 @@ error[E0382]: borrow of partially moved value: `p1`
    = note: partial move occurs because `p1.name` has type `String`, which does not implement the `Copy` trait
 ```
 
+export const defaultUpdateCode = `#[derive(Debug, Default)]
+struct Config {
+    host: String,
+    port: u16,
+    verbose: bool,
+}
+
+fn main() {
+    let base = Config::default();
+    println!("base: {:?}", base);
+
+    let custom = Config { port: 9090, ..Default::default() };
+    println!("custom: {:?}", custom);
+}`;
+
+<Playground code={defaultUpdateCode} />
+
+## The Builder Pattern (Consuming `self`)
+
+When a type has several optional fields, a builder lets callers set only the ones they care about, one method call at a time. Each builder method takes `self` **by value** and returns `Self`, so calls chain — and because `self` is consumed, a half-built value can never be reused by accident:
+
+```rust
+#[derive(Debug)]
+struct Request {
+    url: String,
+    method: String,
+    retries: u32,
+}
+
+struct RequestBuilder {
+    url: String,
+    method: String,
+    retries: u32,
+}
+
+impl RequestBuilder {
+    fn new(url: &str) -> Self {
+        RequestBuilder { url: url.to_string(), method: "GET".to_string(), retries: 0 }
+    }
+
+    fn method(mut self, method: &str) -> Self {
+        self.method = method.to_string();
+        self
+    }
+
+    fn retries(mut self, n: u32) -> Self {
+        self.retries = n;
+        self
+    }
+
+    fn build(self) -> Request {
+        Request { url: self.url, method: self.method, retries: self.retries }
+    }
+}
+```
+
+export const builderCode = `#[derive(Debug)]
+struct Request {
+    url: String,
+    method: String,
+    retries: u32,
+}
+
+struct RequestBuilder {
+    url: String,
+    method: String,
+    retries: u32,
+}
+
+impl RequestBuilder {
+    fn new(url: &str) -> Self {
+        RequestBuilder { url: url.to_string(), method: "GET".to_string(), retries: 0 }
+    }
+
+    fn method(mut self, method: &str) -> Self {
+        self.method = method.to_string();
+        self
+    }
+
+    fn retries(mut self, n: u32) -> Self {
+        self.retries = n;
+        self
+    }
+
+    fn build(self) -> Request {
+        Request { url: self.url, method: self.method, retries: self.retries }
+    }
+}
+
+fn main() {
+    let req = RequestBuilder::new("https://example.com")
+        .method("POST")
+        .retries(3)
+        .build();
+    println!("{:?}", req);
+}`;
+
+<Playground code={builderCode} />
+
+<Callout title="mut self consumes and reuses the same allocation">
+`fn method(mut self, method: &str) -> Self` takes ownership of the builder, makes the local binding mutable so it can be edited, then moves it back out as the return value. No new `RequestBuilder` is allocated at each step — this is purely a compile-time ownership dance, not a runtime cost.
+</Callout>
+
 ## Methods
 
 Add behaviour to a struct in an `impl` block. Each method takes the receiver as its first parameter.
@@ -116,7 +384,7 @@ impl Point {
 }
 ```
 
-## Associated Functions (the `new` Pattern)
+## Associated Functions (the `new` Pattern) and Associated Consts
 
 Functions inside `impl` that do not take a `self` parameter are called *associated functions*. They are called with `::` syntax. The conventional name for a constructor is `new`:
 
@@ -135,7 +403,33 @@ impl Point {
 let p = Point::new(1.0, 2.0);
 ```
 
-`Self` inside an `impl` block is an alias for the type being implemented.
+`Self` inside an `impl` block is an alias for the type being implemented — it means "whatever type this `impl` block is for," which is why the same `new` body works no matter what the struct is renamed to later.
+
+An `impl` block can also declare **associated consts**: constants namespaced under the type, accessed the same way as an associated function.
+
+```rust
+struct Circle {
+    radius: f64,
+}
+
+impl Circle {
+    const UNIT: Self = Circle { radius: 1.0 };
+
+    fn area(&self) -> f64 {
+        std::f64::consts::PI * self.radius * self.radius
+    }
+}
+
+fn main() {
+    println!("unit area: {:.4}", Circle::UNIT.area());
+}
+```
+
+```text
+unit area: 3.1416
+```
+
+`Circle::UNIT` is not a method call (no `()`), it is a compile-time constant value of type `Circle` — useful for named, reusable defaults that are not the same thing as `#[derive(Default)]`'s single all-purpose zero value.
 
 ## Tuple Structs
 
@@ -149,6 +443,129 @@ println!("{}", red.0); // access by index
 ```
 
 Unlike a plain tuple, a `Color` and a `Point` with the same field types are distinct types — the compiler will reject mixing them up.
+
+## The Newtype Pattern
+
+A tuple struct with exactly **one** field is called a newtype: a distinct type that wraps an existing one, purely so the compiler can tell two uses of the same underlying type apart.
+
+```rust
+struct Meters(f64);
+struct Feet(f64);
+```
+
+`Meters` and `Feet` are both "just an `f64`" at runtime — the wrapper is free, compiled away entirely — but the compiler treats them as unrelated types, so a function expecting one cannot accidentally receive the other:
+
+```rust
+// @expect-error E0308
+struct Meters(f64);
+struct Feet(f64);
+
+fn total_distance(a: Meters, b: Meters) -> Meters {
+    Meters(a.0 + b.0)
+}
+
+fn main() {
+    let track = Meters(100.0);
+    let fence = Feet(30.0);
+    let total = total_distance(track, fence);
+    println!("{}", total.0);
+}
+```
+
+```text
+error[E0308]: mismatched types
+  --> src/main.rs:11:39
+   |
+11 |     let total = total_distance(track, fence);
+   |                 --------------        ^^^^^ expected `Meters`, found `Feet`
+   |                 |
+   |                 arguments to this function are incorrect
+   |
+note: function defined here
+  --> src/main.rs:4:4
+   |
+ 4 | fn total_distance(a: Meters, b: Meters) -> Meters {
+   |    ^^^^^^^^^^^^^^            ---------
+
+error: aborting due to 1 previous error
+```
+
+A plain `type Meters = f64;` alias would **not** catch this — a type alias is just another name for the same type, so `Feet` and `Meters` would both simply be `f64` and the mix-up would compile silently. The newtype's whole value is that it is a genuinely distinct type, not a synonym.
+
+## A Type-State Teaser
+
+The newtype idea generalizes: a struct can be parameterized by a marker type that represents *which state* a value is in, and `impl` blocks scoped to one specific state expose only the operations valid in that state. The compiler then rejects an out-of-order call at compile time instead of at runtime:
+
+```rust
+struct Locked;
+struct Unlocked;
+
+struct Door<State> {
+    _state: std::marker::PhantomData<State>,
+}
+
+impl Door<Locked> {
+    fn new() -> Self {
+        Door { _state: std::marker::PhantomData }
+    }
+
+    fn unlock(self) -> Door<Unlocked> {
+        println!("unlocking");
+        Door { _state: std::marker::PhantomData }
+    }
+}
+
+impl Door<Unlocked> {
+    fn open(&self) {
+        println!("opening");
+    }
+}
+```
+
+export const typestateCode = `struct Locked;
+struct Unlocked;
+
+struct Door<State> {
+    _state: std::marker::PhantomData<State>,
+}
+
+impl Door<Locked> {
+    fn new() -> Self {
+        Door { _state: std::marker::PhantomData }
+    }
+
+    fn unlock(self) -> Door<Unlocked> {
+        println!("unlocking");
+        Door { _state: std::marker::PhantomData }
+    }
+}
+
+impl Door<Unlocked> {
+    fn open(&self) {
+        println!("opening");
+    }
+}
+
+fn main() {
+    let door = Door::<Locked>::new();
+    let door = door.unlock();
+    door.open();
+    // door.unlock(); // would not compile: Door<Unlocked> has no unlock() method
+}`;
+
+<Playground code={typestateCode} />
+
+`Door<Locked>` and `Door<Unlocked>` are different types — `PhantomData<State>` costs zero bytes at runtime, it exists purely to give the type checker something to key `impl` blocks on. Calling `.open()` on a `Door<Locked>` is not a runtime check that might be forgotten; it is `error[E0599]: no method named open found for struct Door<Locked>`, because the method genuinely does not exist for that type. This is the same mechanism, taken further, as the newtype pattern above.
+
+<Mermaid code={`flowchart LR
+    subgraph "derive tour"
+    D[Debug] --> DBG["{:?} works"]
+    C1[Clone] --> CL[".clone"]
+    C2["Copy (needs Clone + all-Copy fields)"] --> CP["assignment duplicates, no move"]
+    PE[PartialEq] --> EQ["==, !="]
+    HA[Hash + Eq] --> HM["usable as a HashMap key"]
+    end
+    N["newtype: struct Meters(f64)"] --> TS["type-state: struct Door&lt;State&gt;"]`} title="From a single derive to the type-state pattern" />
 
 export const structsCode = `#[derive(Debug)]
 struct Rectangle {
@@ -192,11 +609,48 @@ fn main() {
 
 <Playground code={structsCode} />
 
-export const structsQuiz = [
+## Mental Model
+
+A struct is a promise about *shape*: every instance has every field, always, and `#[derive(...)]` is just a way to ask the compiler to write mechanical, field-by-field trait implementations for that shape instead of writing them by hand. A newtype (and its extension, type-state) is the same idea turned into a compile-time label: the runtime representation doesn't change at all, only what the type checker will let you do with it changes.
+
+## Trade-offs
+
+`#[derive(Copy)]` is free to call but has real preconditions (`Clone` plus every field being `Copy`) — reach for it only on small, plain-data structs; a struct holding a `String` or `Vec` structurally cannot have it, and that is the compiler protecting you from a double-free, not an arbitrary limitation. A builder costs you writing a second struct and one method per optional field, in exchange for call sites that read like sentences and can never be built in a half-initialized state. A newtype costs nothing at runtime but adds a `.0` everywhere you need the inner value; a type-state struct costs a bit more ceremony (`PhantomData`, per-state `impl` blocks) in exchange for turning a class of "called the methods in the wrong order" bugs into compile errors instead of runtime panics or silent wrong behavior.
+
+## Common Misconceptions
+
+- **"I can always add `#[derive(Copy)]` to make a struct faster to pass around."** `Copy` is not available to every struct — it requires `Clone` plus every field being `Copy`. A struct holding a `String`, `Vec<T>`, or any other heap-owning type cannot derive `Copy`, full stop; the fix for "expensive to clone" is not `Copy`, it's passing by reference.
+- **"A type alias (`type Meters = f64;`) gives me the same safety as a newtype (`struct Meters(f64);`)."** A type alias is just another name for the exact same type — `Meters` and `Feet` as aliases for `f64` are completely interchangeable, and the compiler will happily mix them up. Only a newtype (a real, distinct struct) makes the mix-up a compile error.
+- **"`PartialEq` on a struct with a float field behaves exactly like integer equality."** It inherits every quirk of IEEE-754 floats, most notably that `NaN != NaN`, which is also exactly why `f64` cannot implement `Eq` and cannot be used as a `HashMap`/`HashSet` key.
+
+## Reading AI-generated code
+
+AI-generated structs frequently reach for `#[derive(Clone, Copy)]` reflexively on every small struct, without checking whether every field actually supports it.
+
+<SpotTheBug code={`#[derive(Clone, Copy, Debug)]
+struct User {
+    name: String,
+    age: u32,
+}
+
+fn main() {
+    let u = User { name: String::from("Ada"), age: 30 };
+    println!("{:?}", u);
+}
+`}>
+This does not compile at all: `error[E0204]: the trait \`Copy\` cannot be implemented for this type — this field does not implement \`Copy\`` pointing at `name: String`. `String` owns a heap allocation, so bitwise-duplicating it (what `Copy` means) would produce two owners of the same buffer — precisely the double-free `Copy` exists to prevent. The fix is to drop `Copy` and keep only `#[derive(Clone, Debug)]`; callers that need a duplicate call `.clone()` explicitly, which is an honest, visible heap allocation instead of an invisible bitwise copy that could never have been safe to allow.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`#[derive]` only generates mechanical, field-by-field code — `Copy` requires `Clone` plus every field being `Copy`, floats can be `PartialEq` but never `Eq`/`Hash`, and a newtype (not a type alias) is what actually stops two same-shaped values from being mixed up.
+</Callout>
+
+export const quizStructs = [
     {
         q: 'Which receiver type should you use for a method that only needs to read struct fields?',
         options: ['self', '&self', '&mut self', 'Self'],
         answer: 1,
+        explain: "&self borrows the instance immutably, which is exactly what a read-only method needs. self would consume the value; &mut self would allow (and require) mutation.",
     },
     {
         q: 'How do you call an associated function named new on a struct called Rectangle?',
@@ -207,6 +661,7 @@ export const structsQuiz = [
             'new Rectangle()',
         ],
         answer: 2,
+        explain: "Associated functions (ones with no self parameter) are namespaced under the type and called with ::, not the . used for methods on an instance.",
     },
     {
         q: 'What distinguishes a tuple struct from a plain tuple?',
@@ -217,9 +672,54 @@ export const structsQuiz = [
             'Tuple structs cannot derive Debug.',
         ],
         answer: 2,
+        explain: "struct Meters(f64) and struct Feet(f64) both wrap an f64, but they are separate, incompatible types to the compiler — unlike a plain (f64,) tuple, which has no name at all.",
+    },
+    {
+        q: 'What does this fail to compile with?\n```rust\n#[derive(Clone, Copy)]\nstruct User {\n    name: String,\n    age: u32,\n}\n```',
+        options: [
+            'error[E0277]: the trait bound `User: Clone` is not satisfied',
+            'error[E0204]: the trait `Copy` cannot be implemented for this type — the name field does not implement Copy',
+            'It compiles fine — Clone and Copy can always be derived together',
+            'error[E0308]: mismatched types',
+        ],
+        answer: 1,
+        explain: "Clone is derived here, so the missing-Clone case (E0277) does not apply. The failure is E0204: Copy additionally requires every field to be Copy, and String is not.",
+    },
+    {
+        q: 'Why can `f64` not be used as a `HashMap` key, even though it implements `PartialEq`?',
+        options: [
+            'HashMap keys must be integers only.',
+            '`f64` does not implement `Eq` and `Hash` — both required for a key — because NaN != NaN breaks the reflexivity `Eq` promises.',
+            'f64 keys would make hashing too slow.',
+            'This is a Rust language limitation with no underlying reason.',
+        ],
+        answer: 1,
+        explain: "HashMap requires its key type to implement Eq + Hash. f64 has PartialEq (== works, mostly) but not Eq, precisely because NaN == NaN is false, breaking the 'x == x is always true' guarantee Eq requires.",
+    },
+    {
+        q: 'What does this print?\n```rust\nstruct Meters(f64);\nstruct Feet(f64);\nfn total_distance(a: Meters, b: Meters) -> Meters {\n    Meters(a.0 + b.0)\n}\nfn main() {\n    let track = Meters(100.0);\n    let fence = Feet(30.0);\n    let total = total_distance(track, fence);\n    println!("{}", total.0);\n}\n```',
+        options: [
+            '130',
+            '100',
+            'It fails to compile: error[E0308] — expected Meters, found Feet',
+            'It panics at runtime',
+        ],
+        answer: 2,
+        explain: "Meters and Feet are distinct newtypes, even though both wrap f64. total_distance expects two Meters values; passing a Feet is a plain type mismatch, E0308, caught at compile time.",
+    },
+    {
+        q: 'In the type-state Door<Locked> / Door<Unlocked> example, what happens if you call `.open()` on a `Door<Locked>`?',
+        options: [
+            'It panics at runtime with "door is locked"',
+            'It silently does nothing',
+            'It fails to compile: error[E0599] — no method named open found for Door<Locked>',
+            'It opens anyway, since Rust does not enforce type-state',
+        ],
+        answer: 2,
+        explain: "open() is only defined in impl Door<Unlocked>. Door<Locked> and Door<Unlocked> are different types to the compiler, so calling open() on a Door<Locked> is a plain missing-method compile error, not a runtime check.",
     },
 ];
 
-<Quiz client:visible id="structs-enums-matching/structs" questions={structsQuiz} />
+<Quiz client:visible id="structs-enums-matching/structs" questions={quizStructs} />
 
 <ProgressTracker client:visible id="structs-enums-matching/structs" />

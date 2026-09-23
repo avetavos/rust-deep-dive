@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## การกำหนด Struct
 
@@ -43,9 +45,172 @@ fn main() {
 }
 ```
 
-## Struct Update Syntax
+## `#[derive]` แบบครบถ้วน
 
-เมื่อต้องการ instance ใหม่ที่แชร์ field ส่วนใหญ่กับ instance ที่มีอยู่ ใช้ syntax `..` สำหรับ update:
+`#[derive(Debug)]` เป็นหนึ่งใน attribute หลายตัวที่สร้าง trait implementation ให้คุณแทนที่จะเขียน boilerplate เอง derive ที่พบบ่อยที่สุด และสิ่งที่มันให้:
+
+| Derive | ให้อะไร |
+|--------|---------|
+| `Debug` | format `{:?}` |
+| `Clone` | method `.clone()` ที่ทำสำเนาค่าอย่างชัดเจน |
+| `Copy` | ทำสำเนาแบบ bitwise โดยนัยตอน assign/pass แทนการ move |
+| `PartialEq` | `==` และ `!=` |
+| `Eq` | คำสัญญาว่า `==` เป็น reflexive อย่างสมบูรณ์ (`x == x` เป็นจริงเสมอ) — จำเป็นเป็น bound สำหรับ key ของ `HashMap`/`HashSet` |
+| `Hash` | ความสามารถในการเป็น key ของ `HashMap`/`HashSet` |
+| `Default` | `T::default()` ค่า zero/empty ที่สร้างจาก `Default` ของแต่ละ field |
+| `PartialOrd`, `Ord` | `<`, `>`, `.sort()`, `.max()` — เปรียบเทียบ field ตามลำดับที่ประกาศ |
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() {
+    let a = Point { x: 1, y: 2 };
+    let b = a; // Copy: a is still usable after this
+    println!("a={:?} b={:?}", a, b);
+    println!("a == b: {}", a == b);
+    println!("default: {:?}", Point::default());
+
+    let mut pts = vec![Point { x: 3, y: 1 }, Point { x: 1, y: 5 }, Point { x: 1, y: 2 }];
+    pts.sort();
+    println!("sorted: {:?}", pts);
+}
+```
+
+ทุก derive ที่นี่สร้างขึ้นล้วนๆ จาก field ของ struct: `PartialEq` เปรียบเทียบทีละ field, `Ord` เปรียบเทียบ field ตามลำดับที่ประกาศ (ดังนั้น `x` จะถูกเทียบก่อน `y`) และ `Default` เรียก `i32::default()` (ซึ่งคือ `0`) สำหรับแต่ละ field ไม่มีอะไรวิเศษในนี้เลย — มันคือโค้ดแบบเดียวกับที่คุณจะเขียนเองทุกประการ
+
+### Compiler บอกว่าอย่างไร: `Copy` มีเงื่อนไขล่วงหน้า
+
+`Copy` ไม่ใช่ derive ที่คุณจะเพิ่มให้ type ไหนก็ได้ มันมีข้อกำหนดจริง 2 ข้อ และคอมไพเลอร์ตรวจสอบทั้งคู่:
+
+**1. Type ต้อง implement `Clone` ด้วย** — `Copy` ถูกกำหนดเป็น `trait Copy: Clone` ดังนั้นการ derive `Copy` เพียงอย่างเดียวโดยไม่มี `Clone` จะล้มเหลว:
+
+```rust
+// @expect-error E0277
+#[derive(Copy)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() {
+    let p = Point { x: 1, y: 2 };
+    println!("{} {}", p.x, p.y);
+}
+```
+
+```text
+error[E0277]: the trait bound `Point: Clone` is not satisfied
+   --> src/main.rs:1:10
+    |
+  1 | #[derive(Copy)]
+    |          ^^^^ the trait `Clone` is not implemented for `Point`
+    |
+note: required by a bound in `Copy`
+   --> /rustc/.../library/core/src/marker.rs:454:17
+    |
+454 | pub trait Copy: Clone {
+    |                 ^^^^^ required by this bound in `Copy`
+help: consider annotating `Point` with `#[derive(Clone)]`
+    |
+  2 + #[derive(Clone)]
+  3 | struct Point {
+    |
+
+error: aborting due to 1 previous error
+```
+
+**2. ทุก field ต้องเป็น `Copy` ด้วยตัวเอง** แม้จะ derive `Clone` ด้วยแล้ว field ที่ไม่ใช่ `Copy` เพียงตัวเดียว (เช่น `String` ที่เป็นเจ้าของ heap allocation) ก็ปิดกั้น struct ทั้งก้อน:
+
+```rust
+// @expect-error E0204
+#[derive(Clone, Copy)]
+struct User {
+    name: String,
+    age: u32,
+}
+
+fn main() {
+    let u = User { name: String::from("Ada"), age: 30 };
+    println!("{}", u.name);
+}
+```
+
+```text
+error[E0204]: the trait `Copy` cannot be implemented for this type
+ --> src/main.rs:2:8
+  |
+1 | #[derive(Clone, Copy)]
+  |                 ---- in this derive macro expansion
+2 | struct User {
+  |        ^^^^
+3 |     name: String,
+  |     ------------ this field does not implement `Copy`
+
+error: aborting due to 1 previous error
+```
+
+นี่ไม่ใช่ข้อจำกัดตามอำเภอใจ: `Copy` หมายถึง "การทำสำเนาค่านี้คือการคัดลอก byte ล้วนๆ โดยไม่มีผลข้างเคียง" — แต่การคัดลอก byte ของ `String` จะสร้างเจ้าของสองคนของ buffer เดียวกันบน heap ซึ่งคือ double-free ที่ `Copy` มีไว้ป้องกันพอดี `Clone` ยังคงใช้ได้ (`.clone()` แบบชัดเจนทำการคัดลอก heap จริงๆ ที่อาจมีต้นทุนสูง) ส่วน `Copy` ทำไม่ได้
+
+## PartialEq บน Float และทำไม `f64` เป็น Key ของ `HashMap` ไม่ได้
+
+การ derive `PartialEq` เปรียบเทียบ field แบบ floating-point ด้วย `==` ซึ่งทำงานถูกต้องสำหรับค่าปกติ แต่มีข้อยกเว้นที่รู้จักกันดีอยู่หนึ่งข้อ: `NaN` ไม่เท่ากับตัวมันเอง
+
+```rust
+#[derive(Debug, PartialEq)]
+struct Measurement {
+    value: f64,
+}
+
+fn main() {
+    let a = Measurement { value: 1.0 };
+    let b = Measurement { value: 1.0 };
+    println!("a == b: {}", a == b);
+
+    let m = Measurement { value: f64::NAN };
+    println!("m == m: {}", m == m); // false — NaN breaks reflexivity
+}
+```
+
+```text
+a == b: true
+m == m: false
+```
+
+การรับประกันที่พังเพียงจุดเดียวนั้น — `x == x` ควรเป็น `true` เสมอ — คือเหตุผลตรงๆ ที่ `f64` implement `PartialEq` แต่ไม่ implement `Eq` และ implement `PartialOrd` แต่ไม่ `Ord` และคือเหตุผลที่ standard library ปฏิเสธไม่ให้มันเป็น key ของ `HashMap` หรือ `HashSet` เลย: ทั้งคู่ต้องการ `Eq + Hash` และ `f64` ไม่มีทั้งสองอย่าง ดู [บทเรียน collections-iterators](/rust/th/collections-iterators/hashmap/) สำหรับ `E0599` ตัวจริงที่คอมไพเลอร์ให้เมื่อคุณพยายาม `.insert()` key แบบ `f64` อยู่ดี ทางแก้ เมื่อคุณต้องการ float เป็น key จริงๆ คือห่อมันด้วย newtype ที่กำหนด total order (ส่วนใหญ่ด้วยการห้าม `NaN` ตอนสร้าง หรือใช้ crate ประเภท ordered-float) แทนที่จะพยายาม derive ผ่านข้อจำกัดนี้
+
+## Default และ Struct Update
+
+`#[derive(Default)]` สร้าง "ค่า zero" จาก `Default` ของแต่ละ field เอง (`0` สำหรับตัวเลข, `""` สำหรับ `String`, `false` สำหรับ `bool`, `None` สำหรับ `Option`) รวมกับ `..Default::default()` คุณสามารถสร้างค่าที่ส่วนใหญ่เป็น default และ override เฉพาะ field ที่คุณสนใจ — syntax `..` update แบบเดียวกับที่ใช้ด้านบน เพียงแต่ใช้ `Default::default()` เป็นต้นทางแทน instance ที่มีอยู่:
+
+```rust
+#[derive(Debug, Default)]
+struct Config {
+    host: String,
+    port: u16,
+    verbose: bool,
+}
+
+fn main() {
+    let base = Config::default();
+    println!("base: {:?}", base);
+
+    let custom = Config { port: 9090, ..Default::default() };
+    println!("custom: {:?}", custom);
+}
+```
+
+```text
+base: Config { host: "", port: 0, verbose: false }
+custom: Config { host: "", port: 9090, verbose: false }
+```
+
+### Struct Update Syntax จากค่าที่มีอยู่
+
+เมื่อต้องการ instance ใหม่ที่แชร์ field ส่วนใหญ่กับ instance ที่มีอยู่ (ไม่ใช่ default ใหม่) ใช้ `..` กับ instance นั้นแทน:
 
 ```rust
 struct Point {
@@ -91,6 +256,109 @@ error[E0382]: borrow of partially moved value: `p1`
    = note: partial move occurs because `p1.name` has type `String`, which does not implement the `Copy` trait
 ```
 
+export const defaultUpdateCode = `#[derive(Debug, Default)]
+struct Config {
+    host: String,
+    port: u16,
+    verbose: bool,
+}
+
+fn main() {
+    let base = Config::default();
+    println!("base: {:?}", base);
+
+    let custom = Config { port: 9090, ..Default::default() };
+    println!("custom: {:?}", custom);
+}`;
+
+<Playground code={defaultUpdateCode} />
+
+## Builder Pattern (การ Consume `self`)
+
+เมื่อ type มี field ที่เป็น optional หลายตัว builder จะช่วยให้ผู้เรียกกำหนดเฉพาะตัวที่สนใจ ทีละ method call แต่ละ method ของ builder รับ `self` **แบบ value** และคืน `Self` ทำให้ call เรียงต่อกันได้ (chain) — และเพราะ `self` ถูก consume ค่าที่สร้างไม่เสร็จจะไม่มีทางถูกใช้ซ้ำโดยไม่ตั้งใจ:
+
+```rust
+#[derive(Debug)]
+struct Request {
+    url: String,
+    method: String,
+    retries: u32,
+}
+
+struct RequestBuilder {
+    url: String,
+    method: String,
+    retries: u32,
+}
+
+impl RequestBuilder {
+    fn new(url: &str) -> Self {
+        RequestBuilder { url: url.to_string(), method: "GET".to_string(), retries: 0 }
+    }
+
+    fn method(mut self, method: &str) -> Self {
+        self.method = method.to_string();
+        self
+    }
+
+    fn retries(mut self, n: u32) -> Self {
+        self.retries = n;
+        self
+    }
+
+    fn build(self) -> Request {
+        Request { url: self.url, method: self.method, retries: self.retries }
+    }
+}
+```
+
+export const builderCode = `#[derive(Debug)]
+struct Request {
+    url: String,
+    method: String,
+    retries: u32,
+}
+
+struct RequestBuilder {
+    url: String,
+    method: String,
+    retries: u32,
+}
+
+impl RequestBuilder {
+    fn new(url: &str) -> Self {
+        RequestBuilder { url: url.to_string(), method: "GET".to_string(), retries: 0 }
+    }
+
+    fn method(mut self, method: &str) -> Self {
+        self.method = method.to_string();
+        self
+    }
+
+    fn retries(mut self, n: u32) -> Self {
+        self.retries = n;
+        self
+    }
+
+    fn build(self) -> Request {
+        Request { url: self.url, method: self.method, retries: self.retries }
+    }
+}
+
+fn main() {
+    let req = RequestBuilder::new("https://example.com")
+        .method("POST")
+        .retries(3)
+        .build();
+    println!("{:?}", req);
+}`;
+
+<Playground code={builderCode} />
+
+<Callout title="mut self consume และใช้ allocation เดิม">
+`fn method(mut self, method: &str) -> Self` รับความเป็นเจ้าของ builder ทำให้ local binding เป็น mutable เพื่อแก้ไขได้ แล้ว move มันกลับออกไปเป็นค่า return ไม่มี `RequestBuilder` ใหม่ถูก allocate ในแต่ละขั้นตอน — นี่เป็นแค่การเต้นรำเรื่อง ownership ตอน compile-time ล้วนๆ ไม่ใช่ต้นทุนตอน runtime
+</Callout>
+
 ## Methods
 
 เพิ่มพฤติกรรมให้ struct ในบล็อก `impl` แต่ละ method รับ receiver เป็น parameter แรก
@@ -116,7 +384,7 @@ impl Point {
 }
 ```
 
-## Associated Functions (รูปแบบ `new`)
+## Associated Functions (รูปแบบ `new`) และ Associated Consts
 
 ฟังก์ชันในบล็อก `impl` ที่**ไม่**รับ parameter `self` เรียกว่า *associated functions* เรียกใช้ด้วย syntax `::` ชื่อตามแบบแผนสำหรับ constructor คือ `new`:
 
@@ -135,7 +403,33 @@ impl Point {
 let p = Point::new(1.0, 2.0);
 ```
 
-`Self` ภายในบล็อก `impl` คือ alias ของประเภทที่กำลัง implement
+`Self` ภายในบล็อก `impl` คือ alias ของประเภทที่กำลัง implement — มันหมายถึง "ไม่ว่า type นี้จะเป็นอะไรก็ตามที่บล็อก `impl` นี้ implement ให้" ซึ่งเป็นเหตุผลว่าทำไม body ของ `new` เดิมยังใช้งานได้แม้ struct จะถูกเปลี่ยนชื่อภายหลัง
+
+บล็อก `impl` ยังสามารถประกาศ **associated consts**: ค่าคงที่ที่อยู่ภายใต้ namespace ของ type เข้าถึงด้วยวิธีเดียวกับ associated function
+
+```rust
+struct Circle {
+    radius: f64,
+}
+
+impl Circle {
+    const UNIT: Self = Circle { radius: 1.0 };
+
+    fn area(&self) -> f64 {
+        std::f64::consts::PI * self.radius * self.radius
+    }
+}
+
+fn main() {
+    println!("unit area: {:.4}", Circle::UNIT.area());
+}
+```
+
+```text
+unit area: 3.1416
+```
+
+`Circle::UNIT` ไม่ใช่ method call (ไม่มี `()`) มันเป็นค่าคงที่ตอน compile-time ของ type `Circle` — มีประโยชน์สำหรับค่า default ที่มีชื่อและใช้ซ้ำได้ ซึ่งไม่ใช่สิ่งเดียวกับค่า zero สารพัดประโยชน์เดียวของ `#[derive(Default)]`
 
 ## Tuple Structs
 
@@ -149,6 +443,129 @@ println!("{}", red.0); // access by index
 ```
 
 ต่างจาก tuple ธรรมดา `Color` และ `Point` ที่มี field type เดียวกันคือคนละ type — คอมไพเลอร์จะปฏิเสธการนำมาปนกัน
+
+## Newtype Pattern
+
+Tuple struct ที่มี field เดียวเรียกว่า newtype: type แยกต่างหากที่ห่อ type ที่มีอยู่แล้ว เพียงเพื่อให้คอมไพเลอร์แยกแยะการใช้งานสอง type เดียวกันได้
+
+```rust
+struct Meters(f64);
+struct Feet(f64);
+```
+
+`Meters` และ `Feet` ต่างก็ "แค่ `f64`" ตอน runtime — wrapper ไม่มีต้นทุนเลย ถูก compile หายไปทั้งหมด — แต่คอมไพเลอร์มองว่าเป็น type ที่ไม่เกี่ยวข้องกัน ดังนั้นฟังก์ชันที่คาดหวังตัวหนึ่งจึงรับอีกตัวโดยไม่ได้ตั้งใจไม่ได้:
+
+```rust
+// @expect-error E0308
+struct Meters(f64);
+struct Feet(f64);
+
+fn total_distance(a: Meters, b: Meters) -> Meters {
+    Meters(a.0 + b.0)
+}
+
+fn main() {
+    let track = Meters(100.0);
+    let fence = Feet(30.0);
+    let total = total_distance(track, fence);
+    println!("{}", total.0);
+}
+```
+
+```text
+error[E0308]: mismatched types
+  --> src/main.rs:11:39
+   |
+11 |     let total = total_distance(track, fence);
+   |                 --------------        ^^^^^ expected `Meters`, found `Feet`
+   |                 |
+   |                 arguments to this function are incorrect
+   |
+note: function defined here
+  --> src/main.rs:4:4
+   |
+ 4 | fn total_distance(a: Meters, b: Meters) -> Meters {
+   |    ^^^^^^^^^^^^^^            ---------
+
+error: aborting due to 1 previous error
+```
+
+Type alias ธรรมดาอย่าง `type Meters = f64;` จะ**ไม่**จับสิ่งนี้ได้ — type alias เป็นแค่อีกชื่อของ type เดียวกัน ดังนั้น `Feet` และ `Meters` ทั้งคู่จะเป็น `f64` ล้วนๆ และการปนกันจะ compile ผ่านแบบเงียบๆ คุณค่าทั้งหมดของ newtype คือมันเป็น type ที่แยกต่างหากจริงๆ ไม่ใช่คำพ้องความหมาย
+
+## Type-State Teaser
+
+แนวคิด newtype ขยายต่อได้: struct สามารถ parameterize ด้วย marker type ที่แทน *สถานะ* ที่ค่ากำลังอยู่ และบล็อก `impl` ที่ scope กับสถานะใดสถานะหนึ่งจะเปิดเผยเฉพาะ operation ที่ถูกต้องในสถานะนั้น คอมไพเลอร์จะปฏิเสธการเรียกผิดลำดับตอน compile-time แทนที่จะเป็นตอน runtime:
+
+```rust
+struct Locked;
+struct Unlocked;
+
+struct Door<State> {
+    _state: std::marker::PhantomData<State>,
+}
+
+impl Door<Locked> {
+    fn new() -> Self {
+        Door { _state: std::marker::PhantomData }
+    }
+
+    fn unlock(self) -> Door<Unlocked> {
+        println!("unlocking");
+        Door { _state: std::marker::PhantomData }
+    }
+}
+
+impl Door<Unlocked> {
+    fn open(&self) {
+        println!("opening");
+    }
+}
+```
+
+export const typestateCode = `struct Locked;
+struct Unlocked;
+
+struct Door<State> {
+    _state: std::marker::PhantomData<State>,
+}
+
+impl Door<Locked> {
+    fn new() -> Self {
+        Door { _state: std::marker::PhantomData }
+    }
+
+    fn unlock(self) -> Door<Unlocked> {
+        println!("unlocking");
+        Door { _state: std::marker::PhantomData }
+    }
+}
+
+impl Door<Unlocked> {
+    fn open(&self) {
+        println!("opening");
+    }
+}
+
+fn main() {
+    let door = Door::<Locked>::new();
+    let door = door.unlock();
+    door.open();
+    // door.unlock(); // would not compile: Door<Unlocked> has no unlock() method
+}`;
+
+<Playground code={typestateCode} />
+
+`Door<Locked>` และ `Door<Unlocked>` เป็นคนละ type — `PhantomData<State>` ไม่มีต้นทุนไบต์ใดๆ ตอน runtime มันมีไว้เพื่อให้ type checker มีอะไรใช้ผูกกับบล็อก `impl` เท่านั้น การเรียก `.open()` บน `Door<Locked>` ไม่ใช่การตรวจสอบตอน runtime ที่อาจถูกลืม แต่มันคือ `error[E0599]: no method named open found for struct Door<Locked>` เพราะ method นั้นไม่มีอยู่จริงสำหรับ type นั้น นี่คือกลไกเดียวกัน ต่อยอดไปอีกขั้น จาก newtype pattern ด้านบน
+
+<Mermaid code={`flowchart LR
+    subgraph "derive tour"
+    D[Debug] --> DBG["{:?} works"]
+    C1[Clone] --> CL[".clone"]
+    C2["Copy (needs Clone + all-Copy fields)"] --> CP["assignment duplicates, no move"]
+    PE[PartialEq] --> EQ["==, !="]
+    HA[Hash + Eq] --> HM["usable as a HashMap key"]
+    end
+    N["newtype: struct Meters(f64)"] --> TS["type-state: struct Door&lt;State&gt;"]`} title="จาก derive เดี่ยวสู่ type-state pattern" />
 
 export const structsCode = `#[derive(Debug)]
 struct Rectangle {
@@ -192,11 +609,48 @@ fn main() {
 
 <Playground code={structsCode} />
 
-export const structsQuiz = [
+## Mental Model
+
+Struct คือคำสัญญาเรื่อง *รูปร่าง*: ทุก instance มีทุก field เสมอ และ `#[derive(...)]` เป็นแค่วิธีขอให้คอมไพเลอร์เขียน trait implementation แบบ mechanical ทีละ field แทนการเขียนเอง newtype (และส่วนขยายของมัน type-state) คือแนวคิดเดียวกันที่แปลงเป็น label ตอน compile-time: การแทนค่าตอน runtime ไม่เปลี่ยนเลย เปลี่ยนแค่สิ่งที่ type checker จะอนุญาตให้คุณทำกับมัน
+
+## Trade-offs
+
+`#[derive(Copy)]` เรียกใช้ฟรี แต่มีเงื่อนไขล่วงหน้าจริง (`Clone` บวกทุก field ต้องเป็น `Copy`) — ใช้มันเฉพาะกับ struct ข้อมูลง่ายๆ ขนาดเล็ก struct ที่มี `String` หรือ `Vec` ไม่สามารถมีมันได้โดยโครงสร้าง และนั่นคือคอมไพเลอร์กำลังปกป้องคุณจาก double-free ไม่ใช่ข้อจำกัดตามอำเภอใจ Builder มีต้นทุนคือต้องเขียน struct ที่สองบวก method หนึ่งตัวต่อ field ที่เป็น optional แลกกับ call site ที่อ่านเหมือนประโยคและไม่มีทางถูกสร้างในสถานะครึ่งๆ กลางๆ Newtype ไม่มีต้นทุนตอน runtime แต่เพิ่ม `.0` ทุกจุดที่ต้องใช้ค่าภายใน struct แบบ type-state มีต้นทุนพิธีกรรมมากขึ้นอีกนิด (`PhantomData`, `impl` block ต่อสถานะ) แลกกับการเปลี่ยน bug ประเภท "เรียก method ผิดลำดับ" ให้เป็น compile error แทน panic ตอน runtime หรือพฤติกรรมที่ผิดแบบเงียบๆ
+
+## Common Misconceptions
+
+- **"ผมสามารถเพิ่ม `#[derive(Copy)]` เพื่อให้ struct ส่งผ่านได้เร็วขึ้นเสมอ"** `Copy` ไม่มีให้ทุก struct — มันต้องการ `Clone` บวกทุก field ต้องเป็น `Copy` struct ที่มี `String`, `Vec<T>` หรือ heap-owning type ใดๆ derive `Copy` ไม่ได้เต็มที่ ทางแก้สำหรับ "clone แพง" ไม่ใช่ `Copy` แต่คือการส่งผ่าน reference
+- **"type alias (`type Meters = f64;`) ให้ความปลอดภัยเหมือน newtype (`struct Meters(f64);`)"** type alias เป็นแค่อีกชื่อของ type เดียวกัน — `Meters` และ `Feet` ในฐานะ alias ของ `f64` ใช้แทนกันได้สนิท และคอมไพเลอร์จะปนมันอย่างมีความสุข มีแค่ newtype (struct จริงที่แยกต่างหาก) เท่านั้นที่ทำให้การปนกันเป็น compile error
+- **"`PartialEq` บน struct ที่มี field เป็น float ทำงานเหมือน integer equality ทุกประการ"** มันสืบทอดความแปลกทุกอย่างของ IEEE-754 float โดยเฉพาะ `NaN != NaN` ซึ่งเป็นเหตุผลตรงๆ ที่ `f64` implement `Eq` ไม่ได้และใช้เป็น key ของ `HashMap`/`HashSet` ไม่ได้ด้วย
+
+## อ่านโค้ดที่ AI เขียน
+
+Struct ที่ AI เขียนมักจะใช้ `#[derive(Clone, Copy)]` แบบอัตโนมัติกับทุก struct เล็กๆ โดยไม่ตรวจว่าทุก field รองรับมันจริงหรือไม่
+
+<SpotTheBug code={`#[derive(Clone, Copy, Debug)]
+struct User {
+    name: String,
+    age: u32,
+}
+
+fn main() {
+    let u = User { name: String::from("Ada"), age: 30 };
+    println!("{:?}", u);
+}
+`}>
+โค้ดนี้ compile ไม่ผ่านเลย: `error[E0204]: the trait \`Copy\` cannot be implemented for this type — this field does not implement \`Copy\`` ชี้ไปที่ `name: String` `String` เป็นเจ้าของ heap allocation ดังนั้นการทำสำเนาแบบ bitwise (สิ่งที่ `Copy` หมายถึง) จะสร้างเจ้าของสองคนของ buffer เดียวกัน ซึ่งคือ double-free ที่ `Copy` มีไว้ป้องกันพอดี ทางแก้คือตัด `Copy` ออกและเก็บแค่ `#[derive(Clone, Debug)]` ผู้เรียกที่ต้องการสำเนาจะเรียก `.clone()` อย่างชัดเจน ซึ่งเป็นการ allocate heap ที่ซื่อสัตย์และมองเห็นได้ แทนที่จะเป็นการคัดลอกแบบ bitwise ที่มองไม่เห็นซึ่งไม่มีทางปลอดภัยตั้งแต่แรก
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`#[derive]` สร้างแค่โค้ด mechanical ทีละ field — `Copy` ต้องการ `Clone` บวกทุก field เป็น `Copy`, float เป็น `PartialEq` ได้แต่ไม่มีทางเป็น `Eq`/`Hash` และ newtype (ไม่ใช่ type alias) ต่างหากที่หยุดสอง value รูปร่างเดียวกันไม่ให้ปนกันได้จริง
+</Callout>
+
+export const quizStructs = [
     {
         q: 'ควรใช้ receiver type ใดสำหรับ method ที่ต้องการแค่อ่าน field ของ struct?',
         options: ['self', '&self', '&mut self', 'Self'],
         answer: 1,
+        explain: "&self ยืม instance แบบ immutable ซึ่งเป็นสิ่งที่ method อ่านอย่างเดียวต้องการพอดี self จะ consume ค่านั้นไป ส่วน &mut self จะอนุญาต (และบังคับ) การแก้ไข",
     },
     {
         q: 'เรียก associated function ชื่อ new บน struct ชื่อ Rectangle อย่างไร?',
@@ -207,6 +661,7 @@ export const structsQuiz = [
             'new Rectangle()',
         ],
         answer: 2,
+        explain: "Associated function (ตัวที่ไม่มี parameter self) อยู่ภายใต้ namespace ของ type และเรียกด้วย :: ไม่ใช่ . ที่ใช้กับ method บน instance",
     },
     {
         q: 'อะไรที่ทำให้ tuple struct ต่างจาก tuple ธรรมดา?',
@@ -217,9 +672,54 @@ export const structsQuiz = [
             'Tuple struct derive Debug ไม่ได้',
         ],
         answer: 2,
+        explain: "struct Meters(f64) และ struct Feet(f64) ต่างก็ห่อ f64 แต่เป็น type แยกกันไม่เข้ากันในมุมมองคอมไพเลอร์ — ต่างจาก tuple (f64,) ธรรมดาที่ไม่มีชื่อเลย",
+    },
+    {
+        q: 'โค้ดนี้ compile ไม่ผ่านด้วยอะไร?\n```rust\n#[derive(Clone, Copy)]\nstruct User {\n    name: String,\n    age: u32,\n}\n```',
+        options: [
+            'error[E0277]: the trait bound `User: Clone` is not satisfied',
+            'error[E0204]: the trait `Copy` cannot be implemented for this type — the name field does not implement Copy',
+            'compile ผ่านสบายๆ — Clone และ Copy derive คู่กันได้เสมอ',
+            'error[E0308]: mismatched types',
+        ],
+        answer: 1,
+        explain: "Clone ถูก derive ไว้ตรงนี้แล้ว ดังนั้นกรณี Clone หาย (E0277) ไม่เกิด ความล้มเหลวคือ E0204: Copy ต้องการเพิ่มเติมว่าทุก field ต้องเป็น Copy และ String ไม่ใช่",
+    },
+    {
+        q: 'ทำไม `f64` ใช้เป็น key ของ `HashMap` ไม่ได้ ทั้งที่ implement `PartialEq`?',
+        options: [
+            'HashMap key ต้องเป็นจำนวนเต็มเท่านั้น',
+            '`f64` ไม่ implement `Eq` และ `Hash` — ทั้งสองจำเป็นสำหรับ key — เพราะ NaN != NaN ทำลาย reflexivity ที่ `Eq` สัญญาไว้',
+            'f64 key จะทำให้การ hash ช้าเกินไป',
+            'นี่คือข้อจำกัดของภาษา Rust ที่ไม่มีเหตุผลรองรับ',
+        ],
+        answer: 1,
+        explain: "HashMap ต้องการให้ key type implement Eq + Hash f64 มี PartialEq (== ใช้ได้เกือบทุกกรณี) แต่ไม่มี Eq เพราะ NaN == NaN เป็น false ทำลายการรับประกัน 'x == x เป็นจริงเสมอ' ที่ Eq ต้องการ",
+    },
+    {
+        q: 'โค้ดนี้ print อะไร?\n```rust\nstruct Meters(f64);\nstruct Feet(f64);\nfn total_distance(a: Meters, b: Meters) -> Meters {\n    Meters(a.0 + b.0)\n}\nfn main() {\n    let track = Meters(100.0);\n    let fence = Feet(30.0);\n    let total = total_distance(track, fence);\n    println!("{}", total.0);\n}\n```',
+        options: [
+            '130',
+            '100',
+            'compile ไม่ผ่าน: error[E0308] — expected Meters, found Feet',
+            'panic ตอน runtime',
+        ],
+        answer: 2,
+        explain: "Meters และ Feet เป็น newtype ที่แยกกัน แม้ทั้งคู่จะห่อ f64 total_distance คาดหวัง Meters สองตัว การส่ง Feet เข้าไปคือ type mismatch ธรรมดา E0308 ที่จับได้ตอน compile time",
+    },
+    {
+        q: 'ในตัวอย่าง type-state Door<Locked> / Door<Unlocked> จะเกิดอะไรขึ้นถ้าเรียก `.open()` บน `Door<Locked>`?',
+        options: [
+            'panic ตอน runtime ด้วยข้อความ "door is locked"',
+            'ไม่ทำอะไรเลยแบบเงียบๆ',
+            'compile ไม่ผ่าน: error[E0599] — no method named open found for Door<Locked>',
+            'เปิดได้เลย เพราะ Rust ไม่บังคับ type-state',
+        ],
+        answer: 2,
+        explain: "open() ถูกกำหนดใน impl Door<Unlocked> เท่านั้น Door<Locked> และ Door<Unlocked> เป็นคนละ type ในมุมมองคอมไพเลอร์ ดังนั้นการเรียก open() บน Door<Locked> คือ compile error แบบ missing-method ธรรมดา ไม่ใช่การตรวจสอบตอน runtime",
     },
 ];
 
-<Quiz client:visible id="structs-enums-matching/structs" questions={structsQuiz} />
+<Quiz client:visible id="structs-enums-matching/structs" questions={quizStructs} />
 
 <ProgressTracker client:visible id="structs-enums-matching/structs" />

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Enum พื้นฐาน
 
@@ -64,6 +66,16 @@ enum Message {
 }
 ```
 
+<Mermaid code={`flowchart LR
+    subgraph "Shape (tagged union, one value at a time)"
+    T["tag: which variant?"] --> V0["Circle: f64"]
+    T --> V1["Rectangle: f64, f64"]
+    T --> V2["Triangle: f64, f64, f64"]
+    end
+    note["size_of::&lt;Shape&gt;() = size of the tag + size of the LARGEST variant's data"]`} title="Memory layout ของ enum คือ tag บวกที่ว่างสำหรับ variant ที่ใหญ่ที่สุด" />
+
+ค่า `Shape` ไม่เคยเป็น "Circle และ Rectangle พร้อมกัน" — มันคือ tag เล็กๆ (variant ไหนกันแน่?) บวกพื้นที่พอสำหรับข้อมูลของ variant ที่ใหญ่ที่สุด `std::mem::size_of::<Shape>()` สะท้อนสิ่งนี้: enum มีขนาดประมาณ variant ที่ใหญ่ที่สุด ไม่ใช่ผลรวมขนาดของทุก variant
+
 ## `impl` บน Enum
 
 คุณสามารถเพิ่ม method ให้กับ enum ได้เช่นเดียวกับที่เพิ่มให้กับ struct — ด้วยบล็อก `impl` และ `match` ข้างใน:
@@ -97,7 +109,96 @@ enum Option<T> {
 }
 ```
 
-`Some(value)` ห่อหุ้มค่าที่มีอยู่ `None` แทนการขาดหายของค่า คอมไพเลอร์บังคับให้คุณจัดการทั้งสองกรณีก่อนจะใช้ค่าภายใน ซึ่งกำจัดข้อผิดพลาด null-pointer ณ compile time
+`Some(value)` ห่อหุ้มค่าที่มีอยู่ `None` แทนการขาดหายของค่า คอมไพเลอร์บังคับให้คุณจัดการทั้งสองกรณีก่อนจะใช้ค่าภายใน ซึ่งกำจัดข้อผิดพลาด null-pointer ณ compile time [บทเรียนถัดไป](/rust/th/structs-enums-matching/option/) ครอบคลุม `Option<T>` แบบลึกขึ้น
+
+## Enum Discriminant
+
+ทุก variant ของ enum มี **discriminant** เป็นจำนวนเต็มที่ซ่อนอยู่ แม้แต่ variant ที่พกข้อมูล โดยค่าเริ่มต้นเริ่มที่ `0` และนับขึ้นตามลำดับที่ประกาศ แต่คุณสามารถกำหนดเองได้ และ cast enum ที่มีแต่ *unit* เท่านั้นเป็นจำนวนเต็มด้วย `as`:
+
+```rust
+enum StatusCode {
+    Ok = 200,
+    NotFound = 404,
+    ServerError = 500,
+}
+
+#[repr(u8)]
+enum Priority {
+    Low = 1,
+    Medium = 5,
+    High = 10,
+}
+
+fn main() {
+    println!("NotFound as i32: {}", StatusCode::NotFound as i32);
+    println!("Priority::High as u8: {}", Priority::High as u8);
+    println!("size_of StatusCode: {}", std::mem::size_of::<StatusCode>());
+    println!("size_of Priority: {}", std::mem::size_of::<Priority>());
+}
+```
+
+```text
+NotFound as i32: 404
+Priority::High as u8: 10
+size_of StatusCode: 2
+size_of Priority: 1
+```
+
+`#[repr(u8)]` ตรึง underlying integer type ของ discriminant ให้เป็น `u8` (และบังคับให้ทุก discriminant ต้องพอดีกับมัน) หากไม่มี `#[repr(...)]` คอมไพเลอร์มีอิสระเลือก integer type ที่ใหญ่พอจะเก็บ discriminant ที่ต้องการ — ที่นี่ค่าสูงสุดของ `StatusCode` คือ `500` ต้องการสองไบต์ ดังนั้น `size_of` จึงเป็น `2` แม้ไม่มีอะไรถูกประกาศเกี่ยวกับ representation ของมันเลย
+
+### Compiler บอกว่าอย่างไร: Discriminant ซ้ำถูกปฏิเสธ
+
+Variant สองตัวจะมี discriminant ค่าเดียวกันไม่ได้ — จุดประสงค์ทั้งหมดของ discriminant คือแยกแยะ variant ออกจากกัน:
+
+```rust
+// @expect-error E0081
+enum Flag {
+    A = 1,
+    B = 1,
+}
+
+fn main() {
+    println!("{}", Flag::A as i32);
+}
+```
+
+```text
+error[E0081]: discriminant value `1` assigned more than once
+ --> src/main.rs:2:1
+  |
+2 | enum Flag {
+  | ^^^^^^^^^
+3 |     A = 1,
+  |         - `1` assigned here
+4 |     B = 1,
+  |         - `1` assigned here
+
+error: aborting due to 1 previous error
+```
+
+Variant ที่พกข้อมูล (`Circle(f64)`) ก็มี discriminant ภายในเหมือนกัน — นั่นคือวิธีที่ `match` และ `as` (บนกลุ่มย่อยที่มีแต่ unit) แยกแยะพวกมันออกจากกัน — แต่คุณ `as`-cast enum ที่พกข้อมูลเป็นจำนวนเต็มไม่ได้เลย เพราะ cast จะไม่มีที่ให้ใส่ข้อมูล
+
+export const discriminantCode = `enum StatusCode {
+    Ok = 200,
+    NotFound = 404,
+    ServerError = 500,
+}
+
+#[repr(u8)]
+enum Priority {
+    Low = 1,
+    Medium = 5,
+    High = 10,
+}
+
+fn main() {
+    println!("NotFound as i32: {}", StatusCode::NotFound as i32);
+    println!("Priority::High as u8: {}", Priority::High as u8);
+    println!("size_of StatusCode: {}", std::mem::size_of::<StatusCode>());
+    println!("size_of Priority: {}", std::mem::size_of::<Priority>());
+}`;
+
+<Playground code={discriminantCode} />
 
 export const enumsCode = `#[derive(Debug)]
 enum Shape {
@@ -146,7 +247,82 @@ fn main() {
 
 <Playground code={enumsCode} />
 
-export const enumsQuiz = [
+## Enum ที่มีข้อมูล เทียบกับการก็อปปี้ Struct
+
+`Shape` ด้านบนใช้ enum เดียวที่มีข้อมูลต่อ variant ทางเลือกที่ AI มักเขียนคือ enum ยักษ์ที่ **ทุก** variant ก็อปปี้ field รูปร่างเหมือน struct เดียวกัน โดยมีแค่หนึ่งหรือสองอย่างที่ต่างจริงๆ:
+
+```rust
+enum Event {
+    Click { x: i32, y: i32, button: u8, timestamp: u64 },
+    KeyPress { x: i32, y: i32, button: u8, timestamp: u64, key: char },
+    Scroll { x: i32, y: i32, button: u8, timestamp: u64, delta: f64 },
+}
+```
+
+ทุก arm ของทุก `match` บน `Event` ต้องเขียน `x, y, button, timestamp` ซ้ำแม้จะสนใจแค่ `key` หรือ `delta` เท่านั้น ทางแก้คือแยก field ที่ใช้ร่วมกันออกเป็น struct และให้ enum เก็บแค่ส่วนที่ต่างกันจริงๆ:
+
+```rust
+struct EventInfo {
+    x: i32,
+    y: i32,
+    button: u8,
+    timestamp: u64,
+}
+
+enum EventKind {
+    Click,
+    KeyPress(char),
+    Scroll(f64),
+}
+
+struct Event {
+    info: EventInfo,
+    kind: EventKind,
+}
+```
+
+ตอนนี้ `match event.kind` แค่เอ่ยชื่อ field ที่ต่างกันเท่านั้น และการเพิ่ม field ที่ใช้ร่วมกันตัวใหม่ (เช่น `device_id`) หมายถึงการแก้ `EventInfo` แค่ที่เดียว แทนที่จะแก้ทุก variant
+
+## Mental Model
+
+Variant ของ enum ไม่ใช่ type อิสระที่แปะติดกัน — มันคือ type เดียวที่มี tag ซ่อนอยู่บอกว่ารูปร่างไหนกำลัง active อยู่ในขนาดที่พอดีกับ variant ที่*ใหญ่ที่สุด* ทุก variant ไม่ว่าจะเป็น unit (`Quit`), tuple (`Write(String)`) หรือ struct-like (`Move { x, y }`) จริงๆ แล้วคือ "tag บวก field ของ variant นั้นเอง" ซึ่งเป็นเหตุผลที่ `match self { ... }` ตัวเดียวจัดการทั้งหมดได้อย่างเป็นระบบเดียวกัน
+
+## Trade-offs
+
+ขนาดของ enum ถูกตรึงไว้ที่ variant ที่ใหญ่ที่สุด — `Circle(f64)` ที่อยู่ข้าง `Triangle(f64, f64, f64)` หมายความว่าทุกค่า `Shape` จองพื้นที่ขนาด triangle แม้จะถือ circle อยู่ก็ตาม โดยทั่วไปนี่เป็นข้อแลกเปลี่ยนที่ดีเมื่อเทียบกับทางเลือก (`Box<dyn Trait>` ต่อรูปทรง พร้อม heap allocation และ dynamic dispatch ทุกค่า) เว้นแต่ variant หนึ่งจะใหญ่กว่าตัวอื่นมากๆ ซึ่งในกรณีนั้นการ box แค่ข้อมูลของ variant นั้นจะรักษาให้กรณีทั่วไปมีขนาดเล็กไว้ การแยก field ที่ใช้ร่วมกันเป็น struct (เช่น `EventInfo`) มีต้นทุนคือ nesting เพิ่มอีกระดับ (`event.info.x` แทนที่จะ destructure `x` ตรงๆ ในทุก arm) แลกกับจุดแก้ไขจุดเดียวเมื่อ field ที่ใช้ร่วมกันเปลี่ยน
+
+## Common Misconceptions
+
+- **"enum ใช้หน่วยความจำเท่ากับผลรวมของทุก variant"** มันใช้ประมาณขนาดของ variant ที่*ใหญ่ที่สุด*บวก tag เล็กๆ — variant เป็นทางเลือก ไม่เคยถูกถืออยู่พร้อมกัน จึงไม่มีเหตุผลจองพื้นที่ให้ทั้งหมดพร้อมกัน
+- **"คุณสามารถ `as`-cast enum ใดๆ เป็นจำนวนเต็มเพื่อเอา discriminant ได้"** เฉพาะ enum ที่ทุก variant เป็น unit variant ธรรมดา (ไม่มีข้อมูล) เท่านั้นที่รองรับสิ่งนี้ `Shape::Circle(3.0) as i32` ใช้ไม่ได้ — discriminant ของ variant ที่พกข้อมูลเป็นรายละเอียดภายในที่ภาษาไม่เปิดเผยผ่าน `as`
+- **"variant สองตัวที่มี field ต่างกันแต่ความหมายรวมเหมือนกัน ควรเป็น struct แยกระดับบนสุด ไม่ใช่ variant"** นั่นจะทิ้งการตรวจสอบความครบถ้วนของคอมไพเลอร์ไป — ด้วย enum เดียว การเพิ่มชนิดใหม่บังคับให้ทุก `match` ต้องอัปเดต ส่วน struct ที่ไม่เกี่ยวข้องกัน ไม่มีอะไรเชื่อมโยงพวกมัน และผู้เรียกอาจลืมจัดการกรณีใหม่ได้ง่ายๆ
+
+## อ่านโค้ดที่ AI เขียน
+
+Event/message type ที่ AI เขียนมักจะก็อปปี้ field ชุดเดิมซ้ำในทุก variant แทนที่จะแยกออกเป็น struct ที่ใช้ร่วมกัน เพราะมันเป็นวิธีที่ง่ายที่สุดตอนเพิ่ม "อีกแค่ variant เดียว" เข้าไปใน enum ที่มีอยู่
+
+<SpotTheBug code={`enum Event {
+    Click { x: i32, y: i32, button: u8, timestamp: u64 },
+    KeyPress { x: i32, y: i32, button: u8, timestamp: u64, key: char },
+    Scroll { x: i32, y: i32, button: u8, timestamp: u64, delta: f64 },
+}
+
+fn describe(e: &Event) -> String {
+    match e {
+        Event::Click { x, y, .. } => format!("click at ({x}, {y})"),
+        Event::KeyPress { key, .. } => format!("key {key}"),
+        Event::Scroll { delta, .. } => format!("scroll {delta}"),
+    }
+}
+`}>
+โค้ดนี้ compile และทำงานได้ แต่ `x`, `y`, `button` และ `timestamp` ถูกก็อปปี้วางลงในทั้งสาม variant การเพิ่ม event ชนิดที่สี่หมายถึงต้องพิมพ์ field ที่ใช้ร่วมกันทั้งสี่ตัวซ้ำอีกครั้ง และการเพิ่ม field ที่ใช้ร่วมกันตัวใหม่ (เช่น `device_id`) หมายถึงต้องแก้ทุก variant แทนที่จะแก้ที่เดียว ทางแก้คือแยก field ที่ใช้ร่วมกันเป็น struct (`EventInfo`) ที่ถืออยู่ที่เดียว โดย enum ลดเหลือแค่ส่วนที่ต่างกันจริงๆ ต่อชนิด (`EventKind::Click`, `EventKind::KeyPress(char)`, `EventKind::Scroll(f64)`) — ความสัมพันธ์แบบเดียวกับที่ struct ซึ่งฝัง field แบบ enum ไว้ได้จำลองไว้แล้วในที่อื่นของบทเรียนนี้
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Enum คือ tag บวกพื้นที่สำหรับ variant ที่ใหญ่ที่สุด ไม่เคยเป็นทุก variant พร้อมกัน — และเมื่อทุก variant ก็อปปี้ field ชุดเดิมซ้ำ นั่นคือสัญญาณให้แยก field เหล่านั้นเป็น struct ที่ enum ห่ออยู่ ไม่ใช่เหตุผลให้ก็อปปี้วางต่อไป
+</Callout>
+
+export const quizEnums = [
     {
         q: 'วิธีใดที่ถูกต้องในการสร้าง enum variant ที่พกข้อมูล?',
         options: [
@@ -156,6 +332,7 @@ export const enumsQuiz = [
             'Shape { Circle: 3.0 }',
         ],
         answer: 2,
+        explain: "Enum variant อยู่ภายใต้ namespace ของ enum ด้วย :: และ variant แบบ tuple อย่าง Circle(f64) ถูกสร้างโดยเรียกมันเหมือนฟังก์ชัน: Shape::Circle(3.0)",
     },
     {
         q: 'Option<T> ของ Rust แทนที่อะไรเมื่อเทียบกับภาษาอื่น?',
@@ -166,6 +343,7 @@ export const enumsQuiz = [
             'Dynamic dispatch',
         ],
         answer: 1,
+        explain: "Some/None ของ Option<T> ทำให้ 'ค่านี้อาจขาดหาย' เป็นส่วนหนึ่งของ type system แทนที่ null/nil reference ที่พบในหลายภาษา",
     },
     {
         q: 'คุณสามารถกำหนด method บน enum ใน Rust ได้หรือไม่?',
@@ -176,9 +354,54 @@ export const enumsQuiz = [
             'ได้เฉพาะเมื่อ enum derive Default',
         ],
         answer: 1,
+        explain: "บล็อก impl ทำงานเหมือนกันสำหรับ enum และ struct — คุณกำหนด instance method (&self, &mut self, self) และ associated function ได้ทั้งคู่",
+    },
+    {
+        q: 'โค้ดนี้ compile ไม่ผ่านด้วยอะไร?\n```rust\nenum Flag {\n    A = 1,\n    B = 1,\n}\nfn main() {\n    println!("{}", Flag::A as i32);\n}\n```',
+        options: [
+            'compile ผ่านสบายๆ — discriminant ซ้ำกันได้',
+            'error[E0081]: discriminant value `1` assigned more than once',
+            'error[E0308]: mismatched types',
+            'error[E0004]: non-exhaustive patterns',
+        ],
+        answer: 1,
+        explain: "แต่ละ unit variant ต้องมี discriminant ที่แตกต่างกันเพื่อให้คอมไพเลอร์ (และ as-cast) แยกแยะ variant ได้ การให้ค่าเดียวกันกับสอง variant คือ E0081",
+    },
+    {
+        q: 'enum อย่าง `enum Shape { Circle(f64), Rectangle(f64, f64), Triangle(f64, f64, f64) }` ใช้หน่วยความจำต่อค่าประมาณเท่าไร?',
+        options: [
+            'ผลรวมของขนาดทั้งสาม variant',
+            'ประมาณขนาดของ variant ที่ใหญ่ที่สุด (Triangle) บวก tag เล็กๆ',
+            'เท่ากับ 8 ไบต์เสมอ ไม่ว่า variant จะเป็นอะไร',
+            'ขึ้นอยู่กับว่า variant ไหนถูกสร้างก่อนตอน runtime',
+        ],
+        answer: 1,
+        explain: "ค่า enum เป็นได้แค่ variant เดียวในเวลาหนึ่ง ดังนั้นคอมไพเลอร์แค่ต้องจองพื้นที่สำหรับข้อมูลของ variant ที่ใหญ่ที่สุดบวก tag บอกว่าตัวไหน active อยู่ — ไม่ใช่ผลรวมของทุก variant",
+    },
+    {
+        q: 'ปัญหาหลักของ enum ที่ทุก variant ก็อปปี้ field รูปร่างเหมือน struct เดียวกัน (เช่น `Event` ที่มี `x, y, button, timestamp` ถูกก็อปปี้ลงใน Click, KeyPress และ Scroll) คืออะไร?',
+        options: [
+            'compile ไม่ผ่าน',
+            'รันช้ากว่าดีไซน์ที่ใช้ struct',
+            'การเพิ่มหรือแก้ field ที่ใช้ร่วมกันหมายถึงต้องแก้ทุก variant แทนที่จะแก้ที่เดียว',
+            'Rust enum มี field ต่อ variant ได้ไม่เกิน 2 ตัว',
+        ],
+        answer: 2,
+        explain: "โค้ด compile และรันได้ปกติ ปัญหาคือการดูแลรักษา — field ที่ใช้ร่วมกันอยู่ N ที่แทนที่จะเป็นที่เดียว ดังนั้นการแยกมันเป็น struct ที่ enum ห่ออยู่ (หรือถือคู่กัน) จะกำจัดความซ้ำซ้อนนี้ได้",
+    },
+    {
+        q: 'enum ตัวไหนที่มีแต่ unit variant สามารถ cast เป็นจำนวนเต็มด้วย `as` ได้?\n```rust\nenum A { X = 1, Y = 2 }\nenum B { Circle(f64), Square(f64) }\n```',
+        options: [
+            'B เท่านั้น เพราะพกข้อมูล',
+            'A เท่านั้น เพราะทุก variant เป็น unit variant ธรรมดาไม่มีข้อมูล',
+            'ทั้ง A และ B',
+            'ไม่มีเลย — `as` ใช้กับ enum ไม่ได้เลย',
+        ],
+        answer: 1,
+        explain: "การ as-cast enum เป็นจำนวนเต็มใช้ได้แค่เมื่อทุก variant เป็น unit variant (ไม่มี payload) variant ของ B พก payload แบบ f64 จึงไม่มีจำนวนเต็มค่าเดียวที่จะแทนค่า B ได้",
     },
 ];
 
-<Quiz client:visible id="structs-enums-matching/enums" questions={enumsQuiz} />
+<Quiz client:visible id="structs-enums-matching/enums" questions={quizEnums} />
 
 <ProgressTracker client:visible id="structs-enums-matching/enums" />
