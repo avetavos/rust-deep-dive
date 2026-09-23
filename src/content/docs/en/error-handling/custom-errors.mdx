@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Why Custom Errors?
 
@@ -56,9 +58,47 @@ impl fmt::Display for AppError {
 }
 ```
 
+## What the Compiler Says: `Error` Requires `Display`
+
+`std::error::Error` is declared as `pub trait Error: Debug + Display`, meaning `Display` is not optional — it is a **supertrait bound**. Implementing `Error` before `Display` fails with a message that names the exact missing bound and where it comes from:
+
+```rust
+// @expect-error E0277
+#[derive(Debug)]
+struct AppError;
+
+impl std::error::Error for AppError {}
+
+fn main() {
+    let _e: Box<dyn std::error::Error> = Box::new(AppError);
+}
+```
+
+```text
+error[E0277]: `AppError` doesn't implement `std::fmt::Display`
+  --> error_needs_display.rs:4:28
+   |
+ 4 | impl std::error::Error for AppError {}
+   |                            ^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `std::fmt::Display` is not implemented for `AppError`
+  --> error_needs_display.rs:2:1
+   |
+ 2 | struct AppError;
+   | ^^^^^^^^^^^^^^^
+note: required by a bound in `std::error::Error`
+   |
+   | pub trait Error: Debug + Display {
+   |                          ^^^^^^^ required by this bound in `Error`
+
+error: aborting due to 1 previous error
+```
+
+This is why every custom error type follows the same order: derive `Debug`, implement `Display`, *then* implement `Error` — the compiler will not let you skip a step.
+
 ## Implementing `std::error::Error`
 
-To be usable wherever a `dyn Error` is expected (e.g., in `Box<dyn Error>`), your type must implement `std::error::Error`. The trait has no required methods — the default implementations are sufficient for most cases. Optionally implement `source()` to expose the underlying cause:
+To be usable wherever a `dyn Error` is expected (e.g., in `Box<dyn Error>`), your type must implement `std::error::Error`. Beyond the `Debug`/`Display` bounds, the trait has no *required* methods — the default implementations are sufficient for most cases. Optionally implement `source()` to expose the underlying cause:
 
 ```rust
 use std::fmt;
@@ -90,6 +130,73 @@ impl std::error::Error for AppError {
 }
 ```
 
+### Walking the `source()` Chain
+
+`source()` links one error to the lower-level error that caused it, one layer at a time. A generic printer walks the whole chain with `while let Some(...)`, from the top-level message down to the root cause:
+
+```rust
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+struct ConfigError {
+    source: std::num::ParseIntError,
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid config value")
+    }
+}
+impl Error for ConfigError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+#[derive(Debug)]
+struct StartupError {
+    source: ConfigError,
+}
+
+impl fmt::Display for StartupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "server failed to start")
+    }
+}
+impl Error for StartupError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+fn print_chain(err: &dyn Error) {
+    println!("Error: {err}");
+    let mut source = err.source();
+    while let Some(s) = source {
+        println!("Caused by: {s}");
+        source = s.source();
+    }
+}
+
+fn main() {
+    let parse_err = "abc".parse::<i32>().unwrap_err();
+    let config_err = ConfigError { source: parse_err };
+    let startup_err = StartupError { source: config_err };
+    print_chain(&startup_err);
+}
+```
+
+Running this prints the full chain, one `Display` message per layer, from the outermost failure to the original `ParseIntError`:
+
+```text
+Error: server failed to start
+Caused by: invalid config value
+Caused by: invalid digit found in string
+```
+
+Without `source()`, that chain simply does not exist — callers (and tools like `anyhow`'s `{:?}` formatting, shown below) can only ever see the single top-level `Display` message.
+
 ## Automatic Conversion with `From`
 
 Implementing `From<SomeOtherError> for AppError` lets the `?` operator convert automatically when calling functions that return `SomeOtherError`:
@@ -109,7 +216,7 @@ impl From<std::num::ParseIntError> for AppError {
 }
 ```
 
-Now `s.parse::<i32>()?` in a function returning `Result<_, AppError>` will automatically wrap the `ParseIntError` into `AppError::ParseError`.
+Now `s.parse::<i32>()?` in a function returning `Result<_, AppError>` will automatically wrap the `ParseIntError` into `AppError::ParseError`. See the [The ? Operator lesson](/rust/en/error-handling/question-mark/) for exactly what happens when this `From` impl is missing.
 
 export const customErrorsCode = `use std::fmt;
 use std::num::ParseIntError;
@@ -169,6 +276,220 @@ fn main() {
 A well-designed custom error enum makes every failure mode explicit in your API. Implement `std::fmt::Display` for user-facing messages, `std::error::Error` for compatibility with `Box<dyn Error>`, and `From<...>` for each lower-level error type you wrap. This trio lets the `?` operator do all the conversion work automatically.
 </Callout>
 
+## `Box<dyn Error>` in Binaries vs. a Custom Enum in Libraries
+
+`Box<dyn Error>` erases the concrete error type — any type implementing `Error` fits inside it. That is exactly right for a `fn main`, where the only thing that matters is "did the program fail, and what should I print?" It is exactly wrong for a library's *public* API: the caller loses the ability to `match` on which failure occurred, and is left with the awkward option of downcasting at runtime:
+
+```rust
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+struct NotFoundError(String);
+
+impl fmt::Display for NotFoundError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "not found: {}", self.0)
+    }
+}
+impl Error for NotFoundError {}
+
+fn lookup(key: &str) -> Result<i32, Box<dyn Error>> {
+    if key == "answer" {
+        Ok(42)
+    } else {
+        Err(Box::new(NotFoundError(key.to_string())))
+    }
+}
+
+fn main() {
+    match lookup("missing") {
+        Ok(v) => println!("found: {v}"),
+        Err(e) => {
+            // Box<dyn Error> erases the concrete type, so a caller who wants to
+            // react differently to NotFoundError specifically must downcast at runtime.
+            if let Some(not_found) = e.downcast_ref::<NotFoundError>() {
+                println!("caller can react specifically: {}", not_found.0);
+            } else {
+                println!("some other error: {e}");
+            }
+        }
+    }
+}
+```
+
+`downcast_ref::<T>()` returns `Some(&T)` only if the trait object's *actual* runtime type is `T` — it compiles for any `T: Error + 'static` whether or not it is correct, so the compiler cannot catch a typo'd type here the way it would catch a wrong `match` arm on a real enum. This is the concrete cost of choosing `Box<dyn Error>` for an API callers need to branch on: every caller who cares re-implements this same fragile runtime check instead of getting a compiler-checked `match`.
+
+<Mermaid code={`flowchart TD
+    A[Choosing an error type] --> B{Who calls this function?}
+    B -->|main, or a script,\nyou just want to print it| C[Box<dyn Error>\nis fine]
+    B -->|Other code that must\nreact differently per failure| D[Concrete error enum]
+    D --> E[Callers get a compiler-checked match]
+    C --> F[Callers who need specifics\nmust downcast_ref at runtime]`} title="Box<dyn Error> vs. a concrete error enum" />
+
+## `#[non_exhaustive]` on Error Enums
+
+Adding a new variant to a public error enum is a breaking change for downstream crates: any `match` without a wildcard arm stops compiling the moment you add a variant, because it is no longer exhaustive. `#[non_exhaustive]` flips that default — it forces every crate *other than yours* to include a wildcard arm, so you can add variants later without breaking their build:
+
+```rust
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ApiError {
+    NotFound,
+    Timeout,
+}
+```
+
+Inside the defining crate, `#[non_exhaustive]` has no effect at all — the attribute only restricts *other* crates. The real diagnostic below comes from a two-crate scratch workspace: a library crate `apilib` defining `ApiError` with `#[non_exhaustive]`, and a separate `consumer` crate that matches on it without a wildcard:
+
+```rust
+// @skip-verify cross-crate demo — needs a separate library crate to observe the effect
+use apilib::ApiError;
+
+fn describe(e: &ApiError) -> &'static str {
+    match e {
+        ApiError::NotFound => "not found",
+        ApiError::Timeout => "timed out",
+    }
+}
+```
+
+```text
+$ cargo build
+error[E0004]: non-exhaustive patterns: `&_` not covered
+ --> src/main.rs:4:11
+  |
+4 |     match e {
+  |           ^ pattern `&_` not covered
+  |
+  = note: the matched value is of type `&ApiError`
+  = note: `ApiError` is marked as non-exhaustive, so a wildcard `_` is necessary to match exhaustively
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+  |
+6 ~         ApiError::Timeout => "timed out",
+7 ~         &_ => todo!(),
+  |
+
+error: could not compile `consumer` (bin "consumer") due to 1 previous error
+```
+
+Note this is the exact same `E0004` behind the "`_` arm caveat" you have already seen for ordinary enums — `#[non_exhaustive]` simply makes the wildcard arm *mandatory* for outside crates instead of merely closing a coverage gap they opted into.
+
+## `thiserror` and `anyhow`
+
+Hand-writing `Display`, `Error`, and `From` for every error enum is repetitive enough that two crates dominate real-world Rust: `thiserror` for library error enums, `anyhow` for application-level error handling. Neither ships with this course's toolchain, so the snippets below are `@skip-verify` — the output is quoted verbatim from a real `cargo build && cargo run` in a scratch project with `thiserror = "2"` and `anyhow = "1"` added via `cargo add`.
+
+`thiserror`'s `#[derive(Error)]` generates the `Display` and `Error` impls from `#[error("...")]` message templates, and `#[from]` generates the `From` impl in one line:
+
+```rust
+// @skip-verify crate: thiserror — output quoted from a real scratch cargo build/run below
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+enum AppError {
+    #[error("invalid number: {0}")]
+    Parse(#[from] std::num::ParseIntError),
+    #[error("value {0} is out of range (0..=100)")]
+    OutOfRange(i32),
+}
+
+fn parse_bounded(s: &str) -> Result<i32, AppError> {
+    let n: i32 = s.parse()?; // ParseIntError -> AppError::Parse via #[from]
+    if n > 100 {
+        return Err(AppError::OutOfRange(n));
+    }
+    Ok(n)
+}
+
+fn main() {
+    for s in ["42", "abc", "999"] {
+        match parse_bounded(s) {
+            Ok(n) => println!("{s} -> Ok({n})"),
+            Err(e) => println!("{s} -> Err: {e}"),
+        }
+    }
+}
+```
+
+```text
+$ cargo add thiserror && cargo build --quiet && cargo run --quiet
+42 -> Ok(42)
+abc -> Err: invalid number: invalid digit found in string
+999 -> Err: value 999 is out of range (0..=100)
+```
+
+`anyhow::Result<T>` (an alias for `Result<T, anyhow::Error>`) is the application-side counterpart: it is `Box<dyn Error>`-like in that it erases the concrete type, but adds `.context(...)`/`.with_context(...)` to attach a human-readable breadcrumb at every layer, and its `{:?}` `Debug` formatting prints the whole `source()` chain for you automatically:
+
+```rust
+// @skip-verify crate: anyhow — output quoted from a real scratch cargo build/run below
+use anyhow::{Context, Result};
+
+fn read_port(s: &str) -> Result<u16> {
+    s.parse::<u16>()
+        .with_context(|| format!("failed to parse '{s}' as a port number"))
+}
+
+fn load_config() -> Result<u16> {
+    read_port("not_a_port").context("loading server config")
+}
+
+fn main() -> Result<()> {
+    let port = load_config()?;
+    println!("port = {port}");
+    Ok(())
+}
+```
+
+```text
+$ cargo add anyhow && cargo build --quiet && cargo run --quiet; echo "exit=$?"
+Error: loading server config
+
+Caused by:
+    0: failed to parse 'not_a_port' as a port number
+    1: invalid digit found in string
+exit=1
+```
+
+That `Caused by:` block is exactly the `source()` chain from earlier, printed for you — `anyhow` is essentially "give me the `source()`-chain printer and `From`-conversion machinery for free, in exchange for erasing the concrete error type," which is why it belongs in applications (where nobody downstream needs to `match` on your errors) and not in library public APIs.
+
+<Callout title="Pick one error strategy per crate boundary">
+A common, effective split: library crates export a concrete `thiserror` enum so their callers can `match`; the binary that assembles those libraries uses `anyhow` in `main` and at its own internal boundaries, where erasing the type and getting a readable `Caused by:` chain is exactly what you want.
+</Callout>
+
+## `panic = "abort"` and `catch_unwind`, Briefly
+
+Custom error types are for *recoverable* failures — but not every failure is recoverable, and the [Panics lesson](/rust/en/error-handling/panic/) covers the other half of the story in depth: setting `panic = "abort"` in `Cargo.toml` trades `Drop`-based cleanup for a smaller binary, and `std::panic::catch_unwind` can isolate a panic at an FFI or worker-thread boundary without turning Rust into a language with general exception handling. If your custom error enum is about to grow a `Panic`-shaped variant "just in case a callback panics," that lesson's `catch_unwind` section is the tool for that job, not another `Err` variant.
+
+## Mental Model
+
+Think of your error type's shape as a promise to two different audiences at once. `Debug` and `Display` are for *people* — a log line, a terminal, a bug report. `Error` (specifically `source()`) is for *tooling* — anything that wants to walk the failure chain programmatically, the way `anyhow`'s `{:?}` does automatically. `From` is for *your own code* — the machinery that lets `?` cross a boundary between two error types without you writing a `match` by hand at every call site. A well-designed error type satisfies all three audiences without forcing any of them to guess.
+
+## Trade-offs
+
+A concrete enum gives callers a compiler-checked `match` and documents every failure mode in one place, at the cost of writing (or deriving) `Display`/`Error`/`From` for it and updating call sites when you add a variant — unless you add `#[non_exhaustive]`, which then obligates every external caller to write a wildcard arm forever. `Box<dyn Error>` needs none of that boilerplate and is the right default for `main` and other places nothing downstream needs to branch on, but it pushes any caller who *does* need to branch into runtime `downcast_ref` calls the compiler cannot check. `thiserror` and `anyhow` remove most of the remaining boilerplate on each side of that line, at the cost of a dependency and, for `anyhow`, the same type-erasure trade-off as `Box<dyn Error>`.
+
+## Common Misconceptions
+
+- **"`Box<dyn Error>` is always fine because you can `downcast_ref` if you really need the concrete type."** You can, but the compiler cannot check that the `downcast_ref::<T>()` you wrote is the type actually being returned — a typo or a refactor silently changes it from "this branch runs" to "this branch never runs," with no error at all.
+- **"`#[non_exhaustive]` makes an enum exhaustive-proof everywhere, including my own crate."** It does nothing at all inside the crate that defines it — you can still match without a wildcard there. It only changes what *other* crates are required to write.
+- **"`anyhow` and `thiserror` do the same job, so I only need one."** They solve different halves: `thiserror` produces a concrete, matchable type (for libraries); `anyhow` produces an erased, context-annotated type with automatic chain formatting (for applications). Using `anyhow::Error` as a library's public return type reintroduces the exact `Box<dyn Error>` downcasting problem for its callers.
+
+## Reading AI-generated code
+
+AI assistants frequently reach for `Box<dyn std::error::Error>` as the return type of a *public library function*, because it always compiles regardless of what the function's actual failure modes are — it is the path of least resistance, not necessarily the right API design.
+
+<SpotTheBug code={`pub fn connect(addr: &str) -> Result<Connection, Box<dyn std::error::Error>> {
+    let socket = std::net::TcpStream::connect(addr)?;
+    Ok(Connection::new(socket))
+}
+`}>
+This is a public library function (note `pub fn`) returning `Box<dyn std::error::Error>`. Its caller cannot distinguish "DNS resolution failed" from "connection refused" from "timed out" without downcasting, even though `std::net::TcpStream::connect` itself returns a well-typed `std::io::Error` whose `.kind()` already tells them apart. A library API should keep that information: `Result<Connection, ConnectError>` with `enum ConnectError { Io(std::io::Error) }` (or richer variants per `ErrorKind`) and a `From<std::io::Error>` impl lets `?` keep working exactly as written, while giving callers a real `match` instead of a downcast.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Erase the type with `Box<dyn Error>` (or `anyhow`) only at boundaries where nobody downstream needs to `match` on the specific failure — everywhere else, a concrete enum with `Display`, `Error`, and `From` costs a little boilerplate and buys your callers a compiler-checked `match`.
+</Callout>
+
 export const quizCustomErrors = [
     {
         q: "Which trait provides the human-readable error message shown with {}?",
@@ -178,7 +499,8 @@ export const quizCustomErrors = [
             "std::fmt::Display",
             "std::convert::From"
         ],
-        answer: 2
+        answer: 2,
+        explain: "Display controls the {} formatting; Debug controls {:?}, and Error itself requires both as supertraits but adds no formatting of its own."
     },
     {
         q: "What is the purpose of implementing From<OtherError> for MyError?",
@@ -188,7 +510,8 @@ export const quizCustomErrors = [
             "It makes MyError implement the Error trait",
             "It allows MyError to be used as a function argument"
         ],
-        answer: 1
+        answer: 1,
+        explain: "The ? operator's desugaring calls From::from on the error branch, so a From<OtherError> for MyError impl is exactly what makes ? able to cross that type boundary."
     },
     {
         q: "What does source() return in std::error::Error?",
@@ -198,7 +521,8 @@ export const quizCustomErrors = [
             "The Display message of the error",
             "The variant name as a string"
         ],
-        answer: 1
+        answer: 1,
+        explain: "source() exposes the next error down the causal chain as &(dyn Error + 'static), letting a printer walk from the top-level failure down to the root cause one layer at a time."
     },
     {
         q: "Why is a concrete error enum better than Box<dyn Error> for a library API?",
@@ -208,7 +532,52 @@ export const quizCustomErrors = [
             "Box<dyn Error> cannot be used with the ? operator",
             "A concrete enum avoids heap allocation entirely"
         ],
-        answer: 1
+        answer: 1,
+        explain: "A concrete enum gives every caller a compiler-checked match over the exact failure modes; Box<dyn Error> forces anyone who needs to distinguish failures into an unchecked downcast_ref."
+    },
+    {
+        q: "What does this print, and what error code would you get if you implemented std::error::Error for AppError before implementing Display?\n```rust\n#[derive(Debug)]\nstruct AppError;\nimpl std::error::Error for AppError {}\nfn main() {\n    let _e: Box<dyn std::error::Error> = Box::new(AppError);\n}\n```",
+        options: [
+            "It compiles fine and prints nothing",
+            "E0277 — Error requires Display as a supertrait, which AppError does not implement",
+            "E0308 — mismatched types between AppError and Box<dyn Error>",
+            "E0382 — use of moved value"
+        ],
+        answer: 1,
+        explain: "std::error::Error is declared as `Error: Debug + Display`, so implementing Error without Display fails to compile with E0277, naming Display as the unsatisfied supertrait bound."
+    },
+    {
+        q: "What is the effect of #[non_exhaustive] on a public enum, from inside the crate that defines it?",
+        options: [
+            "It has no effect at all inside the defining crate",
+            "It prevents the defining crate itself from matching without a wildcard",
+            "It disables adding new variants entirely",
+            "It automatically implements Error for the enum"
+        ],
+        answer: 0,
+        explain: "#[non_exhaustive] only restricts other crates — code inside the defining crate can still write an exhaustive match with no wildcard arm at all."
+    },
+    {
+        q: "What does anyhow's {:?} (Debug) formatting print that Box<dyn Error>'s does not, by default?",
+        options: [
+            "Nothing extra — they behave identically",
+            "The full source()-chain as a 'Caused by:' list, gathered automatically",
+            "The exact line number in the source file where the error was created",
+            "A stack trace of every function call leading to the error"
+        ],
+        answer: 1,
+        explain: "anyhow::Error's Debug impl walks and prints the entire source() chain as a 'Caused by:' list automatically, which is exactly what the print_chain example built by hand for a plain Box<dyn Error>."
+    },
+    {
+        q: "A separate crate depends on yours and writes this match against your #[non_exhaustive] enum. What error code does it get?\n```rust\n#[non_exhaustive]\npub enum ApiError { NotFound, Timeout }\n\nfn describe(e: &ApiError) -> &'static str {\n    match e {\n        ApiError::NotFound => \"not found\",\n        ApiError::Timeout => \"timed out\",\n    }\n}\n```",
+        options: [
+            "It compiles fine — #[non_exhaustive] only matters within your own crate",
+            "E0004 — non-exhaustive patterns, because #[non_exhaustive] requires external crates to add a wildcard arm",
+            "E0277 — ApiError does not implement Error",
+            "E0308 — mismatched types between &ApiError and ApiError"
+        ],
+        answer: 1,
+        explain: "#[non_exhaustive] forces every crate other than the one that defines the enum to include a wildcard arm; omitting it fails with the familiar E0004 non-exhaustive-patterns error, just mandatory here instead of optional."
     }
 ];
 

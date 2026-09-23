@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## `Result<T, E>` คืออะไร?
 
@@ -102,6 +104,224 @@ fn main() {
 เพราะ `Result` เป็น enum ธรรมดา คอมไพเลอร์จะเตือนหากคุณปล่อยให้ค่า `Result` ไม่ได้ใช้ เส้นทางข้อผิดพลาดทุกเส้นทางมองเห็นได้ใน type signature ของฟังก์ชันที่คืนค่านั้น และผู้เรียกต้องตัดสินใจอย่างชัดเจนว่าจะทำอะไร — ละเลย ส่งต่อ กู้คืน หรือ panic นี้แข็งแกร่งกว่าการจัดการข้อยกเว้น ซึ่งเส้นทางข้อผิดพลาดมองไม่เห็น
 </Callout>
 
+## แปลงกลับไปมาระหว่าง `Option` กับ `Result`
+
+`Option<T>` และ `Result<T, E>` ทั้งคู่แทน "ค่าอาจไม่มีอยู่" แต่พกข้อมูลต่างกัน: `Option` บอกแค่ "หรือไม่มีอะไรเลย"; `Result` บอกว่า "หรือนี่คือเหตุผลว่าทำไมไม่มี" โค้ดจริงมักต้องข้ามไปมาระหว่างสองแบบนี้บ่อยๆ:
+
+- `.ok_or(err)` / `.ok_or_else(\|\| err)` — แปลง `Option<T>` เป็น `Result<T, E>`: `Some(v)` กลายเป็น `Ok(v)`, `None` กลายเป็น `Err(err)`
+- `.ok()` — แปลง `Result<T, E>` เป็น `Option<T>` โดย**ทิ้งข้อผิดพลาดไปเลย**: `Ok(v)` กลายเป็น `Some(v)`, `Err(_)` กลายเป็น `None`
+- `.transpose()` — สลับการซ้อน: `Option<Result<T, E>>` กลายเป็น `Result<Option<T>, E>` (และย้อนกลับได้) มีประโยชน์เมื่อคุณมี "อาจมีสิ่งที่ล้มเหลวได้" และต้องการ "ล้มเหลวได้ อาจมีสิ่งนั้น"
+
+export const optionResultCode = `fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+
+fn main() {
+    // Option -> Result: ok_or_else turns None into a computed Err
+    let cached: Option<u32> = None;
+    let age: Result<u32, String> = cached.ok_or_else(|| String::from("no cached age"));
+    println!("ok_or_else on None: {:?}", age);
+
+    let present: Option<u32> = Some(40);
+    println!("ok_or_else on Some: {:?}", present.ok_or_else(|| String::from("unreachable")));
+
+    // Result -> Option: .ok() discards the error entirely
+    println!(".ok() on Err: {:?}", parse_age("nope").ok());
+    println!(".ok() on Ok: {:?}", parse_age("40").ok());
+
+    // transpose swaps Option<Result<T, E>> and Result<Option<T>, E>
+    let maybe_result: Option<Result<u32, String>> = Some(parse_age("21"));
+    let transposed: Result<Option<u32>, String> = maybe_result.transpose();
+    println!("transposed = {:?}", transposed);
+}`;
+
+<Playground code={optionResultCode} />
+
+<Callout title=".ok() ทิ้งข้อผิดพลาดไปเลย">
+`.ok()` สะดวกแต่สูญเสียข้อมูล — ใช้เฉพาะเมื่อผู้เรียกไม่สนใจจริงๆ ว่า *ทำไม* บางอย่างล้มเหลว สนใจแค่ *ว่ามัน* สำเร็จหรือไม่ ถ้าเหตุผลสำคัญ (สำหรับ log, สำหรับ retry, สำหรับข้อความที่ผู้ใช้เห็น) ให้เก็บ `Result` ไว้และใช้ `.map_err`, `?`, หรือ `match` แทน
+</Callout>
+
+## คอมไพเลอร์พูดว่าอะไร: ไม่มีการแปลงโดยนัยภายใน `Result`
+
+`Result<T, E>` ไม่มี covariant แบบพิเศษใดๆ — `Result<i32, String>` และ `Result<String, String>` เป็นเพียงสองประเภทที่แยกจากกันและไม่เกี่ยวข้องกัน เหมือนกับที่ `i32` และ `String` แยกจากกัน ไม่มีการแปลงโดยนัยเลย แม้ทั้งคู่จะเป็น "`Result` ที่มี error เป็น `String`" ก็ตาม:
+
+```rust
+// @expect-error E0308
+fn main() {
+    let r: Result<i32, String> = Ok(5);
+    let s: Result<String, String> = r;
+    println!("{:?}", s);
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> result_mismatch.rs:3:37
+  |
+3 |     let s: Result<String, String> = r;
+  |            ----------------------   ^ expected `Result<String, String>`, found `Result<i32, String>`
+  |            |
+  |            expected due to this
+  |
+  = note: expected enum `Result<String, _>`
+             found enum `Result<i32, _>`
+
+error: aborting due to 1 previous error
+```
+
+นี่คือกฎ "ไม่มีการแปลงโดยนัย" แบบเดียวกับที่คุณรู้จักอยู่แล้วจากค่าธรรมดา — `i32` ไม่เคยกลายเป็น `i64` โดยเงียบๆ และ `Result<i32, E>` ก็ไม่เคยกลายเป็น `Result<String, E>` โดยเงียบๆ เช่นกัน ถ้าคุณต้องการเปลี่ยนประเภทของ `Ok` คุณต้องบอกอย่างชัดเจนด้วย `.map(|v| v.to_string())`
+
+## กลิ่นโค้ด `if r.is_ok() { r.unwrap() }`
+
+`Result` เข้ารหัส "สิ่งนี้สำเร็จหรือไม่" ไว้ใน variant ของมันอยู่แล้ว การเช็ค `.is_ok()` แล้วเรียก `.unwrap()` แยกต่างหากคือการหาข้อมูลที่คอมไพเลอร์พิสูจน์ให้คุณได้แล้ว ณ จุดเดียวกันอีกครั้ง และมันทิ้งค่า `Err` ไปเลยหากการเช็คล้มเหลวแบบเงียบๆ (หรือแย่กว่านั้น panic ในภายหลังถ้ามีใครสลับลำดับโค้ด):
+
+```rust
+fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+
+fn main() {
+    let r = parse_age("21");
+    if r.is_ok() {
+        println!("age: {}", r.unwrap()); // re-checks what is_ok() already proved
+    }
+}
+```
+
+ทางเลือกแบบ idiomatic ทุกแบบสั้นกว่าและปลอดภัยกว่า เพราะปล่อยให้ pattern match (หรือ combinator) พิสูจน์ variant และดึงค่าออกมาในขั้นตอนเดียว: `if let Ok(v) = r { ... }`, `let Ok(v) = r else { return; }`, หรือ combinator chain อย่าง `.map(...)` เวอร์ชัน `if r.is_ok()` ยังไม่ทำอะไรเลยแบบเงียบๆ เมื่อเป็น `Err` — ไม่มีสาขา `else` ที่เตือนคุณว่าความล้มเหลวก็ต้องจัดการเช่นกัน
+
+## `let else` และทัวร์ Combinator
+
+`let else` ผูกค่ากรณีสำเร็จและบังคับให้สาขา `else` ต้อง **diverge** — `return`, `break`, `continue`, หรือ `panic!` — เพื่อให้ส่วนที่เหลือของฟังก์ชันสมมติได้ว่าค่าที่ผูกไว้มีอยู่เสมอ:
+
+```rust
+fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+
+fn report(s: &str) {
+    let Ok(age) = parse_age(s) else {
+        println!("could not report: invalid age string");
+        return;
+    };
+    println!("age is {}", age);
+}
+
+fn main() {
+    report("30");
+    report("nope");
+}
+```
+
+ถ้าบล็อก `else` ไม่ diverge คอมไพเลอร์จะปฏิเสธมัน — ใจความสำคัญของ `let else` คือทุกอย่างหลังจากนี้สามารถถือว่าค่าที่ผูกไว้ไม่มีเงื่อนไข:
+
+```rust
+// @expect-error E0308
+fn parse_two(a: &str) -> i32 {
+    let Ok(x) = a.parse::<i32>() else {
+        0
+    };
+    x
+}
+
+fn main() {
+    println!("{}", parse_two("abc"));
+}
+```
+
+```text
+error[E0308]: `else` clause of `let...else` does not diverge
+ --> let_else_bad.rs:2:39
+  |
+2 |       let Ok(x) = a.parse::<i32>() else {
+  |  _______________________________________^
+3 | |         0
+4 | |     };
+  | |_____^ expected `!`, found integer
+  |
+  = note: expected type `!`
+             found type `{integer}`
+  = help: try adding a diverging expression, such as `return` or `panic!(..)`
+  = help: ...or use `match` instead of `let...else`
+
+error: aborting due to 1 previous error
+```
+
+นอกเหนือจาก `let else` แล้ว `map`, `and_then`, และ `unwrap_or_else` ยังต่อกันแทน `match`/`if` ที่ซ้อนกันได้ทั้งหมด — `map` แปลงค่าที่สำเร็จ, `and_then` ต่อขั้นตอนที่ล้มเหลวได้อีกขั้น (เหมือน `flatten` + `map` ของ `Option` รวมกัน), และ `unwrap_or_else` ให้ค่าสำรองที่คำนวณจากข้อผิดพลาดในขั้นตอนสุดท้าย:
+
+export const combinatorCode = `fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+
+fn main() {
+    // let-else: bind on Ok, or diverge (return/panic/continue) on Err
+    let Ok(good_age) = parse_age("30") else {
+        println!("unreachable in this demo");
+        return;
+    };
+    println!("let-else bound: {}", good_age);
+
+    // Smell: if r.is_ok() { r.unwrap() } duplicates the check the type already encodes
+    let r = parse_age("21");
+    if r.is_ok() {
+        println!("smelly: {}", r.unwrap());
+    }
+
+    // Fix: combinator chain, no redundant check, no unwrap
+    let doubled = parse_age("21")
+        .map(|n| n * 2)
+        .and_then(|n| if n > 100 { Err(String::from("too big")) } else { Ok(n) })
+        .unwrap_or_else(|e| {
+            println!("falling back because: {}", e);
+            0
+        });
+    println!("doubled = {}", doubled);
+}`;
+
+<Playground code={combinatorCode} />
+
+<Mermaid code={`flowchart TD
+    A[You have a Result] --> B{Want a fallback on Err?}
+    B -->|fixed value| C[.unwrap_or]
+    B -->|computed from the error| D[.unwrap_or_else]
+    B -->|discard the error, need Option| E[.ok]
+    F[You have an Option] --> G{Need a Result instead?}
+    G -->|fixed error| H[.ok_or]
+    G -->|computed error| I[.ok_or_else]
+    J[Have a Result, want to keep chaining] --> K[.map for the Ok value]
+    J --> L[.and_then for another fallible step]`} title="เลือก combinator ของ Result/Option" />
+
+## แบบจำลองความคิด
+
+ปฏิบัติต่อทุก `Result` ที่คุณได้รับเป็นค่าสองสาขาที่ type system บังคับให้คุณรับรู้อยู่แล้ว — คำถามไม่เคยเป็น "ฉันต้องเช็คสิ่งนี้ไหม" (คุณต้องเช็คเสมอ คอมไพเลอร์ไม่ปล่อยให้คุณลืม) แต่เป็น "วิธีที่สะอาดที่สุดในการรับรู้มันตรงนี้คืออะไร" `match` คือความจริงพื้นฐานที่เครื่องมืออื่นทุกตัว desugar กลับไปหา; `let else` และ combinator เป็นทางลัดสำหรับรูปแบบทั่วไปของ `match` นั้น — "ผูกหรือออก" และ "แปลงโดยไม่ unwrap" ตามลำดับ การเลือกใช้ `.is_ok()` บวก `.unwrap()` คือการเขียน `match` arm เวอร์ชันแย่กว่าของคุณเองที่คอมไพเลอร์เช็คให้ได้อยู่แล้ว
+
+## ข้อแลกเปลี่ยน
+
+`match` ชัดเจนที่สุดและอ่านถูกต้องแม้กับคนที่ไม่คุ้นกับชื่อ combinator เฉพาะเจาะจง แต่แลกด้วยพื้นที่แนวตั้งและการซ้อนเมื่อคุณต่อขั้นตอนที่ล้มเหลวได้หลายขั้น Combinator (`map`, `and_then`, `unwrap_or_else`, `ok_or_else`) บีบอัดชุดการแปลงที่ล้มเหลวได้ให้เป็น expression เดียว แต่แต่ละชื่อคือคำศัพท์อีกหนึ่งคำที่ผู้อ่านต้องรู้อยู่แล้ว และ combinator chain ที่ยาวอาจ step ผ่านใน debugger ได้ยากกว่า `match` ที่เทียบเท่ากัน `let else` อยู่ตรงกลาง: อ่านง่ายเท่า `match` สำหรับรูปแบบ "ผูกหรือออก" ทั่วไป แต่ใช้ได้เฉพาะเมื่อสาขาความล้มเหลว diverge ได้จริง — มันเป็นเครื่องมือผิดเมื่อความล้มเหลวควรให้ค่าสำรองแทนที่จะออกจากฟังก์ชัน
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`.ok()` เป็นวิธีที่ปลอดภัยในการเช็คความสำเร็จโดยไม่ unwrap"** ปลอดภัยจาก panic จริง แต่ไม่ได้ฟรี — มันทิ้งค่า `Err` ไปแบบเงียบๆ ถ้ามีอะไรข้างหน้าต้องรู้ *ทำไม* มันล้มเหลว (log, retry, ข้อความที่ผู้ใช้เห็น) `.ok()` ได้ทิ้งข้อมูลนั้นไปแล้ว
+- **"`if r.is_ok() { r.unwrap() }` ใช้ได้เพราะ `is_ok()` รับประกันว่า `unwrap()` panic ไม่ได้"** จริงในรูปแบบนี้เป๊ะๆ แต่มันแย่กว่า `if let Ok(v) = r` อย่างแน่นอน: มันหาข้อมูล variant ซ้ำสองครั้ง ไม่มีสาขา `else` เตือนให้จัดการ `Err` และพังทันทีที่มีใครแทรกโค้ดระหว่างการเช็คกับ `unwrap()` ที่อาจเปลี่ยน `r`
+- **"บล็อก `else` ของ `let else` ทำอะไรก็ได้ ตราบใดที่โปรแกรมไม่ crash"** มันต้อง **diverge** โดยเฉพาะ — `return`, `break`, `continue`, หรือ macro ที่ panic บล็อกที่ประเมินเป็นค่าปกติ (แม้แต่ `()` ถ้าส่วนที่เหลือของฟังก์ชันต้องการค่าที่ผูกไว้) คือ type error ไม่ใช่แค่คำเตือน
+
+## อ่านโค้ดที่ AI เขียน
+
+AI มักจะเลือกใช้ `if r.is_ok() { r.unwrap() }` (หรือแบบเทียบเท่าของ `Option` คือ `if o.is_some() { o.unwrap() }`) เพราะมัน "เห็นได้ชัด" ว่า panic ไม่ได้ — แต่มันกำลังทำด้วยมือ และแย่กว่า สิ่งที่ pattern match เดียวทำได้อย่าง atomic และ idiomatic อยู่แล้ว
+
+<SpotTheBug code={`fn print_balance(account: Result<i32, String>) {
+    if account.is_ok() {
+        println!("balance: {}", account.unwrap());
+    }
+}
+`}>
+โค้ดนี้คอมไพล์ผ่านและไม่ panic แต่มันแย่กว่าเวอร์ชัน idiomatic อย่างแน่นอน: ไม่มีสาขาจัดการกรณี `Err` เลย (ผู้เรียกที่ส่ง error มาจะเจอความเงียบทั้งหมด ไม่มีแม้แต่ log บรรทัดเดียว) และมันเช็ค variant สองครั้ง — ครั้งหนึ่งผ่าน `is_ok()` อีกครั้งโดยนัยภายใน `unwrap()` วิธีแก้คือ `if let Ok(balance) = account { println!("balance: {}", balance); } else { println!("balance unavailable"); }` หรือดีกว่านั้น เปลี่ยนตัวฟังก์ชันเองให้คืน `Result` เพื่อให้ *ผู้เรียก* ตัดสินใจว่า "unavailable" ควรมีหน้าตาอย่างไร แทนที่ข้อความจะถูกฝังอยู่ใน `print_balance`
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+อย่าหา variant ของ `Result` ซ้ำด้วย `.is_ok()`/`.is_err()` ก่อนดึงค่าออกมา — ให้ pattern-match, `let else`, หรือต่อ combinator เพื่อให้คอมไพเลอร์พิสูจน์ว่าการดึงค่าปลอดภัยในขั้นตอนเดียวกับที่เช็ค
+</Callout>
+
 export const quizResult = [
     {
         q: "สอง variant ของ Result<T, E> คืออะไร?",
@@ -111,7 +331,8 @@ export const quizResult = [
             "Pass(T) และ Fail(E)",
             "Value(T) และ Error(E)"
         ],
-        answer: 1
+        answer: 1,
+        explain: "Result<T, E> ถูกกำหนดใน std ด้วยสอง variant เป๊ะๆ คือ Ok(T) สำหรับความสำเร็จและ Err(E) สำหรับความล้มเหลว — Some/None เป็นของ Option ไม่ใช่ Result"
     },
     {
         q: ".unwrap_or_else(|e| ...) ทำอะไรเมื่อ Result เป็น Err(e)?",
@@ -121,7 +342,8 @@ export const quizResult = [
             "เรียก closure ด้วยข้อผิดพลาดและคืนค่าที่ closure ส่งคืน",
             "แปลง Err เป็น Ok"
         ],
-        answer: 2
+        answer: 2,
+        explain: ".unwrap_or_else รัน closure พร้อมค่าข้อผิดพลาดและคืนค่าอะไรก็ตามที่ closure คำนวณได้ ทำให้ค่าสำรองขึ้นอยู่กับสาเหตุที่ล้มเหลวได้"
     },
     {
         q: "เมธอดใดที่แปลงค่า Ok โดยไม่แตะ Err?",
@@ -131,17 +353,63 @@ export const quizResult = [
             ".map(|v| ...)",
             ".unwrap_or_else(|e| ...)"
         ],
-        answer: 2
+        answer: 2,
+        explain: ".map แปลงเฉพาะ payload ของ Ok และปล่อยให้ Err ใดๆ ผ่านไปโดยไม่เปลี่ยน; .map_err ทำการดำเนินการแบบสะท้อนกลับกับข้อผิดพลาดแทน"
     },
     {
-        q: "เหตุใดคอมไพเลอร์ Rust จึงเตือนเมื่อ Result ไม่ได้ใช้?",
+        q: ".ok() ทำอะไรกับ Result<T, E>?",
         options: [
-            "ค่า Result จัดสรรบน heap และต้องถูกปลดปล่อย",
-            "Result ที่ไม่ได้ใช้หมายความว่ากรณีข้อผิดพลาดถูกละเลยโดยเงียบ",
-            "Result implement Drop ซึ่งทริกเกอร์คำเตือน",
-            "คอมไพเลอร์เตือนเกี่ยวกับตัวแปรที่ไม่ได้ใช้ทั้งหมดเสมอ"
+            "แปลงเป็น Option<T> โดยทิ้งข้อผิดพลาดไปเลย",
+            "panic ถ้า Result เป็น Err",
+            "คืนค่า true ถ้า Result เป็น Ok",
+            "แปลงประเภทข้อผิดพลาดเป็น String"
         ],
-        answer: 1
+        answer: 0,
+        explain: ".ok() แปลง Ok(v) เป็น Some(v) และ Err(_) เป็น None — ค่าข้อผิดพลาดถูกทิ้งไปเลย จึงควรใช้เฉพาะเมื่อผู้เรียกไม่ต้องการเหตุผลของความล้มเหลวจริงๆ"
+    },
+    {
+        q: "โค้ดนี้ print อะไร?\n```rust\nfn main() {\n    let r: Result<i32, String> = Ok(5);\n    let s: Result<String, String> = r;\n    println!(\"{:?}\", s);\n}\n```",
+        options: [
+            "Ok(\"5\")",
+            "คอมไพล์ผ่านและ print Ok(5)",
+            "คอมไพล์ไม่ผ่าน — Result<i32, String> และ Result<String, String> เป็นคนละประเภทกัน",
+            "Err(\"type mismatch\")"
+        ],
+        answer: 2,
+        explain: "Result<T, E> ไม่มีการแปลงโดยนัยระหว่างพารามิเตอร์ T (หรือ E) ที่ต่างกัน เหมือน i32 ที่ไม่เคยกลายเป็น String โดยเงียบๆ — นี่คือ E0308 ซึ่งเป็น mismatched-types error ธรรมดา"
+    },
+    {
+        q: "เหตุใด `if r.is_ok() { r.unwrap() }` จึงถือเป็นกลิ่นโค้ดเมื่อเทียบกับ `if let Ok(v) = r { ... }`?",
+        options: [
+            "มันช้ากว่าตอนรันไทม์เพราะ is_ok() จอง memory",
+            "มันเช็ค variant ซ้ำสองครั้งและไม่มีสาขาสำหรับกรณี Err",
+            "is_ok() และ unwrap() เรียกบน Result เดียวกันไม่ได้",
+            "มันใช้ได้กับ Option เท่านั้น ไม่ใช่ Result"
+        ],
+        answer: 1,
+        explain: "รูปแบบ pattern-match พิสูจน์และดึงค่าออกมาในขั้นตอนเดียวและบังคับให้คุณเขียน (หรือตั้งใจละเว้น) สาขา else สำหรับ Err ในขณะที่ is_ok()+unwrap() เช็คซ้ำและไม่ทำอะไรแบบเงียบๆ เมื่อล้มเหลว"
+    },
+    {
+        q: "ในคำสั่ง `let Ok(x) = expr else { ... }` บล็อก else ต้องทำอะไร?",
+        options: [
+            "คืนค่าประเภทเดียวกับ x",
+            "diverge — return, break, continue, หรือ panic — เพื่อให้ส่วนที่เหลือของฟังก์ชันสมมติได้ว่า x ถูกผูกไว้แล้ว",
+            "ไม่มีข้อกำหนดพิเศษ expression อะไรก็คอมไพล์ผ่าน",
+            "เรียก .unwrap() บน Result เดิม"
+        ],
+        answer: 1,
+        explain: "let else บังคับให้สาขา else มีประเภท never (!) ผ่าน diverging expression; บล็อกที่ให้ค่าปกติคือ E0308 type error ไม่ใช่แค่ปัญหาสไตล์"
+    },
+    {
+        q: "โค้ดนี้ print อะไร?\n```rust\nfn parse_age(s: &str) -> Result<u32, String> {\n    s.parse::<u32>().map_err(|e| format!(\"parse error: {}\", e))\n}\nfn main() {\n    let r = parse_age(\"21\");\n    if r.is_ok() {\n        println!(\"age: {}\", r.unwrap());\n    }\n}\n```",
+        options: [
+            "คอมไพล์ไม่ผ่าน",
+            "age: 21",
+            "ไม่พิมพ์อะไรเลย",
+            "panic เพราะ r ถูกเช็คไปแล้ว"
+        ],
+        answer: 1,
+        explain: "is_ok() คืนค่า true และ unwrap() ก็สำเร็จ ดังนั้นโค้ดนี้คอมไพล์ผ่าน รันได้ และพิมพ์ \"age: 21\" — โค้ดนี้เป็นกลิ่นโค้ด ไม่ใช่บั๊ก ซึ่งเป็นเหตุผลว่าทำไมมันพลาดง่ายตอน review"
     }
 ];
 

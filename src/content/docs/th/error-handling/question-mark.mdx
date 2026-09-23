@@ -1,6 +1,6 @@
 ---
 title: 'ตัวดำเนินการ ?'
-description: 'ตัวดำเนินการ ? ส่งต่อข้อผิดพลาดแบบ early: แกะ Ok ออกมา หรือคืน Err ทันทีจากฟังก์ชันที่ครอบอยู่ ใช้ได้กับฟังก์ชันที่คืน Result หรือ Option'
+description: 'ตัวดำเนินการ ? ส่งต่อข้อผิดพลาดแบบ early: มัน unwrap Ok หรือคืนค่า Err ทันทีจากฟังก์ชันที่ล้อมรอบ มันทำงานได้ในฟังก์ชันใดก็ตามที่คืนค่า Result หรือ Option'
 sidebar:
   order: 4
 ---
@@ -9,10 +9,12 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
-## การส่งต่อแบบ Manual นั้นยุ่งยาก
+## การส่งต่อด้วยมือมันวุ่นวาย
 
-โดยไม่มีตัวดำเนินการ `?` การส่งต่อข้อผิดพลาดจากฟังก์ชันที่เรียกต้องใช้นิพจน์ match ทุกครั้ง:
+หากไม่มีตัวดำเนินการ `?` การส่งต่อข้อผิดพลาดจากฟังก์ชันที่ถูกเรียกต้องใช้นิพจน์ match ทุกครั้ง:
 
 ```rust
 fn parse_and_double(s: &str) -> Result<i32, std::num::ParseIntError> {
@@ -24,16 +26,16 @@ fn parse_and_double(s: &str) -> Result<i32, std::num::ParseIntError> {
 }
 ```
 
-รูปแบบนี้ — แกะ `Ok` หรือคืน `Err` แบบ early — เกิดขึ้นบ่อยมากจน Rust มีตัวดำเนินการเฉพาะให้เลย
+รูปแบบนี้ — unwrap `Ok` หรือคืนค่า `Err` แบบ early — พบบ่อยมากจน Rust มีตัวดำเนินการเฉพาะสำหรับมัน
 
 ## ตัวดำเนินการ `?`
 
-การวาง `?` หลังนิพจน์ `Result` ทำสิ่งเดียวกันกับ match ด้านบน:
+การวาง `?` หลังนิพจน์ `Result` ทำสิ่งเดียวกันกับ match ด้านบนเป๊ะๆ:
 
-- ถ้าค่าเป็น `Ok(v)` จะประเมินเป็น `v`
-- ถ้าค่าเป็น `Err(e)` จะคืน `Err(e)` **ทันทีจากฟังก์ชันที่ครอบอยู่**
+- ถ้าค่าคือ `Ok(v)` มันจะประเมินเป็น `v`
+- ถ้าค่าคือ `Err(e)` มันจะคืนค่า `Err(e)` **ทันทีจากฟังก์ชันที่ล้อมรอบ**
 
-ฟังก์ชัน**ต้อง**คืน `Result` (หรือ `Option`) เพื่อให้ `?` ทำงาน — คอมไพเลอร์บังคับใช้สิ่งนี้
+ฟังก์ชัน**ต้อง**คืนค่า `Result` (หรือ `Option`) เพื่อให้ `?` ทำงานได้ — คอมไพเลอร์บังคับสิ่งนี้
 
 ```rust
 use std::num::ParseIntError;
@@ -44,7 +46,51 @@ fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
 }
 ```
 
-## การเชื่อมโยง `?`
+## `?` Desugar เป็นอะไร
+
+`?` ไม่ใช่เวทมนตร์ — มันคือ sugar ของ `match` ที่ดึงค่าออกมาหรือแปลงข้อผิดพลาดแล้วคืนค่า บนนิพจน์ `Result<T, E>` ภายในฟังก์ชันที่คืนค่า `Result<T2, E2>` `expr?` คือสิ่งนี้เป๊ะๆ:
+
+```rust
+// @skip-verify illustrative desugaring only — `expr` is a placeholder, not real code
+match expr {
+    Ok(v) => v,
+    Err(e) => return Err(std::convert::From::from(e)),
+}
+```
+
+ทั้งสองรูปแบบด้านล่างคอมไพล์ออกมาเหมือนกัน — วางไว้เคียงข้างกันเพื่อให้คุณเห็นชัดๆ ว่า sugar ซ่อนอะไรไว้:
+
+```rust
+use std::num::ParseIntError;
+
+// Desugared by hand
+fn parse_and_double_manual(s: &str) -> Result<i32, ParseIntError> {
+    let n: i32 = match s.parse::<i32>() {
+        Ok(v) => v,
+        Err(e) => return Err(std::convert::From::from(e)),
+    };
+    Ok(n * 2)
+}
+
+// Using ?
+fn parse_and_double_sugar(s: &str) -> Result<i32, ParseIntError> {
+    let n: i32 = s.parse()?;
+    Ok(n * 2)
+}
+
+fn main() {
+    println!("{:?}", parse_and_double_manual("21"));
+    println!("{:?}", parse_and_double_sugar("21"));
+}
+```
+
+<Mermaid code={`flowchart TD
+    A["expr?"] --> B{"expr is Ok or Err?"}
+    B -->|"Ok(v)"| C["Evaluates to v,\nexecution continues"]
+    B -->|"Err(e)"| D["From::from(e) converts\nthe error type if needed"]
+    D --> E["return Err(converted_e)\nfrom the enclosing function"]`} title="expr? ทำอะไร" />
+
+## ต่อ `?` เป็นสาย
 
 เพราะ `?` คืนค่า `Ok` โดยตรง คุณสามารถเรียกฟังก์ชันที่ล้มเหลวได้หลายตัวตามลำดับโดยไม่ต้องซ้อนกัน:
 
@@ -63,11 +109,48 @@ fn chain(a: &str, b: &str) -> Result<i32, ParseIntError> {
 }
 ```
 
-`?` แต่ละตัวจะแกะค่าสำเร็จหรือ short-circuit ฟังก์ชันทั้งหมด ไม่มีการ match ซ้อนกัน ไม่มีการ return แบบ manual
+`?` แต่ละตัว unwrap ค่าที่สำเร็จ หรือ short-circuit ทั้งฟังก์ชัน ไม่มี match ซ้อน ไม่มี early return ด้วยมือ
 
-## `main` ที่คืน `Result`
+## คอมไพเลอร์พูดว่าอะไร: `?` ต้องการฟังก์ชันที่คืนค่า `Result`/`Option`
 
-`main` ยังสามารถคืน `Result<(), Box<dyn std::error::Error>>` ซึ่งให้คุณใช้ `?` ภายใน `main` ได้:
+การ desugar ด้านบนจะ type-check ผ่านก็ต่อเมื่อฟังก์ชันที่ล้อมรอบสามารถถือ `return Err(...)` แบบ early ไว้ได้ — ซึ่งหมายความว่ามันเองต้องคืนค่า `Result` (หรือ `Option`) การใช้ `?` ภายในฟังก์ชันที่คืนค่า `()` เป็น compile error ไม่ใช่ runtime error:
+
+```rust
+// @expect-error E0277
+fn main() {
+    let x: Result<i32, String> = Err(String::from("no"));
+    let n = x?;
+    println!("{}", n);
+}
+```
+
+```text
+error[E0277]: the `?` operator can only be used in a function that returns `Result` or `Option` (or another type that implements `FromResidual`)
+ --> question_unit.rs:3:14
+  |
+1 | fn main() {
+  | --------- this function should return `Result` or `Option` to accept `?`
+2 |     let x: Result<i32, String> = Err(String::from("no"));
+3 |     let n = x?;
+  |              ^ cannot use the `?` operator in a function that returns `()`
+  |
+help: consider adding return type
+  |
+1 ~ fn main() -> Result<(), Box<dyn std::error::Error>> {
+2 |     let x: Result<i32, String> = Err(String::from("no"));
+3 |     let n = x?;
+4 |     println!("{}", n);
+5 +     Ok(())
+  |
+
+error: aborting due to 1 previous error
+```
+
+คำแนะนำของคอมไพเลอร์เองคือรูปแบบเป๊ะๆ ในหัวข้อถัดไป: ให้ `main` มี return type เป็น `Result`
+
+## `main` คืนค่า `Result`
+
+`main` สามารถคืนค่า `Result<(), Box<dyn std::error::Error>>` ได้เช่นกัน ซึ่งทำให้คุณใช้ `?` ภายใน `main` เองได้:
 
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -77,11 +160,142 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`Box<dyn std::error::Error>` คือ trait object ที่สามารถเก็บประเภทข้อผิดพลาดใดก็ได้ ทำให้มีประโยชน์ใน `main` ที่คุณไม่ต้องการแก้ไขประเภทข้อผิดพลาดเดียวที่เป็น concrete
+`Box<dyn std::error::Error>` คือ trait object ที่เก็บ error type อะไรก็ได้ ทำให้มีประโยชน์ใน `main` ที่คุณไม่ต้องการยึดติดกับ error type ที่แน่นอนตัวเดียว
+
+### Exit Code จริงและรูปแบบ Output
+
+เมื่อ `main` คืนค่า `Err(e)` runtime ของ Rust จะพิมพ์ `Error: {:?}` (การจัด format แบบ `Debug` ของ `e`) ไปที่ **stderr** และออกด้วยสถานะ **1** — ไม่มี panic ไม่มี backtrace โดยค่าเริ่มต้น มีแค่บรรทัดนั้นบรรทัดเดียว:
+
+```rust
+// @expect-panic exits with status 1, which the harness treats like a non-zero-exit demo
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let n: i32 = "abc".parse()?;
+    println!("parsed: {}", n);
+    Ok(())
+}
+```
+
+```text
+$ rustc --edition 2024 main_parse.rs -o main_parse && ./main_parse; echo "exit=$?"
+Error: ParseIntError { kind: InvalidDigit }
+exit=1
+```
+
+สังเกตสิ่งที่**ไม่**เกิดขึ้น: `println!("parsed: {}", n)` ไม่เคยรันเลย (`?` คืนค่า early ไปแล้ว) และไม่มีบรรทัด `thread 'main' panicked at ...` เลย — นี่คือการยุติแบบควบคุมได้ ไม่ใช่ panic เทียบกับ `std::process::exit` ที่ครอบคลุมใน[บท Panics](/rust/th/error-handling/panic/): ต่างจากการเรียก `process::exit` โดยตรง การคืนค่า `Err` จาก `main` คือ**การ return ฟังก์ชันปกติ** ดังนั้นค่าใดๆ ที่ยังอยู่ใน scope ของ `main` จะถูก drop เหมือนกับการ return แบบอื่นทุกประการ:
+
+```rust
+// @expect-panic exits with status 1 (Err from main), no panic message involved
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+struct Boom;
+impl fmt::Display for Boom {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "boom")
+    }
+}
+impl Error for Boom {}
+
+struct Guard;
+impl Drop for Guard {
+    fn drop(&mut self) {
+        println!("dropping guard");
+    }
+}
+
+fn might_fail() -> Result<(), Boom> {
+    Err(Boom)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let _g = Guard;
+    might_fail()?;
+    Ok(())
+}
+```
+
+```text
+$ rustc --edition 2024 main_drop.rs -o main_drop && ./main_drop; echo "exit=$?"
+dropping guard
+Error: Boom
+exit=1
+```
+
+`dropping guard` พิมพ์**ก่อน** `Error: Boom` — destructor ของ `Guard` รันระหว่างการ return ปกติแบบไม่มี unwind ออกจาก `main` ซึ่งตรงข้ามกับพฤติกรรมของ `std::process::exit`/`panic = "abort"` ที่ destructor ถูกข้ามไปทั้งหมด
+
+## `?` บน `Option`
+
+`?` ทำงานแบบเดียวกันภายในฟังก์ชันที่คืนค่า `Option<T>`: `Some(v)` unwrap เป็น `v`, `None` คืนค่า `None` ทันทีจากฟังก์ชันที่ล้อมรอบ ไม่มี error type ให้แปลง จึงไม่มีการเรียก `From` เกิดขึ้น:
+
+```rust
+fn first_char_upper(s: &str) -> Option<char> {
+    let c = s.chars().next()?; // returns None early if s is empty
+    Some(c.to_ascii_uppercase())
+}
+
+fn main() {
+    println!("{:?}", first_char_upper("hello"));
+    println!("{:?}", first_char_upper(""));
+}
+```
+
+`?` ผสมทั้งสองแบบไม่ได้: คุณใช้มันบน `Result` ภายในฟังก์ชันที่คืนค่า `Option` ไม่ได้ หรือกลับกัน โดยไม่แปลงอย่างชัดเจนก่อน (`.ok()` สำหรับ `Result -> Option`, `.ok_or(...)` สำหรับ `Option -> Result` — ทั้งคู่ครอบคลุมใน[บท Result](/rust/th/error-handling/result/))
 
 ## การแปลงประเภทข้อผิดพลาดด้วย `?`
 
-เมื่อประเภทข้อผิดพลาดที่คืนโดยฟังก์ชันที่เรียกแตกต่างจากประเภทข้อผิดพลาดของฟังก์ชันที่ครอบอยู่ `?` จะเรียก `From::from` โดยอัตโนมัติเพื่อแปลง นี่คือวิธีที่ฟังก์ชันที่คืน `MyError` สามารถใช้ `?` บนการเรียกที่คืน `ParseIntError` ได้ ตราบใดที่ `From<ParseIntError> for MyError` ถูก implement ไว้
+เมื่อประเภทข้อผิดพลาดที่ฟังก์ชันที่ถูกเรียกคืนค่ามาแตกต่างจากประเภทข้อผิดพลาดของฟังก์ชันที่ล้อมรอบ `?` จะเรียก `From::from` เพื่อแปลงให้อัตโนมัติ — นี่คือขั้นตอน `From::from(e)` ในการ desugar ที่แสดงไปก่อนหน้านี้ นี่คือวิธีที่ฟังก์ชันซึ่งคืนค่า `MyError` สามารถใช้ `?` กับการเรียกที่คืนค่า `ParseIntError` ได้ ตราบใดที่มีการ implement `From<ParseIntError> for MyError` ไว้
+
+### คอมไพเลอร์พูดว่าอะไร: ไม่มี `From` Impl
+
+ถ้า error type ปลายทางไม่มี `From` implementation สำหรับ error ต้นทาง `?` จะคอมไพล์ไม่ผ่าน — พร้อมข้อความที่บอกชื่อ trait ที่ขาดหายไปแบบเป๊ะๆ:
+
+```rust
+// @expect-error E0277
+use std::num::ParseIntError;
+
+#[derive(Debug)]
+struct MyError(String);
+
+fn inner(s: &str) -> Result<i32, ParseIntError> {
+    s.parse()
+}
+
+fn outer(s: &str) -> Result<i32, MyError> {
+    let n = inner(s)?;
+    Ok(n)
+}
+
+fn main() {
+    match outer("abc") {
+        Ok(n) => println!("{}", n),
+        Err(e) => println!("{:?}", e),
+    }
+}
+```
+
+```text
+error[E0277]: `?` couldn't convert the error to `MyError`
+  --> question_mismatch.rs:11:21
+   |
+10 | fn outer(s: &str) -> Result<i32, MyError> {
+   |                      -------------------- expected `MyError` because of this
+11 |     let n = inner(s)?;
+   |             --------^ the trait `From<ParseIntError>` is not implemented for `MyError`
+   |             |
+   |             this can't be annotated with `?` because it has type `Result<_, ParseIntError>`
+   |
+note: `MyError` needs to implement `From<ParseIntError>`
+  --> question_mismatch.rs:4:1
+   |
+ 4 | struct MyError(String);
+   | ^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error: aborting due to 1 previous error
+```
+
+วิธีแก้คือสิ่งที่ note บอกไว้เป๊ะๆ — implement การแปลงที่ขาดหายไปเพียงครั้งเดียว แล้วทุกจุดที่เรียก `?` จะได้ประโยชน์โดยอัตโนมัติ:
 
 export const questionMarkCode = `use std::num::ParseIntError;
 
@@ -115,50 +329,135 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 <Playground code={questionMarkCode} />
 
-<Callout title="? คืน early หรือแกะค่า Ok">
-ตัวดำเนินการ `?` คือ syntactic sugar สำหรับรูปแบบ match-and-early-return ทำงานในฟังก์ชันใดก็ตามที่ประเภทการคืนค่าเป็น `Result` หรือ `Option` เมื่อประเภทข้อผิดพลาดแตกต่างกัน `?` จะแปลงโดยอัตโนมัติผ่าน `From` การเชื่อมโยงการเรียก `?` ให้โค้ดการส่งต่อข้อผิดพลาดที่สะอาดและเป็นเส้นตรงโดยไม่ต้องซ้อน
+<Callout title="? คืนค่าข้อผิดพลาดแบบ early หรือ unwrap ค่า Ok">
+ตัวดำเนินการ `?` คือ syntactic sugar สำหรับรูปแบบ match-and-early-return มันทำงานในฟังก์ชันใดก็ตามที่ return type เป็น `Result` หรือ `Option` เมื่อ error type ต่างกัน `?` จะแปลงให้อัตโนมัติผ่าน `From` การต่อ `?` เป็นสายให้โค้ดส่งต่อข้อผิดพลาดที่สะอาดและเป็นเส้นตรงโดยไม่ต้องซ้อนกันเลย
+</Callout>
+
+## แบบจำลองความคิด
+
+อ่าน `expr?` ว่า "สมมติว่านี่สำเร็จ และถ้ามันไม่สำเร็จ ฟังก์ชันทั้งหมดนี้จบแล้ว — ส่งความล้มเหลวไปให้ผู้ที่เรียกฉัน โดยแปลงมันเป็นสกุลเงิน error ของฉันเองระหว่างทาง" ขั้นตอน `From::from` คือส่วนสำคัญที่พลาดง่าย: มันหมายความว่า error type ของ*ผู้เรียก*คือตัวที่สำคัญ ณ ทุกจุดที่ใช้ `?` ไม่ใช่ของ callee และการ implement `From` เพียงครั้งเดียวต่อคู่ error type ก็เพียงพอที่จะทำให้ `?` ทุกครั้งในอนาคตระหว่างสองประเภทนั้นทำงานได้เลย
+
+## ข้อแลกเปลี่ยน
+
+`?` ทำให้ *happy path* ของฟังก์ชันอ่านจากบนลงล่างโดยไม่ต้องซ้อนกันเลย ซึ่งเป็นชัยชนะด้านความอ่านง่ายที่ใหญ่มากเมื่อฟังก์ชันเรียกการดำเนินการที่ล้มเหลวได้มากกว่าหนึ่งหรือสองตัว ต้นทุนของมันคือ control flow ที่แท้จริง — การ `return` แบบ early — ถูกบีบอัดลงในตัวอักษรวรรคตอนตัวเดียว ซึ่งสายตาข้ามไปได้ง่ายเมื่ออ่านโค้ดที่ไม่คุ้นเคย และมันต้องการให้ทุก error type ระหว่างทางในสายการเรียกสามารถแปลงผ่าน `From` เข้าสู่ error type ที่ฟังก์ชันประกาศไว้ได้ หรือไม่ก็ถูก erase เป็น `Box<dyn Error>` การเลือกใช้ `Box<dyn Error>` เพื่อหลีกเลี่ยงการเขียน `From` impl แลกต้นทุนครั้งเดียวนั้นกับต้นทุนที่แท้จริงและต่อเนื่อง: ผู้เรียกฟังก์ชันของคุณเสียความสามารถในการ `match` กับความล้มเหลวเฉพาะเจาะจง (ครอบคลุมใน[บท Custom Errors](/rust/th/error-handling/custom-errors/))
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`?` ใช้ได้กับ `Result` เท่านั้น"** มันใช้ได้กับ type ใดก็ตามที่ implement `FromResidual` — ในทางปฏิบัติคือ `Result<T, E>` และ `Option<T>` แต่ไม่เคยผสมทั้งสองแบบในการเรียกเดียวโดยไม่แปลงก่อน
+- **"`?` กลืน error ถ้าประเภทไม่ตรงกัน"** ตรงกันข้าม — ประเภทไม่ตรงกันโดยไม่มี `From` impl คือ compile error (E0277) ไม่ใช่ runtime failure แบบเงียบๆ Rust ยอมปฏิเสธการ build มากกว่าจะเดาวิธีแปลง error ของคุณ
+- **"การคืนค่า `Err` จาก `main` เหมือนกับ `panic!` โดยพื้นฐาน"** ไม่ใช่ — ไม่มีการไต่ตาราง unwinding ไม่มีบรรทัด `thread 'main' panicked at ...` และ (ตามที่แสดงด้านบน) ตัวแปร local ถูก drop ผ่านการ return ฟังก์ชันธรรมดาทั้งหมด ไม่ใช่ผ่านกลไก unwind ของ panic สิ่งเดียวที่พวกมันมีร่วมกันคือ "โปรแกรมหยุด" และ exit status ที่ไม่ใช่ศูนย์
+
+## อ่านโค้ดที่ AI เขียน
+
+AI บางครั้งจะ erase error ที่เจาะจงและปฏิบัติการได้เป็น `Box<dyn Error>` ผ่าน `?` เร็วเกินไปหนึ่งชั้น — ภายในฟังก์ชันที่ผู้เรียกต้องแยกแยะจริงๆ ว่า*อะไร*คือความล้มเหลว ไม่ใช่แค่ว่ามันเกิดขึ้น
+
+<SpotTheBug code={`fn load_user(id: u32) -> Result<String, Box<dyn std::error::Error>> {
+    let raw = std::fs::read_to_string(format!("users/{id}.json"))?;
+    Ok(raw)
+}
+
+fn handle_request(id: u32) {
+    match load_user(id) {
+        Ok(user) => println!("loaded: {}", user),
+        Err(_) => println!("something went wrong"), // cannot tell "not found" from "disk full"
+    }
+}
+`}>
+`load_user` erase ความล้มเหลวที่เป็นไปได้ทุกแบบ — ไฟล์หาย, สิทธิ์ไม่พอ, ดิสก์เต็ม — ให้กลายเป็น `Box<dyn Error>` ทึบแสงเดียวกันหมด และ `handle_request` แยกแยะไม่ได้ว่าเกิดอะไรขึ้นโดยไม่ downcast (รูปแบบที่งุ่มง่ามซึ่งครอบคลุมใน[บท Custom Errors](/rust/th/error-handling/custom-errors/)) เนื่องจากฟังก์ชันนี้มีผู้เรียกเพียงตัวเดียวในโค้ดเบสนี้และผู้เรียกต้องการแยกแยะ "ไม่มี user นี้" จาก "มีอย่างอื่นพัง" อย่างชัดเจน `enum LoadUserError { NotFound(u32), Io(std::io::Error) }` เล็กๆ พร้อม `From<std::io::Error>` impl จะทำให้ `?` ยังทำงานได้*และ*ทำให้ `handle_request` `match` กับสาเหตุจริงได้ด้วย
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`?` คือ `match` ที่ปลอมตัวมา — มันดึงค่าที่สำเร็จออกมาหรือแปลง-แล้ว-คืนค่า error ผ่าน `From` ดังนั้นตรวจสอบให้แน่ใจว่า error type ที่ฟังก์ชันของคุณประกาศไว้เป็นตัวที่ทุกจุดเรียก `?` แปลงเข้าไปได้จริง
 </Callout>
 
 export const quizQuestionMark = [
     {
-        q: "? ทำอะไรเมื่อนำไปใช้กับค่า Err(e)?",
+        q: "? ทำอะไรเมื่อใช้กับค่า Err(e)?",
         options: [
             "panic ด้วยข้อความข้อผิดพลาด",
-            "แปลงข้อผิดพลาดเป็น string และบันทึก",
-            "คืน Err(e) ทันทีจากฟังก์ชันที่ครอบอยู่",
-            "ลองดำเนินการซ้ำสูงสุดสามครั้ง"
+            "แปลงข้อผิดพลาดเป็น string แล้ว log",
+            "คืนค่า Err(e) ทันทีจากฟังก์ชันที่ล้อมรอบ",
+            "ลองการดำเนินการซ้ำสูงสุดสามครั้ง"
         ],
-        answer: 2
+        answer: 2,
+        explain: "? desugar เป็น match ที่คืนค่า Err(e) (แปลงผ่าน From) ทันทีจากฟังก์ชันที่ล้อมรอบในสาขา Err ส่วน Ok(v) จะประเมินเป็น v"
     },
     {
-        q: "ฟังก์ชันที่ครอบอยู่ต้องตรงตามข้อจำกัดใดเพื่อให้ ? คอมไพล์ได้?",
+        q: "ฟังก์ชันที่ล้อมรอบต้องมีเงื่อนไขอะไรเพื่อให้ ? คอมไพล์ผ่าน?",
         options: [
             "ฟังก์ชันต้องเป็น async",
-            "ฟังก์ชันต้องคืน Result หรือ Option",
-            "ฟังก์ชันต้องถูกทำเครื่องหมายว่า unsafe",
-            "ฟังก์ชันต้องเป็น method บน struct"
+            "ฟังก์ชันต้องคืนค่า Result หรือ Option",
+            "ฟังก์ชันต้องมี unsafe กำกับ",
+            "ฟังก์ชันต้องเป็น method ของ struct"
         ],
-        answer: 1
+        answer: 1,
+        explain: "การ return แบบ early ที่ desugar ออกมาต้องการที่ให้ return กลับไป — return type เป็น Result หรือ Option (หรือ type อื่นที่ implement FromResidual) — ไม่งั้นคอมไพเลอร์จะปฏิเสธด้วย E0277"
     },
     {
-        q: "ประเภทใดที่มักใช้ใน main() -> Result<(), ...> เพื่อรับข้อผิดพลาดใดก็ได้?",
+        q: "ประเภทใดที่ใช้ทั่วไปใน main() -> Result<(), ...> เพื่อรับ error อะไรก็ได้?",
         options: [
             "Result<(), String>",
             "Result<(), impl Error>",
             "Result<(), Box<dyn std::error::Error>>",
             "Result<(), &str>"
         ],
-        answer: 2
+        answer: 2,
+        explain: "Box<dyn std::error::Error> คือ trait object ที่เก็บ concrete error type ใดก็ได้ที่ implement Error ซึ่งเหมาะพอดีกับ main ระดับบนสุดที่ไม่สนใจ error type เฉพาะเจาะจงตัวเดียว"
     },
     {
-        q: "? จัดการกับประเภทข้อผิดพลาดที่ไม่ตรงกันระหว่าง caller และ callee อย่างไร?",
+        q: "? จัดการ error type ที่ไม่ตรงกันระหว่างผู้เรียกและ callee อย่างไร?",
         options: [
-            "ห่อข้อผิดพลาดภายในใน Box โดยอัตโนมัติ",
-            "เรียก From::from เพื่อแปลงประเภทข้อผิดพลาด",
-            "ต้องการให้โปรแกรมเมอร์เขียน match เพื่อแปลงด้วยตนเอง",
-            "ทำงานได้เฉพาะเมื่อข้อผิดพลาดทั้งสองเป็นประเภทเดียวกัน"
+            "มันห่อ error ภายในด้วย Box โดยอัตโนมัติ",
+            "มันเรียก From::from เพื่อแปลง error type",
+            "มันบังคับให้โปรแกรมเมอร์เขียน match เพื่อแปลงด้วยมือ",
+            "มันใช้ได้เฉพาะเมื่อ error ทั้งสองเป็นประเภทเดียวกัน"
         ],
-        answer: 1
+        answer: 1,
+        explain: "รูปแบบ desugar ของ expr? เรียก std::convert::From::from(e) อย่างชัดเจนในสาขา Err ดังนั้น ? จะทำงานได้ทุกครั้งที่มี From impl ระหว่าง error type ทั้งสอง"
+    },
+    {
+        q: "เกิดอะไรขึ้นเมื่อ main() -> Result<(), Box<dyn Error>> คืนค่า Err(e)?",
+        options: [
+            "โปรเซส panic พร้อม backtrace เต็มรูปแบบ",
+            "ไม่มีอะไรถูกพิมพ์และโปรเซสออกด้วย code 0",
+            "\"Error: {:?}\" ของ e ถูกพิมพ์ไปที่ stderr และโปรเซสออกด้วย code 1",
+            "โปรแกรมค้างรอ input"
+        ],
+        answer: 2,
+        explain: "runtime มาตรฐานจะพิมพ์การจัด format แบบ Debug ของ error นำหน้าด้วย \"Error: \" ไปที่ stderr และออกด้วยสถานะ 1 — ไม่มี panic และไม่มี backtrace โดยค่าเริ่มต้น"
+    },
+    {
+        q: "โค้ดนี้ print อะไร และตามลำดับไหน?\n```rust\nstruct Guard;\nimpl Drop for Guard {\n    fn drop(&mut self) { println!(\"dropping guard\"); }\n}\nfn fails() -> Result<(), String> { Err(String::from(\"boom\")) }\nfn main() -> Result<(), String> {\n    let _g = Guard;\n    fails()?;\n    Ok(())\n}\n```",
+        options: [
+            "มีแค่ \"Error: ...\" — Guard ไม่เคยถูก drop เพราะ ? ข้าม destructor เหมือน process::exit",
+            "\"dropping guard\" พิมพ์ก่อน แล้ว runtime พิมพ์ \"Error: ...\" และออกด้วย code 1",
+            "คอมไพล์ไม่ผ่านเพราะ String ไม่ implement std::error::Error",
+            "\"dropping guard\" ไม่เคยพิมพ์เพราะโปรแกรม panic แทน"
+        ],
+        answer: 1,
+        explain: "การคืนค่า Err จาก main คือการ return ฟังก์ชันปกติ ไม่ใช่ panic หรือ process::exit โดยตรง — Guard ถูก drop ตามลำดับปกติขณะที่ main คลี่กลับแบบปกติ แล้ว runtime พิมพ์ error และออกด้วย code 1",
+    },
+    {
+        q: "ทำไมคุณถึงใช้ ? บน Result โดยตรงภายในฟังก์ชันที่คืนค่า Option<T> ไม่ได้?",
+        options: [
+            "Result และ Option เป็นประเภทเดียวกันภายใน มันจึงใช้ได้จริงๆ",
+            "? แปลงแค่ error type ผ่าน From และ Result/Option เป็น residual type ต่างชนิดที่ไม่ผสมกันโดยอัตโนมัติ",
+            "ตัวดำเนินการ ? ถูกปิดสำหรับ Option ทั้งหมด",
+            "Rust จะห่อ Result ด้วย Some ให้อัตโนมัติ"
+        ],
+        answer: 1,
+        explain: "? ต้องการให้ประเภทของ expression และ return type ของฟังก์ชันตรงกันว่าเป็น FromResidual ชนิดเดียวกัน (Result กับ Result, Option กับ Option) — การข้ามระหว่างสองแบบต้องแปลงด้วย .ok() หรือ .ok_or(...) ก่อน"
+    },
+    {
+        q: "โค้ดนี้ print อะไร?\n```rust\nfn first_char_upper(s: &str) -> Option<char> {\n    let c = s.chars().next()?;\n    Some(c.to_ascii_uppercase())\n}\nfn main() {\n    println!(\"{:?}\", first_char_upper(\"\"));\n}\n```",
+        options: [
+            "Some('H')",
+            "None",
+            "คอมไพล์ไม่ผ่านเพราะ ? ต้องการ Result ไม่ใช่ Option",
+            "panic เพราะ string ว่างเปล่า"
+        ],
+        answer: 1,
+        explain: "s.chars().next() เป็น None สำหรับ string ว่าง ดังนั้น ? จะคืนค่า None ทันทีจาก first_char_upper โดยไม่เคยไปถึงบรรทัด Some(...) เลย — นี่พิมพ์ None ไม่มี panic และไม่มี compile error"
     }
 ];
 

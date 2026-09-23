@@ -1,6 +1,6 @@
 ---
-title: 'ประเภทข้อผิดพลาดแบบกำหนดเอง'
-description: 'กำหนด enum ข้อผิดพลาดของคุณเองและ implement Display และ Error ให้ enum นั้น การ implement From ช่วยให้แปลงอัตโนมัติด้วยตัวดำเนินการ ?'
+title: 'ประเภทข้อผิดพลาดที่กำหนดเอง'
+description: 'กำหนด error enum ของคุณเองและ implement Display กับ Error ให้มัน การ implement From เปิดใช้การแปลงอัตโนมัติกับตัวดำเนินการ ?'
 sidebar:
   order: 5
 ---
@@ -9,18 +9,20 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
-## เหตุใดจึงต้องใช้ข้อผิดพลาดแบบกำหนดเอง?
+## ทำไมต้องมี Error ที่กำหนดเอง?
 
-การใช้ `String` หรือ `Box<dyn std::error::Error>` เป็นประเภทข้อผิดพลาดของคุณใช้ได้ดีสำหรับสคริปต์ด่วน แต่ไลบรารีและแอปพลิเคชันจริงได้ประโยชน์จาก enum ข้อผิดพลาดที่เป็น concrete:
+การใช้ `String` หรือ `Box<dyn std::error::Error>` เป็น error type ของคุณนั้นใช้ได้ดีสำหรับสคริปต์เร็วๆ แต่ library และ application จริงจะได้ประโยชน์จาก error enum ที่เป็นรูปธรรม:
 
-- ผู้เรียกสามารถ pattern-match บน variant เฉพาะและจัดการแต่ละกรณีต่างกัน
-- ประเภทข้อผิดพลาดเป็นเอกสารทุก failure mode ของ API ของคุณ
-- คุณสามารถแนบข้อมูลที่มีโครงสร้าง (เช่น ค่าที่ไม่ถูกต้อง) ให้กับแต่ละ variant
+- ผู้เรียกสามารถ pattern-match กับ variant เฉพาะเจาะจงและจัดการแต่ละกรณีต่างกันได้
+- error type บันทึกทุกโหมดความล้มเหลวของ API ของคุณไว้เป็นเอกสาร
+- คุณสามารถแนบข้อมูลที่มีโครงสร้าง (เช่น ค่าที่ไม่ถูกต้อง) ไว้กับแต่ละ variant ได้
 
-## การกำหนด enum ข้อผิดพลาด
+## กำหนด Error Enum
 
-ประกาศ enum ที่มีหนึ่ง variant ต่อหนึ่ง failure mode derive `Debug` เพื่อให้ข้อผิดพลาดสามารถพิมพ์ด้วย `{:?}`:
+ประกาศ enum ที่มีหนึ่ง variant ต่อหนึ่งโหมดความล้มเหลว Derive `Debug` เพื่อให้ error พิมพ์ด้วย `{:?}` ได้:
 
 ```rust
 #[derive(Debug)]
@@ -31,9 +33,9 @@ enum AppError {
 }
 ```
 
-## การ implement `Display`
+## Implement `Display`
 
-trait `std::fmt::Display` ควบคุมข้อความข้อผิดพลาดที่อ่านได้โดยมนุษย์ — สิ่งที่คุณเห็นเมื่อพิมพ์ด้วย `{}`:
+trait `std::fmt::Display` ควบคุมข้อความ error ที่มนุษย์อ่านได้ — สิ่งที่คุณเห็นเมื่อพิมพ์ด้วย `{}`:
 
 ```rust
 use std::fmt;
@@ -56,9 +58,47 @@ impl fmt::Display for AppError {
 }
 ```
 
-## การ implement `std::error::Error`
+## คอมไพเลอร์พูดว่าอะไร: `Error` ต้องการ `Display`
 
-เพื่อให้ใช้ได้ทุกที่ที่คาดหวัง `dyn Error` (เช่น ใน `Box<dyn Error>`) ประเภทของคุณต้อง implement `std::error::Error` trait นี้ไม่มีเมธอดที่ต้องการ — การ implement เริ่มต้นเพียงพอสำหรับกรณีส่วนใหญ่ เลือก implement `source()` เพื่อเปิดเผยสาเหตุที่อยู่เบื้องหลัง:
+`std::error::Error` ถูกประกาศเป็น `pub trait Error: Debug + Display` หมายความว่า `Display` ไม่ใช่ตัวเลือก — มันคือ **supertrait bound** การ implement `Error` ก่อน `Display` จะล้มเหลวด้วยข้อความที่บอกชื่อ bound ที่ขาดหายไปเป๊ะๆ และที่มาของมัน:
+
+```rust
+// @expect-error E0277
+#[derive(Debug)]
+struct AppError;
+
+impl std::error::Error for AppError {}
+
+fn main() {
+    let _e: Box<dyn std::error::Error> = Box::new(AppError);
+}
+```
+
+```text
+error[E0277]: `AppError` doesn't implement `std::fmt::Display`
+  --> error_needs_display.rs:4:28
+   |
+ 4 | impl std::error::Error for AppError {}
+   |                            ^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `std::fmt::Display` is not implemented for `AppError`
+  --> error_needs_display.rs:2:1
+   |
+ 2 | struct AppError;
+   | ^^^^^^^^^^^^^^^
+note: required by a bound in `std::error::Error`
+   |
+   | pub trait Error: Debug + Display {
+   |                          ^^^^^^^ required by this bound in `Error`
+
+error: aborting due to 1 previous error
+```
+
+นี่คือเหตุผลที่ custom error type ทุกตัวเดินตามลำดับเดียวกัน: derive `Debug`, implement `Display`, *แล้วค่อย* implement `Error` — คอมไพเลอร์ไม่ยอมให้คุณข้ามขั้นตอนไปได้
+
+## Implement `std::error::Error`
+
+เพื่อให้ใช้ได้ทุกที่ที่ต้องการ `dyn Error` (เช่น ใน `Box<dyn Error>`) ประเภทของคุณต้อง implement `std::error::Error` นอกเหนือจาก bound `Debug`/`Display` แล้ว trait นี้ไม่มี method ที่*บังคับ* — default implementation เพียงพอสำหรับกรณีส่วนใหญ่ ถ้าต้องการให้ implement `source()` เพื่อเปิดเผยสาเหตุที่แท้จริง:
 
 ```rust
 use std::fmt;
@@ -90,9 +130,76 @@ impl std::error::Error for AppError {
 }
 ```
 
+### เดินตาม Chain ของ `source()`
+
+`source()` เชื่อม error หนึ่งกับ error ระดับล่างที่เป็นสาเหตุของมัน ทีละชั้น ตัวพิมพ์ทั่วไปเดินตาม chain ทั้งหมดด้วย `while let Some(...)` จากข้อความระดับบนสุดลงไปถึงสาเหตุที่แท้จริง:
+
+```rust
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+struct ConfigError {
+    source: std::num::ParseIntError,
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid config value")
+    }
+}
+impl Error for ConfigError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+#[derive(Debug)]
+struct StartupError {
+    source: ConfigError,
+}
+
+impl fmt::Display for StartupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "server failed to start")
+    }
+}
+impl Error for StartupError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+fn print_chain(err: &dyn Error) {
+    println!("Error: {err}");
+    let mut source = err.source();
+    while let Some(s) = source {
+        println!("Caused by: {s}");
+        source = s.source();
+    }
+}
+
+fn main() {
+    let parse_err = "abc".parse::<i32>().unwrap_err();
+    let config_err = ConfigError { source: parse_err };
+    let startup_err = StartupError { source: config_err };
+    print_chain(&startup_err);
+}
+```
+
+การรันโค้ดนี้พิมพ์ chain ทั้งหมด หนึ่งข้อความ `Display` ต่อหนึ่งชั้น จากความล้มเหลวชั้นนอกสุดไปจนถึง `ParseIntError` ดั้งเดิม:
+
+```text
+Error: server failed to start
+Caused by: invalid config value
+Caused by: invalid digit found in string
+```
+
+ถ้าไม่มี `source()` chain นั้นก็ไม่มีอยู่เลย — ผู้เรียก (และเครื่องมืออย่างการจัด format `{:?}` ของ `anyhow` ที่แสดงด้านล่าง) จะเห็นได้แค่ข้อความ `Display` ระดับบนสุดตัวเดียวเท่านั้น
+
 ## การแปลงอัตโนมัติด้วย `From`
 
-การ implement `From<SomeOtherError> for AppError` ให้ตัวดำเนินการ `?` แปลงโดยอัตโนมัติเมื่อเรียกฟังก์ชันที่คืน `SomeOtherError`:
+การ implement `From<SomeOtherError> for AppError` ทำให้ตัวดำเนินการ `?` แปลงให้อัตโนมัติเมื่อเรียกฟังก์ชันที่คืนค่า `SomeOtherError`:
 
 ```rust
 #[derive(Debug)]
@@ -109,7 +216,7 @@ impl From<std::num::ParseIntError> for AppError {
 }
 ```
 
-ตอนนี้ `s.parse::<i32>()?` ในฟังก์ชันที่คืน `Result<_, AppError>` จะห่อ `ParseIntError` เป็น `AppError::ParseError` โดยอัตโนมัติ
+ตอนนี้ `s.parse::<i32>()?` ในฟังก์ชันที่คืนค่า `Result<_, AppError>` จะห่อ `ParseIntError` เป็น `AppError::ParseError` ให้อัตโนมัติ ดู[บทตัวดำเนินการ ?](/rust/th/error-handling/question-mark/) สำหรับสิ่งที่เกิดขึ้นเป๊ะๆ เมื่อ `From` impl นี้ขาดหายไป
 
 export const customErrorsCode = `use std::fmt;
 use std::num::ParseIntError;
@@ -165,50 +272,312 @@ fn main() {
 
 <Playground code={customErrorsCode} />
 
-<Callout title="Implement Error + Display สำหรับประเภทข้อผิดพลาดแบบกำหนดเอง">
-enum ข้อผิดพลาดที่ออกแบบดีทำให้ทุก failure mode ชัดเจนใน API ของคุณ implement `std::fmt::Display` สำหรับข้อความที่ผู้ใช้เห็น `std::error::Error` สำหรับความเข้ากันได้กับ `Box<dyn Error>` และ `From<...>` สำหรับแต่ละประเภทข้อผิดพลาดระดับล่างที่คุณห่อ สามอย่างนี้ให้ตัวดำเนินการ `?` ทำงานแปลงทั้งหมดโดยอัตโนมัติ
+<Callout title="Implement Error + Display สำหรับ custom error type">
+custom error enum ที่ออกแบบดีจะทำให้ทุกโหมดความล้มเหลวชัดเจนใน API ของคุณ implement `std::fmt::Display` สำหรับข้อความที่ผู้ใช้เห็น, `std::error::Error` เพื่อความเข้ากันได้กับ `Box<dyn Error>`, และ `From<...>` สำหรับ error type ระดับล่างแต่ละตัวที่คุณห่อไว้ สามอย่างนี้รวมกันทำให้ตัวดำเนินการ `?` ทำงานแปลงทั้งหมดให้อัตโนมัติ
+</Callout>
+
+## `Box<dyn Error>` ใน Binary เทียบกับ Enum ที่กำหนดเองใน Library
+
+`Box<dyn Error>` ลบประเภท error ที่เป็นรูปธรรมออก — ประเภทใดก็ตามที่ implement `Error` ใส่เข้าไปในนั้นได้ นั่นเหมาะสมพอดีสำหรับ `fn main` ที่สิ่งเดียวที่สำคัญคือ "โปรแกรมล้มเหลวหรือเปล่า และควรพิมพ์อะไร" แต่มันผิดพอดีสำหรับ API *สาธารณะ* ของ library: ผู้เรียกเสียความสามารถในการ `match` ว่าความล้มเหลวไหนเกิดขึ้น และเหลือแค่ตัวเลือกที่งุ่มง่ามคือ downcast ตอนรันไทม์:
+
+```rust
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+struct NotFoundError(String);
+
+impl fmt::Display for NotFoundError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "not found: {}", self.0)
+    }
+}
+impl Error for NotFoundError {}
+
+fn lookup(key: &str) -> Result<i32, Box<dyn Error>> {
+    if key == "answer" {
+        Ok(42)
+    } else {
+        Err(Box::new(NotFoundError(key.to_string())))
+    }
+}
+
+fn main() {
+    match lookup("missing") {
+        Ok(v) => println!("found: {v}"),
+        Err(e) => {
+            // Box<dyn Error> erases the concrete type, so a caller who wants to
+            // react differently to NotFoundError specifically must downcast at runtime.
+            if let Some(not_found) = e.downcast_ref::<NotFoundError>() {
+                println!("caller can react specifically: {}", not_found.0);
+            } else {
+                println!("some other error: {e}");
+            }
+        }
+    }
+}
+```
+
+`downcast_ref::<T>()` คืนค่า `Some(&T)` ก็ต่อเมื่อประเภทจริงตอนรันไทม์ของ trait object คือ `T` — มันคอมไพล์ผ่านได้ไม่ว่า `T: Error + 'static` จะถูกหรือไม่ก็ตาม ดังนั้นคอมไพเลอร์จับ typo ของประเภทตรงนี้ไม่ได้เหมือนที่มันจับ `match` arm ที่ผิดบน enum จริงได้ นี่คือต้นทุนที่เป็นรูปธรรมของการเลือก `Box<dyn Error>` สำหรับ API ที่ผู้เรียกต้อง branch: ผู้เรียกทุกคนที่สนใจต้อง implement การเช็ครันไทม์ที่เปราะบางแบบเดียวกันนี้ซ้ำ แทนที่จะได้ `match` ที่คอมไพเลอร์เช็คให้
+
+<Mermaid code={`flowchart TD
+    A[Choosing an error type] --> B{Who calls this function?}
+    B -->|main, or a script,\nyou just want to print it| C[Box<dyn Error>\nis fine]
+    B -->|Other code that must\nreact differently per failure| D[Concrete error enum]
+    D --> E[Callers get a compiler-checked match]
+    C --> F[Callers who need specifics\nmust downcast_ref at runtime]`} title="Box<dyn Error> เทียบกับ error enum ที่เป็นรูปธรรม" />
+
+## `#[non_exhaustive]` บน Error Enum
+
+การเพิ่ม variant ใหม่ให้ error enum สาธารณะเป็น breaking change สำหรับ crate downstream: `match` ใดๆ ที่ไม่มีสาขา wildcard จะหยุดคอมไพล์ทันทีที่คุณเพิ่ม variant เพราะมันไม่ exhaustive อีกต่อไป `#[non_exhaustive]` เปลี่ยนค่าเริ่มต้นนั้น — มันบังคับให้ทุก crate *ที่ไม่ใช่ของคุณ* ต้องมีสาขา wildcard เพื่อที่คุณจะเพิ่ม variant ในภายหลังได้โดยไม่ทำให้ build ของพวกเขาพัง:
+
+```rust
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ApiError {
+    NotFound,
+    Timeout,
+}
+```
+
+ภายใน crate ที่กำหนดมันเอง `#[non_exhaustive]` ไม่มีผลอะไรเลย — attribute นี้จำกัดแค่ crate *อื่น* เท่านั้น diagnostic จริงด้านล่างมาจาก scratch workspace สองคร่าง: library crate ชื่อ `apilib` ที่กำหนด `ApiError` ด้วย `#[non_exhaustive]` และ `consumer` crate แยกต่างหากที่ match กับมันโดยไม่มี wildcard:
+
+```rust
+// @skip-verify cross-crate demo — needs a separate library crate to observe the effect
+use apilib::ApiError;
+
+fn describe(e: &ApiError) -> &'static str {
+    match e {
+        ApiError::NotFound => "not found",
+        ApiError::Timeout => "timed out",
+    }
+}
+```
+
+```text
+$ cargo build
+error[E0004]: non-exhaustive patterns: `&_` not covered
+ --> src/main.rs:4:11
+  |
+4 |     match e {
+  |           ^ pattern `&_` not covered
+  |
+  = note: the matched value is of type `&ApiError`
+  = note: `ApiError` is marked as non-exhaustive, so a wildcard `_` is necessary to match exhaustively
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+  |
+6 ~         ApiError::Timeout => "timed out",
+7 ~         &_ => todo!(),
+  |
+
+error: could not compile `consumer` (bin "consumer") due to 1 previous error
+```
+
+สังเกตว่านี่คือพฤติกรรม `E0004` ตัวเดียวกันเป๊ะๆ กับ "ข้อควรระวังสาขา `_`" ที่คุณเคยเห็นแล้วสำหรับ enum ธรรมดา — `#[non_exhaustive]` แค่ทำให้สาขา wildcard *บังคับ* สำหรับ crate ภายนอก แทนที่จะแค่ปิดช่องว่าง coverage ที่พวกเขาเลือกเข้าร่วมเอง
+
+## `thiserror` และ `anyhow`
+
+การเขียน `Display`, `Error`, และ `From` เองสำหรับ error enum ทุกตัวซ้ำซากพอที่ในโลกจริง crate สองตัวครองพื้นที่นี้: `thiserror` สำหรับ error enum ของ library, `anyhow` สำหรับการจัดการ error ระดับ application ไม่มีตัวไหนมากับ toolchain ของคอร์สนี้ ดังนั้น snippet ด้านล่างเป็น `@skip-verify` — output ถูก quote มาแบบคำต่อคำจาก `cargo build && cargo run` จริงใน scratch project ที่เพิ่ม `thiserror = "2"` และ `anyhow = "1"` ผ่าน `cargo add`
+
+`#[derive(Error)]` ของ `thiserror` สร้าง `Display` และ `Error` impl จาก template ข้อความ `#[error("...")]` และ `#[from]` สร้าง `From` impl ให้ในบรรทัดเดียว:
+
+```rust
+// @skip-verify crate: thiserror — output quoted from a real scratch cargo build/run below
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+enum AppError {
+    #[error("invalid number: {0}")]
+    Parse(#[from] std::num::ParseIntError),
+    #[error("value {0} is out of range (0..=100)")]
+    OutOfRange(i32),
+}
+
+fn parse_bounded(s: &str) -> Result<i32, AppError> {
+    let n: i32 = s.parse()?; // ParseIntError -> AppError::Parse via #[from]
+    if n > 100 {
+        return Err(AppError::OutOfRange(n));
+    }
+    Ok(n)
+}
+
+fn main() {
+    for s in ["42", "abc", "999"] {
+        match parse_bounded(s) {
+            Ok(n) => println!("{s} -> Ok({n})"),
+            Err(e) => println!("{s} -> Err: {e}"),
+        }
+    }
+}
+```
+
+```text
+$ cargo add thiserror && cargo build --quiet && cargo run --quiet
+42 -> Ok(42)
+abc -> Err: invalid number: invalid digit found in string
+999 -> Err: value 999 is out of range (0..=100)
+```
+
+`anyhow::Result<T>` (alias ของ `Result<T, anyhow::Error>`) คือคู่หูฝั่ง application: มันคล้าย `Box<dyn Error>` ตรงที่ลบประเภทที่เป็นรูปธรรมออก แต่เพิ่ม `.context(...)`/`.with_context(...)` เพื่อแนบ breadcrumb ที่มนุษย์อ่านได้ในทุกชั้น และการจัด format `{:?}` (`Debug`) ของมันพิมพ์ chain `source()` ทั้งหมดให้คุณโดยอัตโนมัติ:
+
+```rust
+// @skip-verify crate: anyhow — output quoted from a real scratch cargo build/run below
+use anyhow::{Context, Result};
+
+fn read_port(s: &str) -> Result<u16> {
+    s.parse::<u16>()
+        .with_context(|| format!("failed to parse '{s}' as a port number"))
+}
+
+fn load_config() -> Result<u16> {
+    read_port("not_a_port").context("loading server config")
+}
+
+fn main() -> Result<()> {
+    let port = load_config()?;
+    println!("port = {port}");
+    Ok(())
+}
+```
+
+```text
+$ cargo add anyhow && cargo build --quiet && cargo run --quiet; echo "exit=$?"
+Error: loading server config
+
+Caused by:
+    0: failed to parse 'not_a_port' as a port number
+    1: invalid digit found in string
+exit=1
+```
+
+บล็อก `Caused by:` นั้นคือ chain `source()` จากก่อนหน้านี้เป๊ะๆ ที่พิมพ์ให้คุณ — `anyhow` โดยพื้นฐานคือ "ให้ตัวพิมพ์ chain `source()` และกลไกการแปลง `From` แบบฟรีๆ แลกกับการลบประเภท error ที่เป็นรูปธรรม" ซึ่งเป็นเหตุผลว่าทำไมมันเหมาะกับ application (ที่ไม่มีใคร downstream ต้อง `match` กับ error ของคุณ) ไม่ใช่ public API ของ library
+
+<Callout title="เลือกกลยุทธ์ error เดียวต่อขอบเขตของ crate">
+การแบ่งที่พบทั่วไปและได้ผล: library crate export enum `thiserror` ที่เป็นรูปธรรมเพื่อให้ผู้เรียก `match` ได้; binary ที่ประกอบ library เหล่านั้นเข้าด้วยกันใช้ `anyhow` ใน `main` และที่ขอบเขตภายในของตัวเอง ที่การลบประเภทและได้ chain `Caused by:` ที่อ่านง่ายคือสิ่งที่คุณต้องการพอดี
+</Callout>
+
+## `panic = "abort"` และ `catch_unwind` โดยย่อ
+
+Custom error type มีไว้สำหรับความล้มเหลวที่*กู้คืนได้* — แต่ไม่ใช่ทุกความล้มเหลวจะกู้คืนได้ และ[บท Panics](/rust/th/error-handling/panic/) ครอบคลุมอีกครึ่งหนึ่งของเรื่องนี้อย่างลึกซึ้ง: การตั้ง `panic = "abort"` ใน `Cargo.toml` แลก cleanup แบบ `Drop` กับ binary ที่เล็กลง และ `std::panic::catch_unwind` สามารถแยก panic ที่ขอบเขต FFI หรือ worker thread ได้โดยไม่ทำให้ Rust กลายเป็นภาษาที่มี exception handling ทั่วไป ถ้า custom error enum ของคุณกำลังจะโต variant รูปร่าง `Panic` "เผื่อไว้กรณี callback panic" บทนั้นที่มีเรื่อง `catch_unwind` คือเครื่องมือสำหรับงานนั้น ไม่ใช่ `Err` variant อีกตัว
+
+## แบบจำลองความคิด
+
+คิดถึงรูปร่างของ error type ของคุณว่าเป็นคำสัญญาต่อผู้ฟังสองกลุ่มพร้อมกัน `Debug` และ `Display` มีไว้สำหรับ*มนุษย์* — บรรทัด log, terminal, bug report `Error` (โดยเฉพาะ `source()`) มีไว้สำหรับ*เครื่องมือ* — อะไรก็ตามที่ต้องการเดินตาม failure chain แบบเป็นโปรแกรม เหมือนที่ `{:?}` ของ `anyhow` ทำให้อัตโนมัติ `From` มีไว้สำหรับ*โค้ดของคุณเอง* — กลไกที่ทำให้ `?` ข้ามขอบเขตระหว่าง error type สองตัวได้โดยไม่ต้องเขียน `match` ด้วยมือที่ทุกจุดเรียก error type ที่ออกแบบดีตอบสนองผู้ฟังทั้งสามกลุ่มโดยไม่บังคับให้ใครต้องเดา
+
+## ข้อแลกเปลี่ยน
+
+Enum ที่เป็นรูปธรรมให้ผู้เรียก `match` ที่คอมไพเลอร์เช็คให้และบันทึกทุกโหมดความล้มเหลวไว้ที่เดียว โดยแลกกับการเขียน (หรือ derive) `Display`/`Error`/`From` ให้มันและอัปเดต call site เมื่อคุณเพิ่ม variant — เว้นแต่คุณเพิ่ม `#[non_exhaustive]` ซึ่งจะบังคับให้ผู้เรียกภายนอกทุกคนต้องเขียนสาขา wildcard ตลอดไป `Box<dyn Error>` ไม่ต้องมี boilerplate นั้นเลยและเป็นค่าเริ่มต้นที่ถูกต้องสำหรับ `main` และที่อื่นๆ ที่ไม่มีอะไร downstream ต้อง branch แต่มันผลักผู้เรียกที่*ต้อง* branch จริงๆ ไปสู่การเรียก `downcast_ref` ตอนรันไทม์ที่คอมไพเลอร์เช็คไม่ได้ `thiserror` และ `anyhow` ลบ boilerplate ที่เหลือส่วนใหญ่ในแต่ละฝั่งของเส้นนั้น โดยแลกกับ dependency และสำหรับ `anyhow` คือข้อแลกเปลี่ยนการลบประเภทแบบเดียวกับ `Box<dyn Error>`
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`Box<dyn Error>` ใช้ได้เสมอเพราะคุณ `downcast_ref` ได้ถ้าต้องการประเภทที่เป็นรูปธรรมจริงๆ"** คุณทำได้ แต่คอมไพเลอร์เช็คไม่ได้ว่า `downcast_ref::<T>()` ที่คุณเขียนคือประเภทที่ถูก return จริงๆ — typo หรือการ refactor เปลี่ยนมันจาก "สาขานี้รัน" เป็น "สาขานี้ไม่เคยรัน" แบบเงียบๆ โดยไม่มี error เลย
+- **"`#[non_exhaustive]` ทำให้ enum กันการ exhaustive ได้ทุกที่ รวมถึง crate ของฉันเอง"** มันไม่มีผลอะไรเลยภายใน crate ที่กำหนดมัน — คุณยัง match โดยไม่มี wildcard ที่นั่นได้อยู่ มันเปลี่ยนแค่สิ่งที่ crate *อื่น* ถูกบังคับให้เขียน
+- **"`anyhow` และ `thiserror` ทำงานเดียวกัน ฉันต้องการแค่ตัวเดียว"** พวกมันแก้ปัญหาคนละครึ่ง: `thiserror` สร้างประเภทที่เป็นรูปธรรม match ได้ (สำหรับ library); `anyhow` สร้างประเภทที่ถูกลบไปพร้อมคำอธิบายบริบทและการจัด format chain อัตโนมัติ (สำหรับ application) การใช้ `anyhow::Error` เป็น return type สาธารณะของ library นำปัญหา downcasting แบบเดียวกับ `Box<dyn Error>` กลับมาให้ผู้เรียกของมัน
+
+## อ่านโค้ดที่ AI เขียน
+
+AI มักจะเลือกใช้ `Box<dyn std::error::Error>` เป็น return type ของ*ฟังก์ชัน library สาธารณะ* เพราะมันคอมไพล์ผ่านเสมอไม่ว่าโหมดความล้มเหลวจริงของฟังก์ชันจะเป็นอะไร — มันคือเส้นทางที่ต้านทานน้อยที่สุด ไม่ใช่การออกแบบ API ที่ถูกต้องเสมอไป
+
+<SpotTheBug code={`pub fn connect(addr: &str) -> Result<Connection, Box<dyn std::error::Error>> {
+    let socket = std::net::TcpStream::connect(addr)?;
+    Ok(Connection::new(socket))
+}
+`}>
+นี่คือฟังก์ชัน library สาธารณะ (สังเกต `pub fn`) ที่คืนค่า `Box<dyn std::error::Error>` ผู้เรียกของมันแยกแยะไม่ได้ว่า "DNS resolution ล้มเหลว" จาก "connection refused" จาก "timeout" โดยไม่ downcast แม้ว่า `std::net::TcpStream::connect` เองจะคืนค่า `std::io::Error` ที่มีประเภทชัดเจนซึ่ง `.kind()` ของมันแยกแยะสิ่งเหล่านี้ได้อยู่แล้ว API ของ library ควรเก็บข้อมูลนั้นไว้: `Result<Connection, ConnectError>` พร้อม `enum ConnectError { Io(std::io::Error) }` (หรือ variant ที่ละเอียดกว่าต่อ `ErrorKind`) และ `From<std::io::Error>` impl ทำให้ `?` ยังทำงานได้เหมือนเดิมทุกประการ ในขณะที่ให้ผู้เรียก `match` จริงแทนการ downcast
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ลบประเภทด้วย `Box<dyn Error>` (หรือ `anyhow`) เฉพาะที่ขอบเขตที่ไม่มีใคร downstream ต้อง `match` กับความล้มเหลวเฉพาะเจาะจง — ที่อื่นทั้งหมด enum ที่เป็นรูปธรรมพร้อม `Display`, `Error`, และ `From` แลก boilerplate เล็กน้อยกับ `match` ที่คอมไพเลอร์เช็คให้ผู้เรียกของคุณ
 </Callout>
 
 export const quizCustomErrors = [
     {
-        q: "trait ใดที่ให้ข้อความข้อผิดพลาดที่อ่านได้โดยมนุษย์ที่แสดงด้วย {}?",
+        q: "Trait ใดที่ให้ข้อความ error ที่มนุษย์อ่านได้ซึ่งแสดงด้วย {}?",
         options: [
             "std::error::Error",
             "std::fmt::Debug",
             "std::fmt::Display",
             "std::convert::From"
         ],
-        answer: 2
+        answer: 2,
+        explain: "Display ควบคุมการจัด format {}; Debug ควบคุม {:?} และ Error เองต้องการทั้งสองเป็น supertrait แต่ไม่เพิ่มการจัด format ของตัวเองเลย"
     },
     {
         q: "จุดประสงค์ของการ implement From<OtherError> for MyError คืออะไร?",
         options: [
-            "ช่วยให้ MyError พิมพ์ด้วย {:?}",
-            "ให้ ? แปลง OtherError เป็น MyError โดยอัตโนมัติ",
+            "ทำให้ MyError พิมพ์ด้วย {:?} ได้",
+            "ทำให้ ? แปลง OtherError เป็น MyError ให้อัตโนมัติ",
             "ทำให้ MyError implement trait Error",
-            "ช่วยให้ MyError ใช้เป็น argument ของฟังก์ชัน"
+            "ทำให้ MyError ใช้เป็น argument ของฟังก์ชันได้"
         ],
-        answer: 1
+        answer: 1,
+        explain: "การ desugar ของตัวดำเนินการ ? เรียก From::from บนสาขา error ดังนั้น From<OtherError> for MyError impl คือสิ่งที่ทำให้ ? ข้ามขอบเขตประเภทนั้นได้พอดี"
     },
     {
-        q: "source() คืนอะไรใน std::error::Error?",
+        q: "source() ใน std::error::Error คืนค่าอะไร?",
         options: [
-            "ชื่อไฟล์และหมายเลขบรรทัดที่ข้อผิดพลาดถูกสร้าง",
-            "ข้อผิดพลาดระดับล่างที่ทำให้เกิดข้อผิดพลาดนี้ ถ้ามี",
-            "ข้อความ Display ของข้อผิดพลาด",
+            "ชื่อไฟล์และเลขบรรทัดที่ error ถูกสร้าง",
+            "error ระดับล่างที่เป็นสาเหตุของ error นี้ ถ้ามี",
+            "ข้อความ Display ของ error",
             "ชื่อ variant เป็น string"
         ],
-        answer: 1
+        answer: 1,
+        explain: "source() เปิดเผย error ถัดไปใน causal chain เป็น &(dyn Error + 'static) ทำให้ตัวพิมพ์เดินจากความล้มเหลวระดับบนสุดลงไปถึงสาเหตุที่แท้จริงทีละชั้นได้"
     },
     {
-        q: "เหตุใด enum ข้อผิดพลาดที่เป็น concrete จึงดีกว่า Box<dyn Error> สำหรับ API ของไลบรารี?",
+        q: "ทำไม error enum ที่เป็นรูปธรรมจึงดีกว่า Box<dyn Error> สำหรับ library API?",
         options: [
             "Box<dyn Error> ไม่ implement Display",
-            "ผู้เรียกสามารถ pattern-match บน variant concrete เพื่อจัดการแต่ละความล้มเหลวต่างกัน",
-            "Box<dyn Error> ไม่สามารถใช้กับตัวดำเนินการ ?",
-            "enum ที่เป็น concrete หลีกเลี่ยงการจัดสรร heap ทั้งหมด"
+            "ผู้เรียกสามารถ pattern-match กับ variant ที่เป็นรูปธรรมเพื่อจัดการแต่ละความล้มเหลวต่างกันได้",
+            "Box<dyn Error> ใช้กับตัวดำเนินการ ? ไม่ได้",
+            "enum ที่เป็นรูปธรรมหลีกเลี่ยงการจัดสรร heap ได้ทั้งหมด"
         ],
-        answer: 1
+        answer: 1,
+        explain: "enum ที่เป็นรูปธรรมให้ผู้เรียกทุกคน match ที่คอมไพเลอร์เช็คให้เหนือโหมดความล้มเหลวที่แน่นอน; Box<dyn Error> บังคับให้ใครก็ตามที่ต้องแยกแยะความล้มเหลวไปใช้ downcast_ref ที่ไม่ถูกเช็ค"
+    },
+    {
+        q: "โค้ดนี้ print อะไร และคุณจะได้ error code อะไรถ้า implement std::error::Error ให้ AppError ก่อน implement Display?\n```rust\n#[derive(Debug)]\nstruct AppError;\nimpl std::error::Error for AppError {}\nfn main() {\n    let _e: Box<dyn std::error::Error> = Box::new(AppError);\n}\n```",
+        options: [
+            "คอมไพล์ผ่านและไม่พิมพ์อะไรเลย",
+            "E0277 — Error ต้องการ Display เป็น supertrait ซึ่ง AppError ไม่ได้ implement",
+            "E0308 — mismatched types ระหว่าง AppError กับ Box<dyn Error>",
+            "E0382 — use of moved value"
+        ],
+        answer: 1,
+        explain: "std::error::Error ถูกประกาศเป็น `Error: Debug + Display` ดังนั้นการ implement Error โดยไม่มี Display จะคอมไพล์ไม่ผ่านด้วย E0277 โดยบอกชื่อ Display เป็น supertrait bound ที่ไม่เป็นไปตามเงื่อนไข"
+    },
+    {
+        q: "ผลของ #[non_exhaustive] บน enum สาธารณะ จากภายใน crate ที่กำหนดมันเองคืออะไร?",
+        options: [
+            "ไม่มีผลอะไรเลยภายใน crate ที่กำหนดมัน",
+            "ป้องกันไม่ให้ crate ที่กำหนดมันเอง match โดยไม่มี wildcard",
+            "ปิดการเพิ่ม variant ใหม่ทั้งหมด",
+            "implement Error ให้ enum โดยอัตโนมัติ"
+        ],
+        answer: 0,
+        explain: "#[non_exhaustive] จำกัดแค่ crate อื่นเท่านั้น — โค้ดภายใน crate ที่กำหนดมันยังเขียน match แบบ exhaustive โดยไม่มีสาขา wildcard เลยได้"
+    },
+    {
+        q: "การจัด format {:?} (Debug) ของ anyhow พิมพ์อะไรที่ Box<dyn Error> ไม่พิมพ์ โดยค่าเริ่มต้น?",
+        options: [
+            "ไม่มีอะไรเพิ่มเติม — ทั้งคู่ทำงานเหมือนกันทุกประการ",
+            "chain source() ทั้งหมดเป็นรายการ 'Caused by:' ที่รวบรวมให้อัตโนมัติ",
+            "เลขบรรทัดที่แน่นอนในไฟล์ source ที่ error ถูกสร้าง",
+            "stack trace ของทุกการเรียกฟังก์ชันที่นำไปสู่ error"
+        ],
+        answer: 1,
+        explain: "Debug impl ของ anyhow::Error เดินและพิมพ์ chain source() ทั้งหมดเป็นรายการ 'Caused by:' ให้อัตโนมัติ ซึ่งเป็นสิ่งเดียวกับที่ตัวอย่าง print_chain สร้างด้วยมือสำหรับ Box<dyn Error> ธรรมดา"
+    },
+    {
+        q: "crate แยกต่างหากที่ depend on crate ของคุณเขียน match นี้กับ enum ที่มี #[non_exhaustive] ของคุณ มันจะได้ error code อะไร?\n```rust\n#[non_exhaustive]\npub enum ApiError { NotFound, Timeout }\n\nfn describe(e: &ApiError) -> &'static str {\n    match e {\n        ApiError::NotFound => \"not found\",\n        ApiError::Timeout => \"timed out\",\n    }\n}\n```",
+        options: [
+            "คอมไพล์ผ่านสบายๆ — #[non_exhaustive] มีผลแค่ใน crate ของคุณเองเท่านั้น",
+            "E0004 — non-exhaustive patterns เพราะ #[non_exhaustive] บังคับให้ crate ภายนอกต้องมีสาขา wildcard",
+            "E0277 — ApiError ไม่ implement Error",
+            "E0308 — mismatched types ระหว่าง &ApiError กับ ApiError"
+        ],
+        answer: 1,
+        explain: "#[non_exhaustive] บังคับให้ทุก crate ที่ไม่ใช่ตัวที่กำหนด enum ต้องมีสาขา wildcard การละเว้นจะล้มเหลวด้วย E0004 non-exhaustive-patterns ตัวเดิมที่คุ้นเคย เพียงแต่ที่นี่มันบังคับแทนที่จะเป็นตัวเลือก"
     }
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## What Is `Result<T, E>`?
 
@@ -102,6 +104,224 @@ fn main() {
 Because `Result` is a plain enum, the compiler emits a warning if you let a `Result` value go unused. Every error path is visible in the type signature of the function that returns it, and callers must explicitly decide what to do — ignore, propagate, recover, or panic. This is stronger than exception handling, where error paths are invisible.
 </Callout>
 
+## Converting Between `Option` and `Result`
+
+`Option<T>` and `Result<T, E>` both represent "a value might not be here", but they carry different information: `Option` just says "or nothing"; `Result` says "or here is why not". Real code frequently needs to cross between the two:
+
+- `.ok_or(err)` / `.ok_or_else(\|\| err)` — turn `Option<T>` into `Result<T, E>`: `Some(v)` becomes `Ok(v)`, `None` becomes `Err(err)`.
+- `.ok()` — turn `Result<T, E>` into `Option<T>`, **discarding the error entirely**: `Ok(v)` becomes `Some(v)`, `Err(_)` becomes `None`.
+- `.transpose()` — swap the nesting: `Option<Result<T, E>>` becomes `Result<Option<T>, E>` (and back). Useful when you have "maybe a fallible thing" and need "fallibly, maybe a thing".
+
+export const optionResultCode = `fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+
+fn main() {
+    // Option -> Result: ok_or_else turns None into a computed Err
+    let cached: Option<u32> = None;
+    let age: Result<u32, String> = cached.ok_or_else(|| String::from("no cached age"));
+    println!("ok_or_else on None: {:?}", age);
+
+    let present: Option<u32> = Some(40);
+    println!("ok_or_else on Some: {:?}", present.ok_or_else(|| String::from("unreachable")));
+
+    // Result -> Option: .ok() discards the error entirely
+    println!(".ok() on Err: {:?}", parse_age("nope").ok());
+    println!(".ok() on Ok: {:?}", parse_age("40").ok());
+
+    // transpose swaps Option<Result<T, E>> and Result<Option<T>, E>
+    let maybe_result: Option<Result<u32, String>> = Some(parse_age("21"));
+    let transposed: Result<Option<u32>, String> = maybe_result.transpose();
+    println!("transposed = {:?}", transposed);
+}`;
+
+<Playground code={optionResultCode} />
+
+<Callout title=".ok() throws the error away">
+`.ok()` is convenient but lossy — reach for it only when the caller genuinely does not care *why* something failed, just *whether* it succeeded. If the reason matters (for logging, for retry logic, for a user-facing message), keep the `Result` and use `.map_err`, `?`, or a `match` instead.
+</Callout>
+
+## What the Compiler Says: No Implicit Conversion Inside `Result`
+
+`Result<T, E>` is not covariant in any special way — `Result<i32, String>` and `Result<String, String>` are simply two different, unrelated types, exactly like `i32` and `String` are. There is no implicit conversion, even though both are "a `Result` with a `String` error":
+
+```rust
+// @expect-error E0308
+fn main() {
+    let r: Result<i32, String> = Ok(5);
+    let s: Result<String, String> = r;
+    println!("{:?}", s);
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> result_mismatch.rs:3:37
+  |
+3 |     let s: Result<String, String> = r;
+  |            ----------------------   ^ expected `Result<String, String>`, found `Result<i32, String>`
+  |            |
+  |            expected due to this
+  |
+  = note: expected enum `Result<String, _>`
+             found enum `Result<i32, _>`
+
+error: aborting due to 1 previous error
+```
+
+This is the same "no implicit conversion" rule you already know from plain values — `i32` never silently becomes `i64`, and `Result<i32, E>` never silently becomes `Result<String, E>`. If you need the `Ok` type to change, you must say so explicitly with `.map(|v| v.to_string())`.
+
+## The `if r.is_ok() { r.unwrap() }` Smell
+
+A `Result` already encodes "did this work?" in its variant. Checking `.is_ok()` and then separately calling `.unwrap()` re-derives information the compiler could have proven for you at the same point, and it throws away the `Err` value entirely if the check fails silently (or, worse, panics later if someone reorders the code):
+
+```rust
+fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+
+fn main() {
+    let r = parse_age("21");
+    if r.is_ok() {
+        println!("age: {}", r.unwrap()); // re-checks what is_ok() already proved
+    }
+}
+```
+
+Every idiomatic alternative is both shorter and safer, because it lets the pattern match (or a combinator) prove the variant and extract the value in one step: `if let Ok(v) = r { ... }`, `let Ok(v) = r else { return; }`, or a combinator chain like `.map(...)`. The `if r.is_ok()` version also silently does nothing on `Err` — there is no `else` branch reminding you that failure needs handling too.
+
+## `let else` and a Combinator Tour
+
+`let else` binds the success case and requires the `else` branch to **diverge** — `return`, `break`, `continue`, or `panic!` — so the rest of the function can assume the binding always holds:
+
+```rust
+fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+
+fn report(s: &str) {
+    let Ok(age) = parse_age(s) else {
+        println!("could not report: invalid age string");
+        return;
+    };
+    println!("age is {}", age);
+}
+
+fn main() {
+    report("30");
+    report("nope");
+}
+```
+
+If the `else` block does not diverge, the compiler rejects it — the whole point of `let else` is that everything after it can treat the binding as unconditional:
+
+```rust
+// @expect-error E0308
+fn parse_two(a: &str) -> i32 {
+    let Ok(x) = a.parse::<i32>() else {
+        0
+    };
+    x
+}
+
+fn main() {
+    println!("{}", parse_two("abc"));
+}
+```
+
+```text
+error[E0308]: `else` clause of `let...else` does not diverge
+ --> let_else_bad.rs:2:39
+  |
+2 |       let Ok(x) = a.parse::<i32>() else {
+  |  _______________________________________^
+3 | |         0
+4 | |     };
+  | |_____^ expected `!`, found integer
+  |
+  = note: expected type `!`
+             found type `{integer}`
+  = help: try adding a diverging expression, such as `return` or `panic!(..)`
+  = help: ...or use `match` instead of `let...else`
+
+error: aborting due to 1 previous error
+```
+
+Beyond `let else`, `map`, `and_then`, and `unwrap_or_else` chain together to replace nested `match`/`if` entirely — `map` transforms a success value, `and_then` chains another fallible step (like `Option`'s `flatten` + `map` in one), and `unwrap_or_else` supplies a fallback computed from the error at the very end:
+
+export const combinatorCode = `fn parse_age(s: &str) -> Result<u32, String> {
+    s.parse::<u32>().map_err(|e| format!("parse error: {}", e))
+}
+
+fn main() {
+    // let-else: bind on Ok, or diverge (return/panic/continue) on Err
+    let Ok(good_age) = parse_age("30") else {
+        println!("unreachable in this demo");
+        return;
+    };
+    println!("let-else bound: {}", good_age);
+
+    // Smell: if r.is_ok() { r.unwrap() } duplicates the check the type already encodes
+    let r = parse_age("21");
+    if r.is_ok() {
+        println!("smelly: {}", r.unwrap());
+    }
+
+    // Fix: combinator chain, no redundant check, no unwrap
+    let doubled = parse_age("21")
+        .map(|n| n * 2)
+        .and_then(|n| if n > 100 { Err(String::from("too big")) } else { Ok(n) })
+        .unwrap_or_else(|e| {
+            println!("falling back because: {}", e);
+            0
+        });
+    println!("doubled = {}", doubled);
+}`;
+
+<Playground code={combinatorCode} />
+
+<Mermaid code={`flowchart TD
+    A[You have a Result] --> B{Want a fallback on Err?}
+    B -->|fixed value| C[.unwrap_or]
+    B -->|computed from the error| D[.unwrap_or_else]
+    B -->|discard the error, need Option| E[.ok]
+    F[You have an Option] --> G{Need a Result instead?}
+    G -->|fixed error| H[.ok_or]
+    G -->|computed error| I[.ok_or_else]
+    J[Have a Result, want to keep chaining] --> K[.map for the Ok value]
+    J --> L[.and_then for another fallible step]`} title="Choosing a Result/Option combinator" />
+
+## Mental Model
+
+Treat every `Result` you receive as a two-branch value the type system already forces you to acknowledge — the question is never "do I need to check this?" (you always do, the compiler will not let you forget) but "what is the cleanest way to acknowledge it here?" `match` is the ground truth every other tool desugars to; `let else` and combinators are shorthands for the common shapes of that `match` — "bind or bail" and "transform without unwrapping", respectively. Reaching for `.is_ok()` plus `.unwrap()` is writing your own, worse version of a `match` arm the compiler would have checked for you.
+
+## Trade-offs
+
+`match` is maximally explicit and reads correctly even to someone unfamiliar with the specific combinator names, at the cost of vertical space and nesting when you chain several fallible steps. Combinators (`map`, `and_then`, `unwrap_or_else`, `ok_or_else`) compress a chain of fallible transformations into a single expression, but each name is one more piece of vocabulary a reader must already know, and a long combinator chain can be harder to step through in a debugger than an equivalent `match`. `let else` sits in between: as readable as a `match` for the common "bind or bail" shape, but it only works when the failure branch can genuinely diverge — it is the wrong tool when failure should produce a fallback value instead of leaving the function.
+
+## Common Misconceptions
+
+- **"`.ok()` is a safe way to check success without unwrapping."** It is safe from panics, but it is not free — it silently discards the `Err` value. If anything downstream needs to know *why* it failed (logging, retries, a user-facing message), `.ok()` has already thrown that information away.
+- **"`if r.is_ok() { r.unwrap() }` is fine because `is_ok()` guarantees `unwrap()` cannot panic."** True in this exact shape, but it is strictly worse than `if let Ok(v) = r`: it re-derives the variant twice, provides no `else` branch reminding you to handle `Err`, and breaks the moment someone inserts code between the check and the `unwrap()` that could change `r`.
+- **"`let else`'s `else` block can do anything, as long as the program doesn't crash."** It specifically must **diverge** — `return`, `break`, `continue`, or a panicking macro. A block that evaluates to a normal value (even `()`, if the rest of the function needs the binding) is a type error, not a warning.
+
+## Reading AI-generated code
+
+AI assistants frequently reach for `if r.is_ok() { r.unwrap() }` (or the `Option` equivalent, `if o.is_some() { o.unwrap() }`) because it "obviously" cannot panic — but it is doing manually, and worse, what a single pattern match already does atomically and idiomatically.
+
+<SpotTheBug code={`fn print_balance(account: Result<i32, String>) {
+    if account.is_ok() {
+        println!("balance: {}", account.unwrap());
+    }
+}
+`}>
+This compiles and never panics, but it is strictly worse than the idiomatic version: there is no branch handling the `Err` case at all (a caller passing an error gets total silence, not even a log line), and it checks the variant twice — once via `is_ok()`, once implicitly inside `unwrap()`. The fix is `if let Ok(balance) = account { println!("balance: {}", balance); } else { println!("balance unavailable"); }`, or, better, changing the function itself to return a `Result` so the *caller* decides what "unavailable" should look like instead of the message being buried inside `print_balance`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Never re-derive a `Result`'s variant with `.is_ok()`/`.is_err()` before extracting the value — pattern-match, `let else`, or chain combinators so the compiler proves the extraction is safe in the same step that checks it.
+</Callout>
+
 export const quizResult = [
     {
         q: "What are the two variants of Result<T, E>?",
@@ -111,7 +331,8 @@ export const quizResult = [
             "Pass(T) and Fail(E)",
             "Value(T) and Error(E)"
         ],
-        answer: 1
+        answer: 1,
+        explain: "Result<T, E> is defined in std with exactly two variants, Ok(T) for success and Err(E) for failure — Some/None belong to Option, not Result."
     },
     {
         q: "What does .unwrap_or_else(|e| ...) do when the Result is Err(e)?",
@@ -121,7 +342,8 @@ export const quizResult = [
             "It calls the closure with the error and returns the closure's return value",
             "It converts the Err into an Ok"
         ],
-        answer: 2
+        answer: 2,
+        explain: ".unwrap_or_else runs the closure with the error value and returns whatever the closure computes, letting the fallback depend on why it failed."
     },
     {
         q: "Which method transforms the Ok value without touching the Err?",
@@ -131,17 +353,63 @@ export const quizResult = [
             ".map(|v| ...)",
             ".unwrap_or_else(|e| ...)"
         ],
-        answer: 2
+        answer: 2,
+        explain: ".map transforms only the Ok payload and passes any Err straight through unchanged; .map_err does the mirror-image operation on the error."
     },
     {
-        q: "Why does the Rust compiler warn when a Result is unused?",
+        q: "What does .ok() do to a Result<T, E>?",
         options: [
-            "Result values are heap-allocated and must be freed",
-            "An unused Result means the error case was silently ignored",
-            "Result implements Drop, which triggers a warning",
-            "The compiler always warns about all unused variables"
+            "Converts it to Option<T>, discarding the error entirely",
+            "Panics if the Result is Err",
+            "Returns true if the Result is Ok",
+            "Converts the error type to a String"
         ],
-        answer: 1
+        answer: 0,
+        explain: ".ok() turns Ok(v) into Some(v) and Err(_) into None — the error value itself is thrown away, so use it only when the caller truly does not need the reason for failure."
+    },
+    {
+        q: "What does this print?\n```rust\nfn main() {\n    let r: Result<i32, String> = Ok(5);\n    let s: Result<String, String> = r;\n    println!(\"{:?}\", s);\n}\n```",
+        options: [
+            "Ok(\"5\")",
+            "It compiles and prints Ok(5)",
+            "It fails to compile — Result<i32, String> and Result<String, String> are different types",
+            "Err(\"type mismatch\")"
+        ],
+        answer: 2,
+        explain: "Result<T, E> has no implicit conversion between different T (or E) parameters, exactly like i32 never silently becomes String — this is E0308, a plain mismatched-types error."
+    },
+    {
+        q: "Why is `if r.is_ok() { r.unwrap() }` considered a smell compared to `if let Ok(v) = r { ... }`?",
+        options: [
+            "It is slower at runtime because is_ok() allocates",
+            "It re-checks the variant twice and has no branch for the Err case",
+            "is_ok() and unwrap() cannot both be called on the same Result",
+            "It only works on Option, not Result"
+        ],
+        answer: 1,
+        explain: "The pattern-match form proves and extracts the value in one step and forces you to write (or deliberately omit) an else branch for Err, while is_ok()+unwrap() duplicates the check and silently does nothing on failure."
+    },
+    {
+        q: "In a `let Ok(x) = expr else { ... }` statement, what must the else block do?",
+        options: [
+            "Return a value of the same type as x",
+            "Diverge — return, break, continue, or panic — so the rest of the function can assume x is bound",
+            "Nothing in particular; any expression compiles",
+            "Call .unwrap() on the original Result"
+        ],
+        answer: 1,
+        explain: "let else requires its else branch to have the never type (!) via a diverging expression; a block that produces a normal value is an E0308 type error, not merely a style issue."
+    },
+    {
+        q: "What does this print?\n```rust\nfn parse_age(s: &str) -> Result<u32, String> {\n    s.parse::<u32>().map_err(|e| format!(\"parse error: {}\", e))\n}\nfn main() {\n    let r = parse_age(\"21\");\n    if r.is_ok() {\n        println!(\"age: {}\", r.unwrap());\n    }\n}\n```",
+        options: [
+            "It fails to compile",
+            "age: 21",
+            "Nothing is printed",
+            "It panics because r was already checked"
+        ],
+        answer: 1,
+        explain: "is_ok() returns true and unwrap() then succeeds, so this compiles, runs, and prints \"age: 21\" — the code is a smell, not a bug, which is exactly why it is easy to miss in review."
     }
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Manual Propagation Is Noisy
 
@@ -44,6 +46,50 @@ fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
 }
 ```
 
+## What `?` Desugars To
+
+`?` is not magic — it is sugar for a `match` that either extracts the value or converts the error and returns it. On a `Result<T, E>` expression inside a function returning `Result<T2, E2>`, `expr?` is exactly:
+
+```rust
+// @skip-verify illustrative desugaring only — `expr` is a placeholder, not real code
+match expr {
+    Ok(v) => v,
+    Err(e) => return Err(std::convert::From::from(e)),
+}
+```
+
+Both forms below compile to the same thing — they are here side by side so you can see precisely what the sugar hides:
+
+```rust
+use std::num::ParseIntError;
+
+// Desugared by hand
+fn parse_and_double_manual(s: &str) -> Result<i32, ParseIntError> {
+    let n: i32 = match s.parse::<i32>() {
+        Ok(v) => v,
+        Err(e) => return Err(std::convert::From::from(e)),
+    };
+    Ok(n * 2)
+}
+
+// Using ?
+fn parse_and_double_sugar(s: &str) -> Result<i32, ParseIntError> {
+    let n: i32 = s.parse()?;
+    Ok(n * 2)
+}
+
+fn main() {
+    println!("{:?}", parse_and_double_manual("21"));
+    println!("{:?}", parse_and_double_sugar("21"));
+}
+```
+
+<Mermaid code={`flowchart TD
+    A["expr?"] --> B{"expr is Ok or Err?"}
+    B -->|"Ok(v)"| C["Evaluates to v,\nexecution continues"]
+    B -->|"Err(e)"| D["From::from(e) converts\nthe error type if needed"]
+    D --> E["return Err(converted_e)\nfrom the enclosing function"]`} title="What expr? does" />
+
 ## Chaining `?`
 
 Because `?` returns the `Ok` value directly, you can call multiple fallible functions in sequence without nesting:
@@ -65,6 +111,43 @@ fn chain(a: &str, b: &str) -> Result<i32, ParseIntError> {
 
 Each `?` either unwraps the success value or short-circuits the whole function. No nested matches, no manual early returns.
 
+## What the Compiler Says: `?` Needs a `Result`/`Option`-Returning Function
+
+The desugaring above only type-checks when the enclosing function can hold onto the early `return Err(...)` — which means it must itself return `Result` (or `Option`). Using `?` inside a function returning `()` is a compile error, not a runtime one:
+
+```rust
+// @expect-error E0277
+fn main() {
+    let x: Result<i32, String> = Err(String::from("no"));
+    let n = x?;
+    println!("{}", n);
+}
+```
+
+```text
+error[E0277]: the `?` operator can only be used in a function that returns `Result` or `Option` (or another type that implements `FromResidual`)
+ --> question_unit.rs:3:14
+  |
+1 | fn main() {
+  | --------- this function should return `Result` or `Option` to accept `?`
+2 |     let x: Result<i32, String> = Err(String::from("no"));
+3 |     let n = x?;
+  |              ^ cannot use the `?` operator in a function that returns `()`
+  |
+help: consider adding return type
+  |
+1 ~ fn main() -> Result<(), Box<dyn std::error::Error>> {
+2 |     let x: Result<i32, String> = Err(String::from("no"));
+3 |     let n = x?;
+4 |     println!("{}", n);
+5 +     Ok(())
+  |
+
+error: aborting due to 1 previous error
+```
+
+The compiler's own suggestion is exactly the pattern in the next section: give `main` a `Result` return type.
+
 ## `main` Returning `Result`
 
 `main` can also return `Result<(), Box<dyn std::error::Error>>`, which lets you use `?` inside `main` itself:
@@ -79,9 +162,140 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `Box<dyn std::error::Error>` is a trait object that can hold any error type, making it useful in `main` where you do not want to fix a single concrete error type.
 
+### The Real Exit Code and Output Format
+
+When `main` returns `Err(e)`, the Rust runtime prints `Error: {:?}` (the `Debug` formatting of `e`) to **stderr** and exits with status **1** — no panic, no backtrace by default, just that one line:
+
+```rust
+// @expect-panic exits with status 1, which the harness treats like a non-zero-exit demo
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let n: i32 = "abc".parse()?;
+    println!("parsed: {}", n);
+    Ok(())
+}
+```
+
+```text
+$ rustc --edition 2024 main_parse.rs -o main_parse && ./main_parse; echo "exit=$?"
+Error: ParseIntError { kind: InvalidDigit }
+exit=1
+```
+
+Note what did **not** happen: `println!("parsed: {}", n)` never ran (the `?` returned early), and there is no `thread 'main' panicked at ...` line — this is a controlled, non-panicking termination. Contrast this with `std::process::exit`, covered in the [Panics lesson](/rust/en/error-handling/panic/): unlike an explicit `process::exit` call, returning `Err` from `main` is a **normal function return**, so any value still in scope in `main` is dropped exactly as it would be on any other return:
+
+```rust
+// @expect-panic exits with status 1 (Err from main), no panic message involved
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+struct Boom;
+impl fmt::Display for Boom {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "boom")
+    }
+}
+impl Error for Boom {}
+
+struct Guard;
+impl Drop for Guard {
+    fn drop(&mut self) {
+        println!("dropping guard");
+    }
+}
+
+fn might_fail() -> Result<(), Boom> {
+    Err(Boom)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let _g = Guard;
+    might_fail()?;
+    Ok(())
+}
+```
+
+```text
+$ rustc --edition 2024 main_drop.rs -o main_drop && ./main_drop; echo "exit=$?"
+dropping guard
+Error: Boom
+exit=1
+```
+
+`dropping guard` prints **before** `Error: Boom` — the `Guard`'s destructor ran during the normal unwind-free return out of `main`, the exact opposite of the `std::process::exit`/`panic = "abort"` behaviour where destructors are skipped entirely.
+
+## `?` on `Option`
+
+`?` works the same way inside a function returning `Option<T>`: `Some(v)` unwraps to `v`, `None` returns `None` immediately from the enclosing function. There is no error type to convert, so no `From` call is involved:
+
+```rust
+fn first_char_upper(s: &str) -> Option<char> {
+    let c = s.chars().next()?; // returns None early if s is empty
+    Some(c.to_ascii_uppercase())
+}
+
+fn main() {
+    println!("{:?}", first_char_upper("hello"));
+    println!("{:?}", first_char_upper(""));
+}
+```
+
+`?` cannot mix the two: you cannot use it on a `Result` inside a function returning `Option`, or vice versa, without an explicit conversion first (`.ok()` for `Result -> Option`, `.ok_or(...)` for `Option -> Result` — both covered in the [Result lesson](/rust/en/error-handling/result/)).
+
 ## Error Type Conversion with `?`
 
-When the error type returned by the called function differs from the error type of the enclosing function, `?` automatically calls `From::from` to convert. This is how a function returning `MyError` can use `?` on a call that returns `ParseIntError`, as long as `From<ParseIntError> for MyError` is implemented.
+When the error type returned by the called function differs from the error type of the enclosing function, `?` automatically calls `From::from` to convert — this is the `From::from(e)` step in the desugaring shown earlier. This is how a function returning `MyError` can use `?` on a call that returns `ParseIntError`, as long as `From<ParseIntError> for MyError` is implemented.
+
+### What the Compiler Says: No `From` Impl
+
+If the target error type has no `From` implementation for the source error, `?` fails to compile — with a message that names the exact trait you are missing:
+
+```rust
+// @expect-error E0277
+use std::num::ParseIntError;
+
+#[derive(Debug)]
+struct MyError(String);
+
+fn inner(s: &str) -> Result<i32, ParseIntError> {
+    s.parse()
+}
+
+fn outer(s: &str) -> Result<i32, MyError> {
+    let n = inner(s)?;
+    Ok(n)
+}
+
+fn main() {
+    match outer("abc") {
+        Ok(n) => println!("{}", n),
+        Err(e) => println!("{:?}", e),
+    }
+}
+```
+
+```text
+error[E0277]: `?` couldn't convert the error to `MyError`
+  --> question_mismatch.rs:11:21
+   |
+10 | fn outer(s: &str) -> Result<i32, MyError> {
+   |                      -------------------- expected `MyError` because of this
+11 |     let n = inner(s)?;
+   |             --------^ the trait `From<ParseIntError>` is not implemented for `MyError`
+   |             |
+   |             this can't be annotated with `?` because it has type `Result<_, ParseIntError>`
+   |
+note: `MyError` needs to implement `From<ParseIntError>`
+  --> question_mismatch.rs:4:1
+   |
+ 4 | struct MyError(String);
+   | ^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error: aborting due to 1 previous error
+```
+
+The fix is exactly what the note says — implement the missing conversion once, and every `?` call site benefits automatically:
 
 export const questionMarkCode = `use std::num::ParseIntError;
 
@@ -119,6 +333,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 The `?` operator is syntactic sugar for the match-and-early-return pattern. It works in any function whose return type is `Result` or `Option`. When error types differ, `?` automatically converts via `From`. Chaining `?` calls produces clean, linear error-propagation code without any nesting.
 </Callout>
 
+## Mental Model
+
+Read `expr?` as "assume this succeeded, and if it did not, this whole function is over — hand the failure to whoever called me, converted into my own error currency along the way." The `From::from` step is the important, easy-to-miss part: it means the *caller's* error type is the one that matters at every `?` site, not the callee's, and a single `From` impl per error-type pair is enough to make every future `?` call between those two types just work.
+
+## Trade-offs
+
+`?` makes the *happy path* of a function read top-to-bottom with no nesting, which is a large readability win once a function calls more than one or two fallible operations. Its cost is that the actual control flow — an early `return` — is compressed into a single punctuation character, which is easy to skim past when reading unfamiliar code, and it requires every intermediate error type in a call chain to either already be `From`-convertible into the function's declared error type or be erased into `Box<dyn Error>`. Reaching for `Box<dyn Error>` to sidestep writing `From` impls trades that one-time cost for a real, ongoing one: callers of your function lose the ability to `match` on the specific failure (covered in the [Custom Errors lesson](/rust/en/error-handling/custom-errors/)).
+
+## Common Misconceptions
+
+- **"`?` only works with `Result`."** It works with any type implementing `FromResidual` — in practice, `Result<T, E>` and `Option<T>`, but never a mix of the two in a single call without converting first.
+- **"`?` swallows the error if the types don't match."** The opposite — a type mismatch with no `From` impl is a compile error (E0277), not a silent runtime failure. Rust would rather refuse to build than guess how to convert your error.
+- **"Returning `Err` from `main` is basically the same as `panic!`."** It is not — there is no unwinding table walked, no `thread 'main' panicked at ...` line, and (as shown above) local variables are dropped through a completely ordinary function return, not through a panic's unwind machinery. The only things they share are "the program stops" and a nonzero-ish exit status.
+
+## Reading AI-generated code
+
+AI assistants sometimes erase a specific, actionable error into `Box<dyn Error>` via `?` one level too early — inside a function whose caller genuinely needs to distinguish *which* failure occurred, not just that failure occurred at all.
+
+<SpotTheBug code={`fn load_user(id: u32) -> Result<String, Box<dyn std::error::Error>> {
+    let raw = std::fs::read_to_string(format!("users/{id}.json"))?;
+    Ok(raw)
+}
+
+fn handle_request(id: u32) {
+    match load_user(id) {
+        Ok(user) => println!("loaded: {}", user),
+        Err(_) => println!("something went wrong"), // cannot tell "not found" from "disk full"
+    }
+}
+`}>
+`load_user` erases every possible failure — a missing file, a permissions error, a full disk — into the same opaque `Box<dyn Error>`, and `handle_request` cannot recover which one happened without downcasting (the awkward pattern covered in the [Custom Errors lesson](/rust/en/error-handling/custom-errors/)). Since this function has exactly one caller in this codebase and the caller clearly wants to distinguish "no such user" from "something else broke," a small `enum LoadUserError { NotFound(u32), Io(std::io::Error) }` with a `From<std::io::Error>` impl lets `?` keep working *and* lets `handle_request` `match` on the real cause.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`?` is a `match` in disguise — it extracts the success value or converts-and-returns the error via `From`, so make sure your function's declared error type is one every `?` call site can actually convert into.
+</Callout>
+
 export const quizQuestionMark = [
     {
         q: "What does ? do when applied to an Err(e) value?",
@@ -128,7 +379,8 @@ export const quizQuestionMark = [
             "It returns Err(e) immediately from the enclosing function",
             "It retries the operation up to three times"
         ],
-        answer: 2
+        answer: 2,
+        explain: "? desugars to a match that returns Err(e) (converted via From) immediately from the enclosing function on the Err branch, leaving Ok(v) to evaluate to v."
     },
     {
         q: "What constraint must the enclosing function satisfy for ? to compile?",
@@ -138,7 +390,8 @@ export const quizQuestionMark = [
             "The function must be marked unsafe",
             "The function must be a method on a struct"
         ],
-        answer: 1
+        answer: 1,
+        explain: "The desugared early return needs somewhere to return to — a Result or Option (or another FromResidual-implementing type) return type — otherwise the compiler rejects it with E0277."
     },
     {
         q: "What type is typically used in main() -> Result<(), ...> to accept any error?",
@@ -148,7 +401,8 @@ export const quizQuestionMark = [
             "Result<(), Box<dyn std::error::Error>>",
             "Result<(), &str>"
         ],
-        answer: 2
+        answer: 2,
+        explain: "Box<dyn std::error::Error> is a trait object that can hold any concrete error type implementing Error, which is exactly what a top-level main wants when it does not care about one specific error type."
     },
     {
         q: "How does ? handle mismatched error types between the caller and callee?",
@@ -158,7 +412,52 @@ export const quizQuestionMark = [
             "It requires the programmer to write a match to convert manually",
             "It only works when both errors are the same type"
         ],
-        answer: 1
+        answer: 1,
+        explain: "The desugared form of expr? explicitly calls std::convert::From::from(e) on the Err branch, so ? works whenever a From impl exists between the two error types."
+    },
+    {
+        q: "What happens when main() -> Result<(), Box<dyn Error>> returns Err(e)?",
+        options: [
+            "The process panics with a full backtrace",
+            "Nothing is printed and the process exits with code 0",
+            "\"Error: {:?}\" of e is printed to stderr and the process exits with code 1",
+            "The program hangs waiting for input"
+        ],
+        answer: 2,
+        explain: "The standard runtime prints the Debug formatting of the error prefixed with \"Error: \" to stderr and exits with status 1 — no panic and no backtrace by default."
+    },
+    {
+        q: "What does this print, and in what order?\n```rust\nstruct Guard;\nimpl Drop for Guard {\n    fn drop(&mut self) { println!(\"dropping guard\"); }\n}\nfn fails() -> Result<(), String> { Err(String::from(\"boom\")) }\nfn main() -> Result<(), String> {\n    let _g = Guard;\n    fails()?;\n    Ok(())\n}\n```",
+        options: [
+            "Only \"Error: ...\" — Guard is never dropped because ? skips destructors like process::exit",
+            "\"dropping guard\" prints first, then the runtime prints \"Error: ...\" and exits with code 1",
+            "It fails to compile because String does not implement std::error::Error",
+            "\"dropping guard\" never prints because the program panics instead"
+        ],
+        answer: 1,
+        explain: "Returning Err from main is a normal function return, not a panic or an explicit process::exit — Guard is dropped in the usual order as main unwinds normally, then the runtime prints the error and exits 1.",
+    },
+    {
+        q: "Why can't you use ? on a Result directly inside a function that returns Option<T>?",
+        options: [
+            "Result and Option are the same type under the hood, so it actually works fine",
+            "? only converts error types via From, and Result/Option are different residual types with no automatic mix",
+            "The ? operator is disabled for Option entirely",
+            "Rust automatically wraps the Result in Some for you"
+        ],
+        answer: 1,
+        explain: "? requires the expression's type and the function's return type to agree on being the same kind of FromResidual (Result with Result, Option with Option) — crossing between them needs an explicit .ok() or .ok_or(...) first."
+    },
+    {
+        q: "What does this print?\n```rust\nfn first_char_upper(s: &str) -> Option<char> {\n    let c = s.chars().next()?;\n    Some(c.to_ascii_uppercase())\n}\nfn main() {\n    println!(\"{:?}\", first_char_upper(\"\"));\n}\n```",
+        options: [
+            "Some('H')",
+            "None",
+            "It fails to compile because ? needs a Result, not an Option",
+            "It panics because the string is empty"
+        ],
+        answer: 1,
+        explain: "s.chars().next() is None for an empty string, so ? returns None immediately from first_char_upper without ever reaching the Some(...) line — this prints None, no panic and no compile error."
     }
 ];
 
