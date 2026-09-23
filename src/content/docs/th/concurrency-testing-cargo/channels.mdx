@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## การส่งข้อความด้วย `std::sync::mpsc`
 
@@ -31,6 +33,37 @@ fn main() {
 ```
 
 `mpsc::channel()` ส่งคืนคู่ `(Sender<T>, Receiver<T>)` ประเภท `T` ถูก infer จาก `send` call แรก
+
+<Mermaid code={`flowchart LR
+    P1["Producer thread 1"] -->|"tx.clone().send(msg)"| C["Channel queue"]
+    P2["Producer thread 2"] -->|"tx.clone().send(msg)"| C
+    C -->|"rx.recv()"| CONS["Consumer thread"]`} title="ผู้ผลิตหลายคน ผู้บริโภคคนเดียว" />
+
+## Compiler พูดว่าอย่างไร: Clone Receiver ไม่ได้
+
+ครึ่งหนึ่งของ "single-consumer" ใน mpsc ไม่ใช่แค่ธรรมเนียมการตั้งชื่อ — `Receiver<T>` ไม่ implement `Clone` จริง ๆ มีแค่ `Sender<T>` เท่านั้นที่ implement:
+
+```rust
+// @expect-error E0599
+use std::sync::mpsc;
+
+fn main() {
+    let (tx, rx) = mpsc::channel::<i32>();
+    tx.send(1).unwrap();
+    let rx2 = rx.clone(); // ERROR: Receiver does not implement Clone — mpsc is single-consumer
+    println!("{:?} {:?}", rx.recv(), rx2.recv());
+}
+```
+
+```text
+error[E0599]: no method named `clone` found for struct `std::sync::mpsc::Receiver<T>` in the current scope
+ --> src/main.rs:6:18
+  |
+6 |     let rx2 = rx.clone(); // ERROR: Receiver does not implement Clone — mpsc is single-consumer
+  |                  ^^^^^ method not found in `std::sync::mpsc::Receiver<i32>`
+```
+
+ถ้าคุณต้องการ *consumer* หลายตัว `mpsc` เป็นเครื่องมือที่ผิด — ใช้ crate อย่าง `crossbeam-channel` (ที่รองรับ multi-consumer) หรือกระจายงานผ่าน channel ต่อ worker แยกกัน แบบเดียวกับ pattern "Fan-Out" ด้านล่าง
 
 ### การส่งค่าข้าม Thread
 
@@ -87,6 +120,120 @@ fn main() {
 ```
 
 `rx.iter()` ให้ค่าจนกว่า `Sender` handle ทั้งหมดจะถูก drop การ drop `tx` ตัวเดิม (หลัง clone) จำเป็นเพื่อให้ iterator รู้ว่าจะหยุดเมื่อใด
+
+### การ Drop `Sender` ตัวสุดท้ายจะปิด Channel
+
+`mpsc::channel()` เป็นแบบ unbounded — `send` ไม่เคยบล็อก มันแค่ขยาย queue ภายในไปเรื่อย ๆ เมื่อ `Sender` ทุกตัว (รวมถึงทุก clone) ถูก drop หมด channel จะปิดถาวร: `recv()` บน channel ที่ว่างและไม่มี sender จะคืนค่า `Err` แทนที่จะบล็อกตลอดไป
+
+```rust
+use std::sync::mpsc;
+
+fn main() {
+    let (tx, rx) = mpsc::channel::<i32>();
+    drop(tx); // no more senders — the channel is now permanently closed
+
+    match rx.recv() {
+        Ok(v) => println!("got {v}"),
+        Err(e) => println!("recv failed: {e}"),
+    }
+}
+```
+
+```text
+recv failed: receiving on a closed channel
+```
+
+นี่คือกลไกเดียวกับที่ `rx.iter()` ข้างบนพึ่งพา: จริง ๆ แล้วมันคือ loop ของการเรียก `recv()` ที่หยุดทันทีที่ `recv()` คืนค่า `Err` นี้
+
+### `sync_channel`: Bounded Channel และ Backpressure
+
+`mpsc::channel()` แบบ unbounded มีต้นทุนจริง: producer ที่เร็วกว่า consumer จะสะสม memory ไปเรื่อย ๆ ไม่มีที่สิ้นสุด `mpsc::sync_channel(n)` จำกัด queue ไว้ที่ `n` รายการ — เมื่อเต็มแล้ว `send` จะ **บล็อก** producer จนกว่า consumer จะเคลียร์พื้นที่ `sync_channel(0)` คือกรณีสุดขั้ว: channel แบบ *rendezvous* ที่ไม่มี buffer เลย โดยที่ `send` จะบล็อกจนกว่าจะมี receiver รออยู่จริง ๆ
+
+```rust
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+fn main() {
+    // sync_channel(0) is a rendezvous channel: send() blocks until a receiver
+    // is ready to take the value right now — there is no internal buffer.
+    let (tx, rx) = mpsc::sync_channel::<i32>(0);
+
+    let producer = thread::spawn(move || {
+        let start = Instant::now();
+        tx.send(1).unwrap(); // blocks here until main calls rx.recv()
+        start.elapsed()
+    });
+
+    thread::sleep(Duration::from_millis(100)); // simulate a slow consumer
+    let value = rx.recv().unwrap();
+    let blocked_for = producer.join().unwrap();
+
+    // Round to the nearest 50ms bucket so the printed value is stable
+    // across machines instead of an exact, jitter-sensitive duration.
+    let bucket = (blocked_for.as_millis() / 50) * 50;
+    println!("received: {value}, sender was blocked for at least ~{bucket}ms");
+}
+```
+
+```text
+received: 1, sender was blocked for at least ~100ms
+```
+
+`send` ของ producer บล็อกได้จริงตามระยะเวลาที่ consumer ใช้กว่าจะเรียก `recv()` — การบล็อกนั้นแหละคือ backpressure channel แบบ unbounded จะปล่อยให้ producer วิ่งนำหน้าและ buffer ทุกอย่างไว้ใน memory แทน ส่วนแบบ bounded จะบังคับให้ producer ช้าลงตามจังหวะของ consumer ซึ่งเป็นสิ่งที่คุณต้องการพอดีเมื่อ consumer คือคอขวดและการ buffer แบบไม่จำกัดจะทำให้ memory หมดในที่สุด
+
+### `try_recv` และ `recv_timeout`: ไม่บล็อกตลอดไป
+
+`recv()` บล็อกไม่มีกำหนดถ้าไม่มีอะไรมา `try_recv()` ไม่บล็อกเลย — มันคืนค่าทันทีไม่ว่าจะมีข้อความหรือไม่ — และ `recv_timeout()` บล็อก แต่ยอมแพ้หลังจาก deadline:
+
+```rust
+use std::sync::mpsc;
+use std::time::Duration;
+
+fn main() {
+    let (tx, rx) = mpsc::channel::<i32>();
+
+    // try_recv never blocks — it returns immediately if nothing is waiting.
+    match rx.try_recv() {
+        Ok(v) => println!("try_recv got {v}"),
+        Err(e) => println!("try_recv: {e}"),
+    }
+
+    tx.send(7).unwrap();
+
+    // recv_timeout blocks, but gives up after the deadline instead of forever.
+    match rx.recv_timeout(Duration::from_millis(50)) {
+        Ok(v) => println!("recv_timeout got {v}"),
+        Err(e) => println!("recv_timeout: {e}"),
+    }
+
+    drop(tx);
+    match rx.recv_timeout(Duration::from_millis(50)) {
+        Ok(v) => println!("recv_timeout got {v}"),
+        Err(e) => println!("recv_timeout: {e}"),
+    }
+}
+```
+
+```text
+try_recv: receiving on an empty channel
+recv_timeout got 7
+recv_timeout: channel is empty and sending half is closed
+```
+
+ใช้ `try_recv` เมื่อ thread มีงานอื่นต้องทำและแค่อยาก poll หาข้อความโดยไม่หยุดรอ ใช้ `recv_timeout` เมื่อการรอโอเค แต่รอตลอดไปไม่โอเค — เช่น worker ที่ควรเช็ค shutdown flag เป็นระยะแม้ไม่มีข้อความเข้ามาเลย
+
+### Channel เทียบกับ Shared State: เมื่อไหร่ควรใช้อะไร
+
+| สถานการณ์ | ควรใช้ |
+|-----------|--------|
+| Ownership ของค่าควรย้ายไปที่เดียวเท่านั้น | Channel |
+| Pipeline: stage A ผลิต stage B บริโภค | Channel |
+| หลาย thread ต้องอ่าน (และบางครั้งเขียน) ค่าเดียวกันที่มีอายุยาว | `Arc<Mutex<T>>` / `Arc<RwLock<T>>` |
+| Counter หรือ flag ที่แชร์กันตัวเดียว | `std::sync::atomic` |
+| Producer เร็วกว่า consumer และต้องถูกทำให้ช้าลง | `sync_channel(n)` (bounded, backpressure) |
+
+สุภาษิตของ Go ใช้ได้ตรงตัวที่นี่: *"อย่าสื่อสารด้วยการแชร์ memory จงแชร์ memory ด้วยการสื่อสาร"* channel ทำให้การย้าย ownership ชัดเจนใน type system (ค่าย้ายจริง ๆ) ในขณะที่ shared state ต้องให้ทุกคนที่อ่านและเขียนจำได้ว่าต้องล็อค — channel ตัดบั๊กประเภท "ลืมล็อค" ทั้งคลาสออกไปโดยโครงสร้างของมันเอง
 
 ### Fan-Out: การกระจายงาน
 
@@ -161,46 +308,118 @@ fn main() {
 เมื่อคุณเรียก `tx.send(value)` ownership ของ `value` จะถูกย้ายเข้าไปใน channel thread ผู้ส่งเข้าถึงค่านั้นไม่ได้อีกต่อไป thread ผู้รับจะเป็นเจ้าของค่านั้นหลัง `rx.recv()` การย้าย ownership นี้คือเหตุผลที่ channel ปลอดจาก data race โดยโครงสร้าง — มีเพียง thread เดียวที่เป็นเจ้าของค่าในแต่ละจุดของเวลา
 </Callout>
 
+## Mental Model
+
+channel คือ queue ที่ป้องกันด้วย `Mutex` โดยมี handle `Sender`/`Receiver` ห่ออยู่ — แต่คุณไม่เห็น lock เลย เพราะ API เปิดให้เฉพาะสองปฏิบัติการที่ต้องการมัน (`send` push, `recv` pop) กฎ ownership ของ type system ทำที่เหลือให้: `send` รับ semantics แบบย้ายค่า (ไม่ใช่ sender) ดังนั้น "ownership ย้ายแล้ว" ไม่ใช่คำเปรียบเทียบ มันคือ move ของ Rust จริง ๆ ที่คุณรู้จักจาก API อื่น ๆ อยู่แล้ว
+
+## Trade-offs
+
+`mpsc::channel()` แบบ unbounded ไม่เคยทำให้ producer ต้องรอ ซึ่งเข้าใจง่ายที่สุด แต่เสี่ยงต่อ memory ที่โตไม่มีขอบเขตถ้า consumer ตามไม่ทัน `sync_channel(n)` แลกความเรียบง่ายนั้นกับเพดาน memory ที่แน่นอนและ backpressure อัตโนมัติ — producer ไม่มีทางนำหน้าไปเกิน `n` ข้อความได้จริง ๆ `sync_channel(0)` (rendezvous) คือเวอร์ชันที่เข้มงวดที่สุด: producer กับ consumer ถูกบังคับให้ส่งต่อกันแบบ lockstep ซึ่งมีประโยชน์สำหรับ synchronization แต่จำกัด throughput ถ้าฝั่งใดฝั่งหนึ่งทำงานเป็นช่วง ๆ
+
+## Common Misconceptions
+
+- **"Clone rx จะได้ consumer หลายตัว"** `Receiver<T>` ไม่มี `Clone` implement เลย — "single-consumer" ใน mpsc ถูกบังคับโดย type system ไม่ใช่แค่คำแนะนำ sender หลายตัวรองรับได้ (`tx.clone()`) แต่ receiver หลายตัวไม่ได้
+- **"Channel แบบ unbounded คือค่าเริ่มต้นที่ปลอดภัยเสมอ"** มันปลอดภัยจาก *การบล็อก* แต่ไม่ปลอดภัยจาก memory ที่โตไม่มีขอบเขตถ้า producer วิ่งนำ consumer ไปเรื่อย ๆ `sync_channel(n)` คือทางเลือกที่จงใจเมื่อความเสี่ยงนั้นเป็นจริง
+- **"send บน channel ที่ไม่มี receiver จะ panic"** มันคืนค่า `Err` (พร้อมส่งค่ากลับมาให้คุณ) — ไม่มี receiver แค่หมายความว่า channel ปิดที่ฝั่งนั้น จัดการด้วยวิธี `Result` แบบเดียวกับปฏิบัติการที่ล้มเหลวได้อื่น ๆ ใน Rust
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ด worker-pool ที่ AI เขียนมักเลือก `mpsc::channel()` (unbounded) สำหรับ producer ที่สร้างงานได้เร็วกว่าที่ worker บริโภคได้มาก โดยไม่คิดว่านี่คือพฤติกรรมที่ต้องการจริงหรือไม่ — ภายใต้ load จริง queue จะโตไปเรื่อย ๆ ไม่มีขอบเขต
+
+<SpotTheBug code={`use std::sync::mpsc;
+use std::thread;
+
+fn process_urls(urls: Vec<String>) {
+    let (tx, rx) = mpsc::channel();
+
+    let worker = thread::spawn(move || {
+        for url in rx {
+            // Pretend this is a slow network call.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            println!("fetched: {url}");
+        }
+    });
+
+    for url in urls {
+        tx.send(url).unwrap(); // producer can enqueue millions of these instantly
+    }
+    drop(tx);
+    worker.join().unwrap();
+}
+`}>
+`mpsc::channel()` เป็นแบบ unbounded ดังนั้น loop `for url in urls { tx.send(url).unwrap(); }` จะ enqueue ทุก URL — อาจเป็นล้าน URL — เร็วเท่าที่ CPU จะย้ายมันได้ ไม่ว่า worker ตัวเดียวจะประมวลผลแต่ละอันช้าแค่ไหน (50ms ต่อ URL ในที่นี้) ถ้า `urls` มีขนาดใหญ่ นี่จะ buffer งานที่รอค้างไว้ใน memory แบบไม่มีขอบเขตก่อนที่ worker จะแตะมันด้วยซ้ำ การเปลี่ยนไปใช้ `mpsc::sync_channel(n)` ด้วย `n` เล็ก ๆ (เช่น 100) จะทำให้ `send` ของ producer บล็อกเมื่อ queue เต็ม สร้าง backpressure ให้ memory ที่ใช้มีขอบเขตและสอดคล้องกับอัตราการประมวลผลจริง
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Channel ทำให้การย้าย ownership ชัดเจนใน type system แทนที่จะพึ่งให้ทุกคนจำได้ว่าต้องล็อค — ใช้ `sync_channel(n)` แทนค่าเริ่มต้นแบบ unbounded ทันทีที่ producer มีโอกาสวิ่งนำ consumer ได้
+</Callout>
+
 export const quizChannels = [
     {
         q: "mpsc ใน std::sync::mpsc ย่อมาจากอะไร?",
         options: [
-            "Multi-process single-channel",
-            "Multi-producer single-consumer",
             "Message-passing safe channel",
-            "Mutex-protected shared channel"
+            "Multi-producer single-consumer",
+            "Mutex-protected shared channel",
+            "Multi-process single-channel"
         ],
-        answer: 1
+        answer: 1,
+        explain: "mpsc = multi-producer, single-consumer: Sender handle หลายตัว (ผ่าน clone) ป้อนเข้า Receiver ตัวเดียวได้ แต่ Receiver เองไม่สามารถ clone ได้"
     },
     {
         q: "อะไรเกิดขึ้นกับค่าหลังจาก tx.send(value) ถูกเรียก?",
         options: [
-            "ค่าถูก copy เข้า channel ผู้ส่งยังคง copy ของตัวเองไว้",
+            "ค่าถูก clone อัตโนมัติหากไม่ implement Copy",
             "ค่าถูกย้ายเข้า channel ผู้ส่งใช้ค่านั้นไม่ได้อีกต่อไป",
-            "ค่าถูก serialize เป็น bytes ก่อนส่ง",
-            "ค่าถูก clone อัตโนมัติหากไม่ implement Copy"
+            "ค่าถูก copy เข้า channel ผู้ส่งยังคง copy ของตัวเองไว้",
+            "ค่าถูก serialize เป็น bytes ก่อนส่ง"
         ],
-        answer: 1
+        answer: 1,
+        explain: "send รับค่าด้วย move ownership ย้ายไปยัง channel จริง ๆ — thread ผู้ส่งอ้างอิงมันอีกไม่ได้ และ thread ผู้รับเป็นเจ้าของหลัง recv()"
     },
     {
         q: "ทำไมต้อง drop tx ตัวเดิม (drop(tx)) ก่อนรวบรวมจาก rx.iter()?",
         options: [
-            "drop(tx) flush ข้อความที่ buffer ไว้",
-            "rx.iter() บล็อกตลอดไปหาก Sender handle ยังมีชีวิตอยู่ เพราะ channel ยังเปิดอยู่",
             "คอมไพเลอร์ต้องการเพื่อความปลอดภัยของ memory",
+            "rx.iter() บล็อกตลอดไปหาก Sender handle ยังมีชีวิตอยู่ เพราะ channel ยังเปิดอยู่",
+            "drop(tx) flush ข้อความที่ buffer ไว้",
             "drop(tx) ส่งสัญญาณให้ receiver เริ่มในโหมด blocking"
         ],
-        answer: 1
+        answer: 1,
+        explain: "rx.iter() จริง ๆ แล้วคือ loop ของการเรียก recv() มันจะจบก็ต่อเมื่อ recv() คืน Err ซึ่งเกิดขึ้นก็ต่อเมื่อ Sender ทุกตัว (รวมทุก clone) ถูก drop หมดแล้ว"
     },
     {
-        q: "คุณสร้าง producer หลายตัวสำหรับ receiver ตัวเดียวได้อย่างไร?",
+        q: "โค้ดนี้พิมพ์อะไร?\n```rust\nuse std::sync::mpsc;\nfn main() {\n    let (tx, rx) = mpsc::channel::<i32>();\n    drop(tx);\n    match rx.recv() {\n        Ok(v) => println!(\"got {v}\"),\n        Err(e) => println!(\"recv failed: {e}\"),\n    }\n}\n```",
         options: [
-            "เรียก mpsc::channel() ครั้งหนึ่งต่อ producer",
-            "Clone Receiver — แต่ละ clone เป็น producer อิสระ",
-            "Clone Sender (tx.clone()) — แต่ละ clone สามารถส่งไปยัง Receiver เดียวกันได้",
-            "ไม่สามารถมี producer หลายตัวกับ std::sync::mpsc ได้"
+            "มันค้างตลอดไปรอค่า",
+            "recv failed: receiving on a closed channel",
+            "got 0",
+            "มัน panic เพราะ rx ไม่มี sender คู่กัน"
         ],
-        answer: 2
+        answer: 1,
+        explain: "การ drop Sender ตัวเดียวก่อนเรียก recv() จะปิด channel ทันที recv() บน channel ที่ปิดและว่างจะคืน Err ทันทีแทนที่จะบล็อก",
+    },
+    {
+        q: "โค้ดนี้ compile ไม่ผ่านด้วย error อะไร?\n```rust\nuse std::sync::mpsc;\nfn main() {\n    let (tx, rx) = mpsc::channel::<i32>();\n    tx.send(1).unwrap();\n    let rx2 = rx.clone();\n    println!(\"{:?} {:?}\", rx.recv(), rx2.recv());\n}\n```",
+        options: [
+            "compile ผ่านสบาย — Receiver implement Clone",
+            "error[E0599]: no method named `clone` found for struct `Receiver<T>`",
+            "error[E0382]: use of moved value: `rx`",
+            "error[E0277]: `Receiver<i32>` cannot be sent between threads safely"
+        ],
+        answer: 1,
+        explain: "การรับประกัน single-consumer ของ mpsc ถูกบังคับโดย type system: Receiver<T> ไม่มี Clone implement เลย ดังนั้นการเรียก .clone() บนมันคือ E0599 ไม่พบใน scope",
+    },
+    {
+        q: "ทำไม sync_channel(0) ถึงทำให้ send() ของ producer บล็อกจนกว่า consumer จะเรียก recv()?",
+        options: [
+            "sync_channel(0) เป็นบั๊ก — มันควรทำงานเหมือน channel แบบ unbounded",
+            "มัน buffer เป็นศูนย์ ดังนั้นค่าจะย้ายจาก sender ไป receiver ได้เฉพาะแบบส่งต่อโดยตรงพร้อมกันเท่านั้น — นี่คือ backpressure",
+            "sync_channel บล็อกเสมอไม่ว่าจะใส่เลขอะไร",
+            "0 หมายความว่าห้ามมี receiver เลย"
+        ],
+        answer: 1,
+        explain: "sync_channel(n) จำกัด queue ภายในไว้ที่ n รายการ sync_channel(0) ไม่มี buffer เลย บังคับให้ sender กับ receiver ส่งต่อกันแบบ synchronous — กลไกเบื้องหลัง backpressure",
     }
 ];
 

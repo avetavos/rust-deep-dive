@@ -9,6 +9,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 export const projectStructureDiagram = `
 flowchart TD
@@ -235,6 +236,126 @@ test tests::test_panic - should panic ... ok
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
+### `assert_eq!` พิมพ์อะไรเมื่อมันล้มเหลวจริง ๆ
+
+ตัวอย่างทั้งหมดที่ผ่านมาผ่านหมด นี่คือ output จริงเมื่อ test ล้มเหลวจริง ๆ — format ที่แน่นอนสำคัญ เพราะสักวันคุณจะต้องจ้องมันภายใต้ความกดดัน:
+
+```rust
+// @expect-panic
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_wrong_on_purpose() {
+        assert_eq!(add(2, 2), 5);
+    }
+}
+```
+
+```text
+running 1 test
+test tests::test_add_wrong_on_purpose ... FAILED
+
+failures:
+
+---- tests::test_add_wrong_on_purpose stdout ----
+
+thread 'tests::test_add_wrong_on_purpose' (<id>) panicked at src/main.rs:11:9:
+assertion `left == right` failed
+  left: 4
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::test_add_wrong_on_purpose
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+`assert_eq!` เรียกสองฝั่งของมันว่า `left`/`right` เสมอ (ตามลำดับที่คุณเขียนใน macro call) ไม่เคยเป็น "expected"/"actual" — รายละเอียดที่จำผิดได้ง่ายและควรเช็คทุกครั้งที่อ่านครั้งแรก เพราะในที่นี้ `left` คือ `add(2, 2)` และ `right` คือ literal `5` ของคุณเอง
+
+### ทำไม argument `expected` ของ `should_panic` ถึงสำคัญ
+
+`#[should_panic]` เฉยๆ เช็คแค่ว่า test panic *อย่างใดอย่างหนึ่ง* — มันไม่บอกอะไรเลยว่า *ทำไม* ช่องว่างนั้นทำให้ test ผ่านได้โดยไม่ได้ตรวจสอบอะไรเลยเกี่ยวกับฟังก์ชันที่มันอ้างว่าทดสอบ:
+
+```rust
+fn divide(a: i32, b: i32) -> i32 {
+    if b == 0 {
+        panic!("cannot divide by zero");
+    }
+    a / b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // BUG: expected is missing, so this test passes even though the panic
+    // message has nothing to do with division — it "passes for the wrong reason".
+    #[test]
+    #[should_panic]
+    fn test_divide_by_zero_no_expected() {
+        let v: Vec<i32> = Vec::new();
+        let _ = v[0]; // panics with an out-of-bounds index, NOT "cannot divide by zero"
+        let _ = divide(1, 0); // never reached
+    }
+
+    // FIXED: expected pins down which panic message is acceptable.
+    #[test]
+    #[should_panic(expected = "cannot divide by zero")]
+    fn test_divide_by_zero_expected() {
+        divide(1, 0);
+    }
+}
+```
+
+```text
+running 2 tests
+test tests::test_divide_by_zero_expected - should panic ... ok
+test tests::test_divide_by_zero_no_expected - should panic ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+ทั้งสอง test รายงาน `ok` `test_divide_by_zero_no_expected` ไม่เคยไปถึงการเรียก `divide` เลยด้วยซ้ำ — มัน panic จาก index ของ `Vec` ที่เกินขอบเขตก่อน — แต่ `#[should_panic]` ที่ไม่มี `expected` ยอมรับ panic *อะไรก็ได้* ดังนั้น test นี้ผ่านโดยไม่ได้ทดสอบอะไรเกี่ยวกับ `divide` เลย `#[should_panic(expected = "cannot divide by zero")]` ปิดช่องว่างนั้น: test จะผ่านก็ต่อเมื่อข้อความ panic มี substring นั้นจริง ๆ
+
+### `#[ignore]` และ `--nocapture`
+
+ทำเครื่องหมาย test ที่ช้าหรือขึ้นกับ environment ด้วย `#[ignore]` เพื่อข้ามมันโดยค่าเริ่มต้น รันมันตรงๆ ด้วย `--ignored` เมื่อต้องการ:
+
+```rust
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[ignore] // skipped by default — run explicitly with `cargo test -- --ignored`
+    fn slow_integration_check() {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        assert!(true);
+    }
+
+    #[test]
+    fn fast_check() {
+        assert_eq!(2 + 2, 4);
+    }
+}
+```
+
+```text
+running 2 tests
+test tests::fast_check ... ok
+test tests::slow_integration_check ... ignored
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+โดยค่าเริ่มต้น `cargo test` จะ **capture** stdout ของทุก test ที่ผ่านแล้วทิ้งไป — คุณจะเห็น output เฉพาะจาก test ที่ล้มเหลว ใส่ `-- --nocapture` เพื่อดู output ของ `println!` จาก test ที่ผ่านด้วย ซึ่งมีประโยชน์มากตอนเขียน test ใหม่และเช็คว่ามันทำสิ่งที่คุณคาดหวังก่อนที่จะเชื่อ assertion เพียงอย่างเดียว
+
 ### Integration Tests
 
 ไฟล์ภายใต้ `tests/` คือ integration test ซึ่งทดสอบ public API ของ crate ของคุณในฐานะ consumer ภายนอก
@@ -262,11 +383,36 @@ cargo test --test integration_test
 cargo test test_divide
 ```
 
-รัน test พร้อม output ที่มองเห็น:
+### Doc Test: ตัวอย่างที่เป็น Test ด้วย
+
+code example ในคอมเมนต์ `///` ก็ถูก compile และรันโดย `cargo test` เช่นกัน — นี่คือวิธีที่ standard library รักษาความถูกต้องของตัวอย่างในเอกสาร ถ้าตัวอย่าง compile ไม่ผ่านหรือ `assert_eq!` ของมันล้มเหลว `cargo test` จะล้มเหลวไปด้วย ตัวอย่างในเอกสารมักเขียนเป็น fenced block สามแบ็กทิกภายในคอมเมนต์ ส่วนแบบ indent ด้านล่าง (เว้น 4 ช่องว่าง ไม่มีแบ็กทิก) เป็นวิธีเก่ากว่าแต่ยังรองรับเต็มรูปแบบในการทำเครื่องหมายตัวอย่างที่รันได้แบบเดียวกัน ใช้ที่นี่เพียงเพื่อไม่ให้ตัวอย่างนี้ต้องมี code fence ซ้อนอยู่ใน code fence อีกอัน
+
+```rust
+/// Adds two numbers together.
+///
+/// # Examples
+///
+///     use cargo_tests_scratch::add;
+///     assert_eq!(add(2, 3), 5);
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+```
 
 ```bash
-cargo test -- --nocapture
+cargo test --doc
 ```
+
+```text
+   Doc-tests cargo_tests_scratch
+
+running 1 test
+test src/lib.rs - add (line 5) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+```
+
+Doc test รันแยก pass จาก unit test และ integration test (คุณเห็น header `Doc-tests` แยกต่างหาก) และแต่ละอัน compile เป็น binary จิ๋วของตัวเองที่เจาะจงกับ API *สาธารณะ* ของ crate — ขอบเขตเดียวกับที่ integration test ใน `tests/` ใช้ ซึ่งเป็นเหตุผลที่ตัวอย่าง import `add` ด้วย `use cargo_tests_scratch::add;` แทนที่จะพึ่งการอยู่ภายใน crate เดียวกัน
 
 ### การทดสอบ Async Code ด้วย tokio
 
@@ -288,60 +434,319 @@ mod tests {
 
 เพิ่ม `tokio` ใน `[dev-dependencies]` เพื่อใช้ `#[tokio::test]` โดยไม่ดึง tokio เข้า production binary ถ้าคุณไม่ต้องการที่นั่น
 
+### `cargo clippy`: จับ Smell ที่ rustc จับไม่ได้
+
+`rustc` เช็คว่าโค้ดคุณ *ถูกต้อง*; `clippy` เช็คว่ามัน *idiomatic* การรันมันพร้อม lint เพิ่มเติมสองสามตัวกับไฟล์เล็ก ๆ ที่มี smell สไตล์ AI หลายอย่างโดยตั้งใจ จะโชว์ warning จริง เจาะจง — ไม่ใช่แค่สมมติ:
+
+```rust
+// @skip-verify demo: illustrates multiple clippy lints together, not meant to run
+use std::sync::Mutex;
+
+async fn bad_pattern(shared: &Mutex<i32>) {
+    let guard = shared.lock().unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await; // guard is still held here
+    println!("{}", *guard);
+}
+
+fn redundant_clone_example(s: &String) -> String {
+    let t = s.clone();
+    t.clone() // clippy::redundant_clone
+}
+
+fn needless_range_loop_example(v: &[i32]) -> i32 {
+    let mut sum = 0;
+    for i in 0..v.len() {
+        sum += v[i]; // clippy::needless_range_loop
+    }
+    sum
+}
+
+fn manual_map_example(opt: Option<i32>) -> Option<i32> {
+    match opt {
+        Some(x) => Some(x + 1), // clippy::manual_map
+        None => None,
+    }
+}
+
+enum Shape {
+    Circle(f64),
+    Polygon([f64; 64]), // clippy::large_enum_variant
+}
+```
+
+```bash
+cargo clippy -- \
+  -W clippy::redundant_clone \
+  -W clippy::unwrap_used \
+  -W clippy::await_holding_lock \
+  -W clippy::needless_range_loop \
+  -W clippy::manual_map \
+  -W clippy::large_enum_variant
+```
+
+```text
+warning: this `MutexGuard` is held across an await point
+ --> src/main.rs:4:9
+  |
+4 |     let guard = shared.lock().unwrap();
+  |         ^^^^^
+  |
+  = help: consider using an async-aware `Mutex` type or ensuring the `MutexGuard` is dropped before calling `await`
+
+warning: used `unwrap()` on a `Result` value
+ --> src/main.rs:4:17
+  |
+4 |     let guard = shared.lock().unwrap();
+  |                 ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: if this value is an `Err`, it will panic
+
+warning: redundant clone
+  --> src/main.rs:11:6
+   |
+11 |     t.clone() // clippy::redundant_clone
+   |      ^^^^^^^^ help: remove this
+   |
+note: this value is dropped without further use
+
+warning: the loop variable `i` is only used to index `v`
+  --> src/main.rs:16:14
+   |
+16 |     for i in 0..v.len() {
+   |              ^^^^^^^^^^
+   |
+help: consider using an iterator
+   |
+16 -     for i in 0..v.len() {
+16 +     for <item> in &v {
+   |
+
+warning: manual implementation of `Option::map`
+  --> src/main.rs:23:5
+   |
+23 | /     match opt {
+24 | |         Some(x) => Some(x + 1), // clippy::manual_map
+25 | |         None => None,
+26 | |     }
+   | |_____^ help: try: `opt.map(|x| x + 1)`
+
+warning: large size difference between variants
+  --> src/main.rs:29:1
+   |
+29 | / enum Shape {
+30 | |     Circle(f64),
+   | |     ----------- the second-largest variant contains at least 8 bytes
+31 | |     Polygon([f64; 64]), // clippy::large_enum_variant
+   | |     ------------------ the largest variant contains at least 512 bytes
+32 | | }
+   | |_^ the entire enum is at least 520 bytes
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+```
+
+หก lint ที่แตกต่างกัน หกทางแก้ที่เจาะจง — ไม่มีอันไหนเป็นแค่ความจู้จี้เรื่อง style เลย แต่ละอันชี้ต้นทุนจริง (lock ที่ถือนานเกินไป, clone ที่ไม่ทำอะไรเลย, `unwrap()` ที่ panic ได้, enum ที่เปลืองพื้นที่ทุก instance) `clippy::unwrap_used` และ `clippy::redundant_clone` ไม่อยู่ใน warn set เริ่มต้นของ clippy (ต้องใส่ `-W` ชัดเจนตามที่แสดง) เพราะมันพบได้บ่อยในโค้ดที่ถูกต้องตามกฎหมาย clippy จึงไม่อยากรบกวนโดยค่าเริ่มต้น — แต่การเปิดมันโดยตั้งใจใน CI สำหรับ codebase ที่ AI เขียนหรือ review เป็นกับดักที่คุ้มค่าและถูก
+
+### `cargo fmt --check`
+
+`cargo fmt` จัด format โค้ดของคุณให้เป็น style มาตรฐานของโปรเจกต์; `cargo fmt --check` (เวอร์ชันที่เหมาะกับ CI) รายงานสิ่งที่*จะ*เปลี่ยนโดยไม่แตะไฟล์เลย และ exit ไม่เป็นศูนย์ถ้ามีอะไรที่ยังไม่ถูก format:
+
+```bash
+cargo fmt --check
+```
+
+```text
+Diff in /path/to/project/src/badfmt.rs:1:
+-pub fn messy(   a:i32,b :i32)->i32{a+b}
++pub fn messy(a: i32, b: i32) -> i32 {
++    a + b
++}
+```
+
+รันคำสั่งนี้ใน CI (ไม่ใช่ `cargo fmt` เองซึ่งจะเขียนทับไฟล์เงียบๆ) เพื่อให้ pull request ที่ format ไม่สอดคล้องกันล้มเหลวตั้งแต่ build แทนที่จะปล่อยให้ style ของ codebase ค่อย ๆ เพี้ยนไปเรื่อย ๆ
+
+### `cargo audit` และ `cargo deny`: ความปลอดภัยของ Dependency
+
+ทั้งสองไม่มาพร้อม Cargo โดยค่าเริ่มต้น — ต้องติดตั้งแยก (`cargo install cargo-audit`, `cargo install cargo-deny`) แล้วรันเป็น `cargo audit` / `cargo deny check` `cargo audit` เทียบ `Cargo.lock` ของคุณกับฐานข้อมูล security advisory ของ RustSec แล้วชี้ dependency ที่มีช่องโหว่ที่รู้จัก `cargo deny` กว้างกว่านั้น: มันบังคับ license allowlist ได้ด้วย ห้าม crate หรือ crate source เฉพาะ และชี้ dependency ที่มีหลายเวอร์ชันซ้ำใน dependency tree ทั้งสองมักถูกต่อเข้ากับ CI เพื่อให้ช่องโหว่ที่เพิ่งถูกเปิดเผยใน dependency ทางอ้อมทำให้ build ล้มเหลวแทนที่จะปล่อยผ่านไปเงียบ ๆ
+
+### `rust-toolchain.toml`: การ Pin เวอร์ชัน Compiler
+
+ไฟล์ `rust-toolchain.toml` ที่ project root จะ pin toolchain ที่แน่นอนที่ `rustup` ใช้สำหรับโปรเจกต์นั้น ทำให้ทุกคนที่ contribute (และ CI) build ด้วย compiler เดียวกันโดยไม่ต้องจำว่าต้องรัน `rustup override set`:
+
+```toml
+[toolchain]
+channel = "1.96.1"
+components = ["clippy", "rustfmt"]
+```
+
+นี่คือกลไกที่ต่างจาก field `rust-version` ใน `Cargo.toml` ที่คลุมไปข้างบน: `rust-version` บันทึก (และให้ resolver ใช้พิจารณา) เวอร์ชัน*ต่ำสุด*ที่ crate ที่เผยแพร่รองรับ; `rust-toolchain.toml` *pin* เวอร์ชันที่แน่นอนที่ checkout ของ repository นี้ในเครื่อง build ด้วย ไม่ว่าเครื่องนั้นจะติดตั้งอะไรอยู่บ้าง
+
+### Workspace: หลาย Crate หนึ่ง `Cargo.lock`
+
+Workspace รวมหลาย crate ไว้ใต้ `Cargo.toml` ระดับบนสุดเดียวและ `Cargo.lock` เดียวที่ใช้ร่วมกัน ทำให้พวกมัน build ด้วย dependency version เดียวกันเสมอ:
+
+```toml
+# Cargo.toml at the workspace root
+[workspace]
+members = ["api", "core", "cli"]
+resolver = "3"
+```
+
+แต่ละ member (`api/`, `core/`, `cli/`) มี `Cargo.toml` ของตัวเองพร้อม `[dependencies]` ของตัวเอง แต่ `cargo build`/`cargo test` จาก workspace root จะ build และ test ทั้งหมดพร้อมกัน และ `cargo test -p core` เจาะจงแค่ member เดียว
+
+### `cargo test --release`: Overflow Check ถูกปิด
+
+Debug build เปิด overflow check ทางคณิตศาสตร์โดยค่าเริ่มต้น release build ไม่เปิดเพื่อประสิทธิภาพ test เดียวกันสามารถผ่านหรือล้มเหลวขึ้นอยู่กับว่ารันภายใต้ profile ไหนล้วน ๆ:
+
+```rust
+// @skip-verify demo: shows debug-vs-release divergence, not a single runnable outcome
+pub fn will_overflow(x: u8) -> u8 {
+    x + std::hint::black_box(10) // overflows once x > 245
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_overflow() {
+        println!("result: {}", will_overflow(250));
+    }
+}
+```
+
+```text
+# cargo test --lib   (debug profile — default)
+thread 'tests::test_overflow' (<id>) panicked at src/lib.rs:2:5:
+attempt to add with overflow
+test tests::test_overflow ... FAILED
+
+# cargo test --release --lib   (release profile)
+result: 4
+test tests::test_overflow ... ok
+```
+
+ใน debug `250_u8 + 10` panic ด้วย "attempt to add with overflow" — บั๊กจริงถูกจับได้ทันที ใน release เลขคณิตเดียวกันจะ wrap เงียบ ๆ (`250 + 10 = 260` ซึ่ง wrap เป็น `4` ใน `u8`) และ test ก็ผ่านทั้ง ๆ ที่คำนวณผิด นี่คือเหตุผลว่าทำไม `cargo test --release` ควรถูกสงสัยสักครู่เมื่อมันทำให้ test ที่เคยล้มเหลวผ่านไปได้: ตัวเลขที่ wrap และผิดอย่างเงียบ ๆ คือบั๊กจริงใน production ไม่ใช่การแก้ไข ถ้าการ wrap เป็นพฤติกรรมที่ตั้งใจจริง ๆ ให้เขียนให้ชัดเจนด้วย `wrapping_add` แทนที่จะให้ profile เป็นคนตัดสินใจแทนคุณ
+
 <Callout title="Test รันด้วย cargo test — ไม่ใช่ใน browser runner">
 Rust test ใช้ฟังก์ชัน `#[test]` ที่ compile และรันโดย `cargo test` browser Playground รัน `fn main()` เท่านั้น — `cargo test` ไม่พร้อมใช้งานในนั้น เขียนโค้ด test ของคุณใน Cargo project ในเครื่องและรัน `cargo test` จาก terminal ใช้ `cargo test -- --nocapture` เพื่อดู output จาก `println!` ใน test ที่ผ่าน
+</Callout>
+
+## Mental Model
+
+Cargo, `rustc` และ `clippy` แบ่งงานกันชัดเจน: `rustc` (ผ่าน `cargo build`/`cargo check`) ตอบคำถาม "โค้ดนี้ถูกต้องไหม" — memory safety, type, borrow `clippy` ตอบคำถาม "โค้ดนี้ idiomatic ไหม" — โค้ดที่ถูกต้องเหมือนกัน แต่ถูกชี้ให้เห็น pattern ที่มักเป็นความผิดพลาดหรือต้นทุนที่ไม่จำเป็น `cargo test` ตอบคำถาม "โค้ดนี้ทำสิ่งที่ฉันอ้างว่ามันทำจริงไหม" — และคำอ้างนั้นแข็งแรงเท่ากับ assertion ที่อยู่ในแต่ละ test เท่านั้น ซึ่งเป็นเหตุผลที่ `#[should_panic]` ที่ไม่มี `expected` หรือ test ที่ไม่มี assert เลย สามารถรายงาน `ok` ได้โดยไม่ได้ตรวจสอบอะไรเลย
+
+## Trade-offs
+
+Unit test (`#[cfg(test)] mod tests` ในไฟล์ source เดียวกัน) compile เร็วและเข้าถึง item ที่ private ได้ แต่ทดสอบแค่ module เดียวแบบแยกโดด Integration test (`tests/`) compile ช้ากว่า (แต่ละไฟล์เป็น crate ของตัวเอง) และเข้าถึงได้เฉพาะ public API แต่จับบั๊กเรื่องการเชื่อมต่อที่ unit test มองไม่เห็นโดยโครงสร้าง Doc test ช้าที่สุดต่อตัวอย่าง (แต่ละตัวอย่าง compile เป็น binary จิ๋วของตัวเอง) แต่คุ้มค่าด้วยการรักษาไม่ให้เอกสารเน่าเงียบ ๆ — ตัวอย่างที่หยุดทำงานจะทำให้ build ล้มเหลว ไม่ใช่แค่ดูล้าสมัย
+
+## Common Misconceptions
+
+- **"ถ้า `cargo test` บอก `ok` แปลว่าฟังก์ชันถูกต้อง"** มันหมายความแค่ว่าทุก assertion ในทุก test ที่รันนั้นเป็นจริง `#[should_panic]` ที่ไม่มี `expected` หรือ test ที่ไม่มี `assert!`/`assert_eq!` เลย รายงาน `ok` โดยไม่ได้ตรวจสอบอะไรที่มีความหมายเลย ตามที่ demo `expected` ข้างบนแสดงตรง ๆ
+- **"`cargo test --release` แค่เป็นวิธีรัน test เดียวกันที่เร็วกว่า"** มันเปลี่ยนพฤติกรรมจริง ไม่ใช่แค่ความเร็ว: overflow check ถูก compile ออกไป test ที่พึ่งพา panic ตอน debug mode จริง ๆ (หรือที่ซ่อนบั๊กไว้หลัง wrapping ของ release mode) สามารถผ่านหรือล้มเหลวต่างกันแค่เพราะ profile
+- **"clippy warning เป็นแค่ความเห็นเรื่อง style ที่เพิกเฉยได้"** บางอันก็ใช่ (เช่นข้อตกลงการตั้งชื่อ) แต่บางอัน — `await_holding_lock`, `large_enum_variant`, `redundant_clone` — ชี้ต้นทุนหรือความเสี่ยงจริงตอน runtime ที่บังเอิญมองเห็นได้แบบ static ด้วย ให้ถือว่า clippy warning เป็นคำใบ้ให้ไปอ่านว่า *ทำไม* ก่อนตัดสินใจว่าเพิกเฉยได้อย่างปลอดภัย
+
+## อ่านโค้ดที่ AI เขียน
+
+ชุด test ที่ AI เขียนมักสร้างฟังก์ชัน test ที่รันโค้ดแล้วพิมพ์ผลลัพธ์ โดยไม่เคย assert อะไรเกี่ยวกับมันเลยจริง ๆ — มัน "ดูเหมือน test" (compile ได้ มี attribute `#[test]` รันโดยไม่ panic) โดยไม่ได้ตรวจสอบอะไรเลย
+
+<SpotTheBug code={`fn parse_config(input: &str) -> Vec<String> {
+    input.split(',').map(|s| s.trim().to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_config() {
+        let result = parse_config("a, b, c");
+        println!("{:?}", result); // looks like a test, but nothing is actually checked
+    }
+}
+`}>
+`test_parse_config` เรียก `parse_config` แล้วพิมพ์ผลลัพธ์ แต่ไม่มี `assert!`, `assert_eq!` หรือการเช็คใด ๆ เลยใน body ของฟังก์ชัน test นี้ผ่าน (`ok`) สำหรับ implementation *ใดก็ตาม* ของ `parse_config` รวมถึงตัวที่ return `Vec` ว่างเสมอ — regression ที่ทำลายฟังก์ชันอย่างเงียบ ๆ จะปล่อยให้ test นี้เขียวอยู่ ทางแก้ไม่ใช่โค้ดเพิ่ม แต่คือ assertion ที่ไม่เคยถูกเขียน: `assert_eq!(result, vec!["a", "b", "c"]);`
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`cargo test` ที่รายงาน `ok` หมายความแค่ว่าทุก assertion ที่รันนั้นเป็นจริง — `#[should_panic]` ที่ไม่มี `expected`, test ที่ไม่มี `assert`, หรือ overflow panic แบบ debug-only ที่ถูกซ่อนด้วย `--release` ล้วนทำให้ฟังก์ชันที่พังดูเหมือนถูกทดสอบได้ทั้งนั้น — อ่านว่า test เช็คอะไรจริง ๆ ไม่ใช่แค่ว่ามันผ่านหรือไม่
 </Callout>
 
 export const quizCargoTests = [
     {
         q: 'edition = "2024" ใน Cargo.toml ควบคุมอะไร?',
         options: [
-            "เวอร์ชันต่ำสุดของ Rust compiler ที่ crate รองรับ",
+            "ระดับ optimisation ที่ใช้ตอน build แบบ release",
             "dialect ของภาษาที่ crate ถูก compile ด้วย — syntax และ idiom เลือกแยกรายcrate",
             "registry ที่ Cargo ใช้ดาวน์โหลด dependency",
-            "ระดับ optimisation ที่ใช้ตอน build แบบ release"
+            "เวอร์ชันต่ำสุดของ Rust compiler ที่ crate รองรับ"
         ],
-        answer: 1
+        answer: 1,
+        explain: "edition เลือกกฎ syntax/idiom (let chain, temporary scoping ฯลฯ) เลือกแยกอิสระต่อ crate มันไม่เกี่ยวกับ optimisation level (นั่นคือ --release) หรือ MSRV (นั่นคือ rust-version)"
     },
     {
         q: "#[cfg(test)] บน mod block ทำอะไร?",
         options: [
-            "รัน module เฉพาะใน release build",
-            "Compile module เฉพาะเมื่อรัน cargo test ทำให้ไม่อยู่ใน production binary",
             "ทำเครื่องหมาย module ว่า unsafe",
+            "Compile module เฉพาะเมื่อรัน cargo test ทำให้ไม่อยู่ใน production binary",
+            "รัน module เฉพาะใน release build",
             "ปิดใช้งาน dead-code warning ภายใน module"
         ],
-        answer: 1
+        answer: 1,
+        explain: "#[cfg(test)] เป็น attribute แบบ conditional-compilation: module หายไปจาก binary ของ cargo build/cargo run ปกติทั้งหมด และถูก compile เข้ามาเฉพาะตอน cargo test สร้าง test binary"
     },
     {
         q: "macro assertion ใดที่ตรวจสอบว่าสองค่าไม่เท่ากัน?",
         options: [
-            "assert!(a != b)",
-            "assert_eq!(a, b) พร้อม negation flag",
+            "assert_not!(a, b)",
             "assert_ne!(a, b)",
-            "assert_not!(a, b)"
+            "assert_eq!(a, b) พร้อม negation flag",
+            "assert!(a != b)"
         ],
-        answer: 2
+        answer: 1,
+        explain: "assert_ne! คือ assertion เฉพาะสำหรับความไม่เท่ากัน ด้วย format ข้อความ left/right แบบเดียวกับ assert_eq! assert!(a != b) ก็ใช้ได้เหมือนกันแต่เสีย output left/right ที่มีโครงสร้างเมื่อล้มเหลว"
+    },
+    {
+        q: "ทั้งสอง test นี้รายงาน ok มีอะไรผิดจริง ๆ?\n```rust\n#[test]\n#[should_panic]\nfn test_divide_by_zero_no_expected() {\n    let v: Vec<i32> = Vec::new();\n    let _ = v[0]; // panics here, unrelated to division\n    let _ = divide(1, 0); // never reached\n}\n```",
+        options: [
+            "ไม่มีอะไรผิด — should_panic แค่ต้องการ panic อะไรก็ได้ นี่คือการใช้งานที่ถูกต้อง",
+            "should_panic ที่ไม่มี expected ยอมรับ panic อะไรก็ได้ test นี้ panic จาก index ที่เกินขอบเขตซึ่งไม่เกี่ยวข้อง และไม่เคยทดสอบการเช็คค่าศูนย์ของ divide เลย",
+            "test ขาด #[tokio::test]",
+            "Vec<i32> ไม่สามารถ index ด้วย [0] ใน test ได้"
+        ],
+        answer: 1,
+        explain: "should_panic(expected = \"...\") คือสิ่งที่ pin test ไว้กับข้อความ panic ที่คุณสนใจจริง ๆ ถ้าไม่มีมัน panic ที่ไม่เกี่ยวข้องเลยก็ทำให้ test ผ่านได้ด้วยเหตุผลที่ผิด",
+    },
+    {
+        q: "ทำไม test เดียวกันถึงผ่านภายใต้ cargo test แต่ล้มเหลว (หรือกลับกัน) ภายใต้ cargo test --release?",
+        options: [
+            "cargo test --release รัน test คนละชุดโดยค่าเริ่มต้น",
+            "Release build ปิด integer overflow check โดยค่าเริ่มต้น ทำให้เลขคณิตที่ panic ใน debug อาจ wrap เงียบ ๆ ใน release",
+            "cargo test --release ไม่รองรับ #[should_panic]",
+            "ไม่มีความแตกต่างจริง — สิ่งนี้เกิดขึ้นไม่ได้"
+        ],
+        answer: 1,
+        explain: "Debug build panic ตอน overflow โดยค่าเริ่มต้น (attempt to add with overflow) ส่วน release build wrap เงียบ ๆ เพื่อประสิทธิภาพ test ที่พึ่งพา panic นั้น — หรือซ่อนบั๊กไว้หลังมัน — ทำงานต่างกันแค่เพราะ profile",
     },
     {
         q: "ควรวาง integration test ไว้ที่ไหนใน Cargo project?",
         options: [
-            "ภายใน src/ ข้าง ๆ source file",
+            "ใน crate แยกต่างหากที่ประกาศใน Cargo.toml",
             "ภายใน directory tests/ ที่ project root",
-            "ภายในบล็อก #[cfg(test)] mod ใน lib.rs",
-            "ใน crate แยกต่างหากที่ประกาศใน Cargo.toml"
+            "ภายใน src/ ข้าง ๆ source file",
+            "ภายในบล็อก #[cfg(test)] mod ใน lib.rs"
         ],
-        answer: 1
+        answer: 1,
+        explain: "แต่ละไฟล์ภายใต้ tests/ โดยตรง compile เป็น crate แยกต่างหากของตัวเองที่ขึ้นกับ public API ของ library คุณ — ขอบเขตเดียวกับที่ consumer ภายนอก crate ของคุณจะเห็น"
     },
     {
         q: "ใช้ attribute ใดเพื่อทดสอบ async function ด้วย tokio?",
         options: [
-            "#[test]",
-            "#[async_test]",
+            "#[cfg(async)]",
             "#[tokio::test]",
-            "#[cfg(async)]"
+            "#[async_test]",
+            "#[test]"
         ],
-        answer: 2
+        answer: 1,
+        explain: "#[tokio::test] ห่อ body ของ test ด้วย tokio runtime แบบเดียวกับที่ #[tokio::main] ทำสำหรับ binary จริง ทำให้ body ของ test ที่เป็น async fn สามารถ .await ได้ตรง ๆ"
     }
 ];
 

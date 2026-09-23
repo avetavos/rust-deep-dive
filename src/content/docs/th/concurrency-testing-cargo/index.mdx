@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Fearless Concurrency — สิ่งที่จะได้เรียนในโมดูลนี้
 
@@ -37,6 +39,13 @@ standard library ของ Rust มี **OS threads** ผ่าน `std::thread`
 - ประเภทที่เป็น `Sync` หมายความว่าปลอดภัยที่จะแชร์ reference ข้าม thread
 - คอมไพเลอร์ปฏิเสธโค้ดที่ละเมิดสัญญาเหล่านี้ — ไม่ต้องการ sanitizer หรือ runtime check
 
+<Mermaid code={`flowchart TD
+    A["What kind of work am I scheduling?"] --> B{"CPU-bound, or I/O-bound?"}
+    B -->|CPU-bound| C["std::thread — real OS thread, ~8 MB stack"]
+    B -->|I/O-bound, many at once| D["async/.await — lightweight task, needs an executor"]
+    C --> E["Share state with Arc + Mutex/RwLock"]
+    D --> F["Share state the same way, but never hold a sync lock across .await"]`} title="เลือกระหว่าง OS thread กับ async task" />
+
 ### ตัวอย่างสั้น ๆ
 
 นี่คือโปรแกรม Rust แบบ concurrent ที่เล็กที่สุดที่มีความหมาย — spawn thread รอ แล้วทำงานต่อใน main
@@ -57,36 +66,139 @@ fn main() {
 trait ของ `Send` และ `Sync` เป็นกลไกเบื้องหลัง fearless concurrency `Send` หมายความว่าค่าสามารถย้ายไปยัง thread อื่นได้ `Sync` หมายความว่า shared reference ไปยังค่าสามารถส่งได้ ประเภทอย่าง `Rc<T>` และ raw pointer ไม่ใช่ทั้งคู่ ดังนั้นคอมไพเลอร์จะหยุดคุณไม่ให้แชร์ type เหล่านี้ข้าม thread
 </Callout>
 
+## Compiler พูดว่าอย่างไร: ใช้ค่าหลังจากถูก Move เข้า Thread ไปแล้ว
+
+`thread::spawn` บังคับให้ closure เป็นเจ้าของทุกอย่างที่มัน capture มา (ผ่าน `move`) เพราะ thread ที่ spawn อาจยังทำงานอยู่หลังจากฟังก์ชันที่สร้างมันจบไปแล้ว การย้าย ownership นี้เกิดขึ้นจริง — ค่านั้นหายไปจากผู้เรียกจริง ๆ ไม่ใช่แค่ borrow:
+
+```rust
+// @expect-error E0382
+use std::thread;
+
+fn main() {
+    let data = vec![1, 2, 3];
+    let handle = thread::spawn(move || {
+        println!("sum from thread: {}", data.iter().sum::<i32>());
+    });
+    handle.join().unwrap();
+    println!("data length: {}", data.len()); // ERROR: data was moved into the thread above
+}
+```
+
+```text
+error[E0382]: borrow of moved value: `data`
+ --> src/main.rs:9:33
+  |
+4 |     let data = vec![1, 2, 3];
+  |         ---- move occurs because `data` has type `Vec<i32>`, which does not implement the `Copy` trait
+5 |     let handle = thread::spawn(move || {
+  |                                ------- value moved into closure here
+6 |         println!("sum from thread: {}", data.iter().sum::<i32>());
+  |                                          ---- variable moved due to use in closure
+...
+9 |     println!("data length: {}", data.len());
+  |                                  ^^^^ value borrowed here after move
+  |
+help: consider cloning the value before moving it into the closure
+  |
+5 ~     let value = data.clone();
+6 ~     let handle = thread::spawn(move || {
+7 ~         println!("sum from thread: {}", value.iter().sum::<i32>());
+  |
+```
+
+คำแนะนำของคอมไพเลอร์เองคือ `.clone()` — และในกรณีนี้มันเป็นทางแก้ที่ใช้ได้จริง เพราะ `main` ต้องใช้ `data` ทั้งสองที่จริง ๆ แต่ควรมองคำแนะนำนี้เป็นทางเลือกสุดท้าย ไม่ใช่ปฏิกิริยาสะท้อน — ทางแก้ที่ดีกว่ามักจะเป็นให้ thread คำนวณแล้ว return ค่าที่ `main` ต้องการ (ผ่าน `JoinHandle::join()`) แทนที่จะมีสำเนาที่สองอยู่ทั้งสองฝั่ง
+
+## Mental Model
+
+ทุกค่าใน Rust มีเจ้าของเดียวในแต่ละเวลา และ closure ของ `thread::spawn` จะกลายเป็นเจ้าของใหม่ในทันทีที่คุณเขียน `move` ไม่มีอะไร "มหัศจรรย์" เกิดขึ้นที่ขอบเขตของ thread เลย — มันคือกฎ move-semantics เดียวกับที่ควบคุมการส่ง `String` ไปยังฟังก์ชัน เพียงแต่ถูกบังคับใช้เพิ่มเติมด้วยเงื่อนไขว่า closure (และทุกอย่างที่มัน capture) ต้องเป็น `'static` และ `Send` เพราะคอมไพเลอร์ไม่สามารถรู้ได้ว่า thread ที่ spawn จะจบเมื่อไหร่เทียบกับส่วนที่เหลือของโปรแกรม
+
+## Trade-offs
+
+OS thread ให้ parallelism จริงและ mental model ที่เรียบง่าย (แต่ละ thread แค่ทำงานไป) แลกกับ stack ของ OS จริง (~8 MB) และเพดานจริงที่ประมาณหลักร้อยถึงหลักพันต้น ๆ ของ thread ส่วน `async`/`.await` task นั้นถูก — คุณสามารถมีได้เป็นพันถึงล้าน task — แต่ทุกตัวต้องการ executor อย่าง `tokio` เพื่อให้มันทำงานจริง และงานที่ผูกกับ CPU บน executor นั้นจะบล็อกทุก task อื่นที่ใช้ thread เดียวกัน
+
+## Common Misconceptions
+
+- **"Fearless concurrency หมายความว่า Rust ป้องกันบั๊กเรื่อง concurrency ได้ทั้งหมด"** มันป้องกัน *data race* (สอง thread แตะ memory เดียวกันโดยไม่ synchronize อย่างน้อยหนึ่งฝั่งเขียน) ที่ compile time เท่านั้น มันไม่ได้ป้องกัน deadlock, logic race หรือ lock poisoning หลังจาก panic — สิ่งเหล่านั้นยังเป็นความรับผิดชอบของคุณ ซึ่งจะคลุมในบทถัดไปของโมดูลนี้
+- **"`Send` และ `Sync` เป็นสิ่งที่คุณต้อง implement เองสำหรับ type ส่วนใหญ่"** เกือบทุก type ได้ทั้งสองอย่างอัตโนมัติ (มันเป็น auto trait) ตราบใดที่ทุก field เป็น `Send`/`Sync` คุณจะคิดถึงมันก็ต่อเมื่อคอมไพเลอร์บอกคุณว่า bound ไม่ถูก satisfy ซึ่งมักจะเป็นเพราะ `Rc<T>`, `RefCell<T>` หรือ raw pointer ที่ซ่อนอยู่ข้างใน
+- **"async เร็วกว่า thread เสมอ"** สำหรับงานที่ผูกกับ CPU `async` เพิ่ม overhead (การ poll, การจอง memory ของ state machine) โดยไม่มีประโยชน์เลย — thread หรือ parallelism แบบ `rayon` คือเครื่องมือที่ถูกต้องสำหรับกรณีนั้น
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ด Rust แบบ concurrent ที่ AI เขียนมักเรียก `thread::spawn` แล้วส่ง `JoinHandle` ที่ได้ไปเก็บใน `Vec` แต่บางครั้งก็ทิ้ง handle นั้นทันที (หรือไม่เก็บ `Vec` เลย) เพราะโค้ดรอบข้าง "ดูเหมือนจะเสร็จแล้ว" โดยไม่ต้องใช้มัน
+
+<SpotTheBug code={`use std::thread;
+
+fn process_all(items: Vec<i32>) {
+    for item in items {
+        thread::spawn(move || {
+            println!("processed: {}", item * 2);
+        });
+    }
+    println!("all items processed");
+}
+`}>
+`thread::spawn` คืนค่า `JoinHandle` และโค้ดนี้ไม่เคยเก็บมันไว้เลย — handle ถูก drop ทันที ซึ่งทำให้ thread เป็นอิสระ (detach) แต่**ไม่รอ**มัน `process_all` สามารถพิมพ์ `"all items processed"` แล้ว return ก่อนที่ thread ที่ spawn ไว้จะทำงานเลยด้วยซ้ำ ถ้า `main` จบทันทีหลังจากนั้น process อาจจบกลางคันโดยที่บาง (หรือทั้งหมด) ของบรรทัด `println!("processed: ...")` ไม่เคยถูกพิมพ์เลย ทางแก้คือเก็บทุก `JoinHandle` ลงใน `Vec` แล้วเรียก `.join().unwrap()` กับแต่ละตัวก่อน return
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Rust เปลี่ยน data race ข้าม thread ให้เป็น compile error ผ่าน `Send`/`Sync` และ ownership แต่มันจับ `.join()` ที่ลืมเรียก, deadlock หรือ lock ที่ poisoned ให้คุณไม่ได้ — สิ่งเหล่านี้คือหัวข้อที่โมดูลนี้จะสร้างต่อไป
+</Callout>
+
 export const quizIndex = [
     {
         q: "การที่ประเภทหนึ่งเป็น Send ใน Rust หมายความว่าอะไร?",
         options: [
-            "สามารถ serialize เป็น JSON ได้",
+            "สามารถ copy ได้โดยไม่ต้อง clone",
             "สามารถย้ายไปยัง thread อื่นได้อย่างปลอดภัย",
-            "สามารถแชร์ผ่าน network socket ได้",
-            "สามารถ copy ได้โดยไม่ต้อง clone"
+            "สามารถ serialize เป็น JSON ได้",
+            "สามารถแชร์ผ่าน network socket ได้"
         ],
-        answer: 1
+        answer: 1,
+        explain: "Send หมายความว่า ownership ของค่าสามารถถูกโอนไปยัง thread อื่นได้โดยไม่ก่อ data race มันไม่เกี่ยวกับการ serialize หรือ networking เลย"
     },
     {
         q: "ประเภทใดใน standard library ที่ใช้แชร์ mutable state ระหว่าง thread อย่างปลอดภัย?",
         options: [
+            "Cell<T>",
             "Rc<RefCell<T>>",
-            "Box<T>",
             "Arc<Mutex<T>>",
-            "Cell<T>"
+            "Box<T>"
         ],
-        answer: 2
+        answer: 2,
+        explain: "Arc ให้ shared ownership แบบนับ reference อะตอมมิกกับหลาย thread ส่วน Mutex ให้สิทธิ์เข้าถึงค่าภายในแบบ exclusive Rc และ RefCell ถูกกำหนดชัดเจนว่าไม่ใช่ !Send/ไม่ปลอดภัยข้าม thread"
     },
     {
         q: "ควรใช้ async/await แทน OS thread เมื่อใด?",
         options: [
-            "สำหรับการคำนวณ CPU อย่างเข้มข้น",
+            "async/await ช้ากว่า thread เสมอ",
             "สำหรับงานที่ผูกกับ I/O ที่มีการดำเนินการพร้อมกันจำนวนมากและน้ำหนักเบา",
             "เมื่อต้องการ thread มากกว่า 8 ตัว",
-            "async/await ช้ากว่า thread เสมอ"
+            "สำหรับการคำนวณ CPU อย่างเข้มข้น"
         ],
-        answer: 1
+        answer: 1,
+        explain: "async task สร้างได้ถูกและขยายไปได้เป็นพันหรือล้านการรอ I/O พร้อมกัน ส่วนงานที่ผูกกับ CPU เหมาะกับ OS thread มากกว่า (หรือ spawn_blocking จากภายใน async)"
+    },
+    {
+        q: "โค้ดนี้ compile ผ่านไหมและทำงานอย่างไร?\n```rust\nuse std::thread;\nfn main() {\n    let data = vec![1, 2, 3];\n    let h = thread::spawn(move || {\n        println!(\"{}\", data.len());\n    });\n    h.join().unwrap();\n    println!(\"{}\", data.len());\n}\n```",
+        options: [
+            "พิมพ์ 3 สองครั้ง",
+            "compile ไม่ผ่าน: error[E0382] เพราะ data ถูก move เข้า closure ไปแล้ว",
+            "พิมพ์ 3 แล้ว panic ตอน runtime",
+            "compile ผ่านแต่ data.len() หลัง join() คืนค่า 0"
+        ],
+        answer: 1,
+        explain: "move โอน ownership ของ data เข้า closure main ไม่ได้เป็นเจ้าของมันอีกต่อไป ดังนั้น data.len() ตัวที่สองหลัง join() เป็น compile-time E0382 ไม่ใช่ปัญหา runtime",
+    },
+    {
+        q: "ในตัวอย่าง SpotTheBug ทำไม \"all items processed\" ถึงพิมพ์ออกมาก่อนที่ thread ที่ spawn ไว้จะทำงานเสร็จได้?",
+        options: [
+            "println! เป็น asynchronous โดยค่าเริ่มต้น",
+            "thread::spawn บล็อกจนกว่า thread จะเสร็จ ดังนั้นสิ่งนี้เกิดขึ้นไม่ได้",
+            "JoinHandle ที่ thread::spawn คืนมาถูก drop ทันทีแทนที่จะถูก join ดังนั้นไม่มีอะไรรอ thread เหล่านั้น",
+            "process_all ต้องใช้ #[tokio::main] เพื่อรัน thread ให้ถูกต้อง"
+        ],
+        answer: 2,
+        explain: "การ drop JoinHandle ทำให้ thread เป็นอิสระ (detach) แทนที่จะรอมัน ถ้าไม่เก็บและ join ทุก handle โค้ดที่เรียกจะไม่มีการรับประกันว่างานที่ spawn ไว้เสร็จแล้ว",
     }
 ];
 

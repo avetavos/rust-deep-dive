@@ -9,6 +9,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 export const projectStructureDiagram = `
 flowchart TD
@@ -235,6 +236,126 @@ test tests::test_panic - should panic ... ok
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
+### What `assert_eq!` Prints When It Actually Fails
+
+Every example so far has passed. Here is the real output when a test genuinely fails — the exact format matters because you will be staring at it under pressure someday:
+
+```rust
+// @expect-panic
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_wrong_on_purpose() {
+        assert_eq!(add(2, 2), 5);
+    }
+}
+```
+
+```text
+running 1 test
+test tests::test_add_wrong_on_purpose ... FAILED
+
+failures:
+
+---- tests::test_add_wrong_on_purpose stdout ----
+
+thread 'tests::test_add_wrong_on_purpose' (<id>) panicked at src/main.rs:11:9:
+assertion `left == right` failed
+  left: 4
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::test_add_wrong_on_purpose
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+`assert_eq!` always labels its two sides `left`/`right` (matching the order you wrote them in the macro call), never "expected"/"actual" — a detail that is easy to misremember, and worth double-checking on the first read every time, since `left` here is `add(2, 2)` and `right` is your literal `5`.
+
+### Why `should_panic`'s `expected` Argument Matters
+
+`#[should_panic]` alone only checks that the test panics *somehow* — it says nothing about *why*. That gap lets a test pass while verifying nothing about the function it claims to test:
+
+```rust
+fn divide(a: i32, b: i32) -> i32 {
+    if b == 0 {
+        panic!("cannot divide by zero");
+    }
+    a / b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // BUG: expected is missing, so this test passes even though the panic
+    // message has nothing to do with division — it "passes for the wrong reason".
+    #[test]
+    #[should_panic]
+    fn test_divide_by_zero_no_expected() {
+        let v: Vec<i32> = Vec::new();
+        let _ = v[0]; // panics with an out-of-bounds index, NOT "cannot divide by zero"
+        let _ = divide(1, 0); // never reached
+    }
+
+    // FIXED: expected pins down which panic message is acceptable.
+    #[test]
+    #[should_panic(expected = "cannot divide by zero")]
+    fn test_divide_by_zero_expected() {
+        divide(1, 0);
+    }
+}
+```
+
+```text
+running 2 tests
+test tests::test_divide_by_zero_expected - should panic ... ok
+test tests::test_divide_by_zero_no_expected - should panic ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+Both tests report `ok`. `test_divide_by_zero_no_expected` never even reaches the call to `divide` — it panics on an out-of-bounds `Vec` index first — but `#[should_panic]` with no `expected` accepts *any* panic, so the test passes while testing nothing about `divide` at all. `#[should_panic(expected = "cannot divide by zero")]` closes that gap: the test only passes if the panic message actually contains that substring.
+
+### `#[ignore]` and `--nocapture`
+
+Mark a slow or environment-dependent test with `#[ignore]` to skip it by default; run it explicitly with `--ignored` when you want to:
+
+```rust
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[ignore] // skipped by default — run explicitly with `cargo test -- --ignored`
+    fn slow_integration_check() {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        assert!(true);
+    }
+
+    #[test]
+    fn fast_check() {
+        assert_eq!(2 + 2, 4);
+    }
+}
+```
+
+```text
+running 2 tests
+test tests::fast_check ... ok
+test tests::slow_integration_check ... ignored
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+By default, `cargo test` also **captures** every passing test's stdout and discards it — you only see output from tests that fail. Pass `-- --nocapture` to see `println!` output from passing tests too, which is invaluable while writing a new test and checking it does what you expect before trusting the assertion alone.
+
 ### Integration Tests
 
 Files under `tests/` are integration tests. They test your crate's public API as an external consumer would.
@@ -262,11 +383,36 @@ Run a specific test by name:
 cargo test test_divide
 ```
 
-Run tests with output visible:
+### Doc Tests: Examples That Are Also Tests
+
+A `///` doc comment's code example is compiled and run by `cargo test` too — this is how the standard library keeps its documentation examples honest; if an example stops compiling or its `assert_eq!` starts failing, `cargo test` fails right along with it. Doc examples are usually written as a fenced block of three backticks inside the comment; the indented style below (four spaces, no backticks) is an older but still fully supported way to mark the same kind of runnable example, used here only so this example doesn't need a code fence nested inside another code fence.
+
+```rust
+/// Adds two numbers together.
+///
+/// # Examples
+///
+///     use cargo_tests_scratch::add;
+///     assert_eq!(add(2, 3), 5);
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+```
 
 ```bash
-cargo test -- --nocapture
+cargo test --doc
 ```
+
+```text
+   Doc-tests cargo_tests_scratch
+
+running 1 test
+test src/lib.rs - add (line 5) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+```
+
+Doc tests run in a separate pass from unit and integration tests (you can see the distinct `Doc-tests` header), and each one compiles as its own tiny binary against your crate's *public* API — the same boundary integration tests in `tests/` exercise, which is why the example imports `add` with `use cargo_tests_scratch::add;` instead of relying on being inside the crate.
 
 ### Testing Async Code with tokio
 
@@ -288,60 +434,319 @@ mod tests {
 
 Add `tokio` to `[dev-dependencies]` to use `#[tokio::test]` without pulling it into your production binary if you do not need it there.
 
+### `cargo clippy`: Catching Smells rustc Doesn't
+
+`rustc` checks that your code is *valid*; `clippy` checks that it is *idiomatic*. Running it with a handful of extra lints enabled against a small file with several deliberate AI-style smells turns up real, specific warnings — not hypothetical ones:
+
+```rust
+// @skip-verify demo: illustrates multiple clippy lints together, not meant to run
+use std::sync::Mutex;
+
+async fn bad_pattern(shared: &Mutex<i32>) {
+    let guard = shared.lock().unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await; // guard is still held here
+    println!("{}", *guard);
+}
+
+fn redundant_clone_example(s: &String) -> String {
+    let t = s.clone();
+    t.clone() // clippy::redundant_clone
+}
+
+fn needless_range_loop_example(v: &[i32]) -> i32 {
+    let mut sum = 0;
+    for i in 0..v.len() {
+        sum += v[i]; // clippy::needless_range_loop
+    }
+    sum
+}
+
+fn manual_map_example(opt: Option<i32>) -> Option<i32> {
+    match opt {
+        Some(x) => Some(x + 1), // clippy::manual_map
+        None => None,
+    }
+}
+
+enum Shape {
+    Circle(f64),
+    Polygon([f64; 64]), // clippy::large_enum_variant
+}
+```
+
+```bash
+cargo clippy -- \
+  -W clippy::redundant_clone \
+  -W clippy::unwrap_used \
+  -W clippy::await_holding_lock \
+  -W clippy::needless_range_loop \
+  -W clippy::manual_map \
+  -W clippy::large_enum_variant
+```
+
+```text
+warning: this `MutexGuard` is held across an await point
+ --> src/main.rs:4:9
+  |
+4 |     let guard = shared.lock().unwrap();
+  |         ^^^^^
+  |
+  = help: consider using an async-aware `Mutex` type or ensuring the `MutexGuard` is dropped before calling `await`
+
+warning: used `unwrap()` on a `Result` value
+ --> src/main.rs:4:17
+  |
+4 |     let guard = shared.lock().unwrap();
+  |                 ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: if this value is an `Err`, it will panic
+
+warning: redundant clone
+  --> src/main.rs:11:6
+   |
+11 |     t.clone() // clippy::redundant_clone
+   |      ^^^^^^^^ help: remove this
+   |
+note: this value is dropped without further use
+
+warning: the loop variable `i` is only used to index `v`
+  --> src/main.rs:16:14
+   |
+16 |     for i in 0..v.len() {
+   |              ^^^^^^^^^^
+   |
+help: consider using an iterator
+   |
+16 -     for i in 0..v.len() {
+16 +     for <item> in &v {
+   |
+
+warning: manual implementation of `Option::map`
+  --> src/main.rs:23:5
+   |
+23 | /     match opt {
+24 | |         Some(x) => Some(x + 1), // clippy::manual_map
+25 | |         None => None,
+26 | |     }
+   | |_____^ help: try: `opt.map(|x| x + 1)`
+
+warning: large size difference between variants
+  --> src/main.rs:29:1
+   |
+29 | / enum Shape {
+30 | |     Circle(f64),
+   | |     ----------- the second-largest variant contains at least 8 bytes
+31 | |     Polygon([f64; 64]), // clippy::large_enum_variant
+   | |     ------------------ the largest variant contains at least 512 bytes
+32 | | }
+   | |_^ the entire enum is at least 520 bytes
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+```
+
+Six distinct lints, six specific fixes — none of these are style nitpicks; each one names a real cost (a lock held too long, a clone that does nothing, an `unwrap()` that can panic, an enum that wastes space on every instance). `clippy::unwrap_used` and `clippy::redundant_clone` are not in clippy's default warn set (they need the explicit `-W`, as shown) precisely because they are common enough in legitimate code that clippy doesn't want to nag by default — but turning them on deliberately in CI for a codebase written or reviewed by AI is a reasonable, cheap tripwire.
+
+### `cargo fmt --check`
+
+`cargo fmt` reformats your code to the project's canonical style; `cargo fmt --check` (the CI-friendly variant) reports what it *would* change without touching any files, and exits non-zero if anything is not already formatted:
+
+```bash
+cargo fmt --check
+```
+
+```text
+Diff in /path/to/project/src/badfmt.rs:1:
+-pub fn messy(   a:i32,b :i32)->i32{a+b}
++pub fn messy(a: i32, b: i32) -> i32 {
++    a + b
++}
+```
+
+Run this in CI (not `cargo fmt` itself, which would silently rewrite files) so a pull request with inconsistent formatting fails the build instead of drifting the codebase's style over time.
+
+### `cargo audit` and `cargo deny`: Dependency Security
+
+Neither ships with Cargo by default — both are separately installed (`cargo install cargo-audit`, `cargo install cargo-deny`) and then run as `cargo audit` / `cargo deny check`. `cargo audit` cross-references your `Cargo.lock` against the RustSec security advisory database and flags any dependency with a known vulnerability. `cargo deny` is broader: it can also enforce license allowlists, ban specific crates or crate sources, and flag duplicate versions of the same dependency in your dependency tree. Both are commonly wired into CI so a newly-disclosed vulnerability in a transitive dependency fails the build instead of shipping silently.
+
+### `rust-toolchain.toml`: Pinning the Compiler Version
+
+A `rust-toolchain.toml` file at the project root pins the exact toolchain `rustup` uses for that project, so every contributor (and CI) builds with the same compiler without needing to remember to run `rustup override set`:
+
+```toml
+[toolchain]
+channel = "1.96.1"
+components = ["clippy", "rustfmt"]
+```
+
+This is a different mechanism from the `rust-version` field in `Cargo.toml` covered above: `rust-version` documents (and lets the resolver reason about) the *minimum* supported version a published crate works with; `rust-toolchain.toml` *pins* the exact version a local checkout of this repository builds with, regardless of what else is installed on the machine.
+
+### Workspaces: Multiple Crates, One `Cargo.lock`
+
+A workspace groups multiple crates under one top-level `Cargo.toml` and one shared `Cargo.lock`, so they always build against the same dependency versions:
+
+```toml
+# Cargo.toml at the workspace root
+[workspace]
+members = ["api", "core", "cli"]
+resolver = "3"
+```
+
+Each member (`api/`, `core/`, `cli/`) keeps its own `Cargo.toml` with its own `[dependencies]`, but `cargo build`/`cargo test` from the workspace root builds and tests all of them together, and `cargo test -p core` targets just one member.
+
+### `cargo test --release`: Overflow Checks Are Off
+
+Debug builds enable arithmetic overflow checks by default; release builds do not, for performance. The same test can pass or fail depending entirely on which profile ran it:
+
+```rust
+// @skip-verify demo: shows debug-vs-release divergence, not a single runnable outcome
+pub fn will_overflow(x: u8) -> u8 {
+    x + std::hint::black_box(10) // overflows once x > 245
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_overflow() {
+        println!("result: {}", will_overflow(250));
+    }
+}
+```
+
+```text
+# cargo test --lib   (debug profile — default)
+thread 'tests::test_overflow' (<id>) panicked at src/lib.rs:2:5:
+attempt to add with overflow
+test tests::test_overflow ... FAILED
+
+# cargo test --release --lib   (release profile)
+result: 4
+test tests::test_overflow ... ok
+```
+
+In debug, `250_u8 + 10` panics with "attempt to add with overflow" — a real bug is caught immediately. In release, the same arithmetic silently wraps (`250 + 10 = 260`, which wraps to `4` in a `u8`), and the test passes despite computing a wrong answer. This is exactly why `cargo test --release` deserves a moment's suspicion when it makes a previously-failing test pass: a wrapped, silently-wrong number is a live production bug, not a fix. If wrapping is genuinely intended behavior, spell it out explicitly with `wrapping_add` instead of relying on the profile to decide for you.
+
 <Callout title="Tests run with cargo test — not in the browser runner">
 Rust tests use `#[test]` functions compiled and executed by `cargo test`. The browser Playground runs `fn main()` only — `cargo test` is not available in it. Write your test code in a local Cargo project and run `cargo test` from the terminal. Use `cargo test -- --nocapture` to see `println!` output from passing tests.
+</Callout>
+
+## Mental Model
+
+Cargo, `rustc`, and `clippy` divide labor cleanly: `rustc` (via `cargo build`/`cargo check`) answers "is this valid Rust" — memory safety, types, borrows. `clippy` answers "is this idiomatic Rust" — the same valid code, but flagged for patterns that are usually a mistake or an unnecessary cost. `cargo test` answers "does this do what I claim it does" — and that claim is only as strong as the assertions inside each test, which is why a `#[should_panic]` with no `expected`, or a test with no `assert` at all, can report `ok` while verifying nothing.
+
+## Trade-offs
+
+Unit tests (`#[cfg(test)] mod tests` inside the source file) compile fast and can reach private items, but only test one module in isolation. Integration tests (`tests/`) compile slower (each file is its own crate) and can only reach public API, but catch wiring bugs unit tests structurally cannot see. Doc tests are slowest per-example (each doc example compiles as its own tiny binary) but pay for themselves by keeping documentation from silently rotting — an example that stops working fails the build, not just looks stale.
+
+## Common Misconceptions
+
+- **"If `cargo test` says `ok`, the function is correct."** It means every assertion in every test that ran actually held. A `#[should_panic]` with no `expected`, or a test body with no `assert!`/`assert_eq!` at all, reports `ok` while verifying nothing meaningful — as the `expected` demo above shows directly.
+- **"`cargo test --release` is just a faster way to run the same tests."** It changes real behavior, not just speed: overflow checks are compiled out. A test that legitimately depends on debug-mode panic behavior (or that happens to hide a bug behind release-mode wrapping) can pass or fail differently by profile alone.
+- **"clippy warnings are just style opinions I can ignore."** Some are (naming conventions, for instance). Others — `await_holding_lock`, `large_enum_variant`, `redundant_clone` — point at a real runtime cost or hazard that happens to also be visible statically. Treat a clippy warning as a hint to go read *why* before deciding it's safe to ignore.
+
+## Reading AI-generated Code
+
+AI-generated test suites often produce a test function that runs code and prints the result, without ever actually asserting anything about it — it "looks like a test" (compiles, has a `#[test]` attribute, runs without panicking) while verifying nothing at all.
+
+<SpotTheBug code={`fn parse_config(input: &str) -> Vec<String> {
+    input.split(',').map(|s| s.trim().to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_config() {
+        let result = parse_config("a, b, c");
+        println!("{:?}", result); // looks like a test, but nothing is actually checked
+    }
+}
+`}>
+`test_parse_config` calls `parse_config` and prints the result, but there is no `assert!`, `assert_eq!`, or any other check in the function body. This test passes (`ok`) for *any* implementation of `parse_config`, including one that always returns an empty `Vec` — a regression that silently breaks the function would leave this test green. The fix is not more code, it's the assertion that was never written: `assert_eq!(result, vec!["a", "b", "c"]);`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`cargo test` reporting `ok` only means every assertion that ran actually held — a `#[should_panic]` without `expected`, a test with no `assert`, or a debug-only overflow panic hidden by `--release` can all make a broken function look tested; read what a test actually checks, not just whether it passed.
 </Callout>
 
 export const quizCargoTests = [
     {
         q: 'What does edition = "2024" in Cargo.toml control?',
         options: [
-            "The minimum Rust compiler version the crate supports",
+            "The optimisation level used for release builds",
             "The language dialect the crate compiles under — syntax and idioms, chosen per crate",
             "Which registry Cargo downloads dependencies from",
-            "The optimisation level used for release builds"
+            "The minimum Rust compiler version the crate supports"
         ],
-        answer: 1
+        answer: 1,
+        explain: "edition selects syntax/idiom rules (let chains, temporary scoping, etc.), chosen independently per crate. It is unrelated to optimisation level (that's --release) or MSRV (that's rust-version)."
     },
     {
         q: "What does #[cfg(test)] on a mod block do?",
         options: [
-            "It runs the module only in release builds",
-            "It compiles the module only when running cargo test, keeping it out of production binaries",
             "It marks the module as unsafe",
+            "It compiles the module only when running cargo test, keeping it out of production binaries",
+            "It runs the module only in release builds",
             "It disables dead-code warnings inside the module"
         ],
-        answer: 1
+        answer: 1,
+        explain: "#[cfg(test)] is a conditional-compilation attribute: the module is entirely absent from a normal cargo build/cargo run binary, and only compiled in when cargo test builds the test binary."
     },
     {
         q: "Which assertion macro checks that two values are NOT equal?",
         options: [
-            "assert!(a != b)",
-            "assert_eq!(a, b) with a negation flag",
+            "assert_not!(a, b)",
             "assert_ne!(a, b)",
-            "assert_not!(a, b)"
+            "assert_eq!(a, b) with a negation flag",
+            "assert!(a != b)"
         ],
-        answer: 2
+        answer: 1,
+        explain: "assert_ne! is the dedicated inequality assertion, with the same left/right failure-message format as assert_eq!. assert!(a != b) also works but loses that structured left/right output on failure."
+    },
+    {
+        q: "Both tests report ok here. What's actually wrong?\n```rust\n#[test]\n#[should_panic]\nfn test_divide_by_zero_no_expected() {\n    let v: Vec<i32> = Vec::new();\n    let _ = v[0]; // panics here, unrelated to division\n    let _ = divide(1, 0); // never reached\n}\n```",
+        options: [
+            "Nothing — should_panic just needs any panic, so this is correct usage",
+            "should_panic with no expected accepts any panic; this test panics on an unrelated out-of-bounds index and never actually exercises divide's zero-check at all",
+            "The test is missing #[tokio::test]",
+            "Vec<i32> cannot be indexed with [0] in a test"
+        ],
+        answer: 1,
+        explain: "should_panic(expected = \"...\") is what pins the test to the specific panic message you actually care about. Without it, a completely unrelated panic makes the test pass for the wrong reason.",
+    },
+    {
+        q: "Why can the same test pass under `cargo test` but fail (or vice versa) under `cargo test --release`?",
+        options: [
+            "cargo test --release runs a different set of tests by default",
+            "Release builds disable integer overflow checks by default, so arithmetic that panics in debug can silently wrap in release",
+            "cargo test --release doesn't support #[should_panic]",
+            "There is no real difference — this cannot happen"
+        ],
+        answer: 1,
+        explain: "Debug builds panic on overflow by default (attempt to add with overflow); release builds wrap silently for performance. A test relying on that panic — or hiding a bug behind it — behaves differently by profile alone.",
     },
     {
         q: "Where should integration tests be placed in a Cargo project?",
         options: [
-            "Inside src/ alongside the source files",
+            "In a separate crate declared in Cargo.toml",
             "Inside a tests/ directory at the project root",
-            "Inside #[cfg(test)] mod blocks in lib.rs",
-            "In a separate crate declared in Cargo.toml"
+            "Inside src/ alongside the source files",
+            "Inside #[cfg(test)] mod blocks in lib.rs"
         ],
-        answer: 1
+        answer: 1,
+        explain: "Each file directly under tests/ is compiled as its own separate crate that depends on your library's public API — the same boundary an external consumer of your crate would see."
     },
     {
         q: "What attribute do you use to test an async function with tokio?",
         options: [
-            "#[test]",
-            "#[async_test]",
+            "#[cfg(async)]",
             "#[tokio::test]",
-            "#[cfg(async)]"
+            "#[async_test]",
+            "#[test]"
         ],
-        answer: 2
+        answer: 1,
+        explain: "#[tokio::test] wraps the test body in a tokio runtime the same way #[tokio::main] does for a real binary, so an async fn test body can .await directly."
     }
 ];
 

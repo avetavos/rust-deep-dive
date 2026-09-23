@@ -5,9 +5,12 @@ sidebar:
   order: 4
 ---
 
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Async/Await and Futures
 
@@ -45,6 +48,77 @@ let result = fut.await;
 ```
 
 This lazy evaluation is why Rust async is zero-cost: futures that are never awaited never run.
+
+### Proving It: A Tiny Executor With No Crates at All
+
+`tokio` is an external crate, but the `Future` trait, `Pin`, and `Waker` are all in `std` — you can build the world's simplest executor with nothing else, and watch laziness happen with your own `println!` calls instead of taking it on faith:
+
+export const blockOnCode = `use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+// A waker that does nothing when woken. Good enough for a future that
+// finishes the first time it is polled — no real async I/O involved.
+fn noop_waker() -> Waker {
+    fn no_op(_: *const ()) {}
+    fn clone(_: *const ()) -> RawWaker {
+        raw_waker()
+    }
+    fn raw_waker() -> RawWaker {
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+    unsafe { Waker::from_raw(raw_waker()) }
+}
+
+// The smallest possible executor: poll the future in a loop until it is Ready.
+fn block_on<F: Future>(mut future: F) -> F::Output {
+    let waker = noop_waker();
+    let mut cx = Context::from_waker(&waker);
+    // SAFETY: future is a local variable that is never moved again after
+    // this point, so pinning it on the stack is sound.
+    let mut future = unsafe { Pin::new_unchecked(&mut future) };
+    loop {
+        match future.as_mut().poll(&mut cx) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => continue, // no real waker source, so just poll again
+        }
+    }
+}
+
+async fn greet(name: &str) -> String {
+    println!("greet body is running for {name}");
+    format!("Hello, {name}!")
+}
+
+fn main() {
+    println!("before calling greet()");
+    let fut = greet("Rust"); // nothing has run yet — this only builds a Future
+    println!("after calling greet(), before polling");
+    let message = block_on(fut); // this is what actually runs the body
+    println!("{message}");
+}`;
+
+<Playground code={blockOnCode} />
+
+```text
+before calling greet()
+after calling greet(), before polling
+greet body is running for Rust
+Hello, Rust!
+```
+
+Notice the order: `"greet body is running"` prints *after* `"before polling"`, not when `greet("Rust")` was called. Calling an `async fn` only builds a value describing the work — the body does not run a single line until something polls it, which is exactly what `block_on` (and `tokio`, using a real, efficient waker instead of this no-op one) does for you.
+
+<Mermaid code={`flowchart TD
+    A["async fn call() returns a Future — nothing has run yet"] --> B["executor calls poll()"]
+    B --> C{"body reaches an .await on an unfinished future?"}
+    C -->|"no — runs to completion"| D["Poll::Ready(value)"]
+    C -->|"yes"| E["Poll::Pending — state machine suspends here"]
+    E --> F["waker fires when the awaited future can progress"]
+    F --> B`} title="What .await desugars to: a poll loop over a state machine" />
+
+Each `.await` point is a place the compiler can suspend the generated state machine and return `Poll::Pending`; the executor's job (`tokio`'s real one, or this lesson's toy `block_on`) is to keep calling `poll` again whenever there is a chance the future could make progress.
 
 ### Running Tasks Concurrently with tokio::join!
 
@@ -94,6 +168,118 @@ async fn main() {
 }
 ```
 
+### What the Compiler Says: A Spawned Future Must Be `Send`
+
+`tokio::spawn` (like `std::thread::spawn`) may run its future on a different worker thread than the one that created it, so the future — and everything it holds across an `.await` point — must be `Send`. Holding a `Rc<T>` across an `.await` breaks that:
+
+```rust
+// @skip-verify crate: tokio
+use std::rc::Rc;
+
+async fn uses_rc() {
+    let shared = Rc::new(42);
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    println!("{shared}");
+}
+
+#[tokio::main]
+async fn main() {
+    tokio::spawn(uses_rc()).await.unwrap();
+}
+```
+
+```text
+error: future cannot be sent between threads safely
+   --> src/main.rs:11:18
+    |
+ 11 |     tokio::spawn(uses_rc()).await.unwrap();
+    |                  ^^^^^^^^^ future returned by `uses_rc` is not `Send`
+    |
+    = help: within `impl Future<Output = ()>`, the trait `Send` is not implemented for `Rc<i32>`
+note: future is not `Send` as this value is used across an await
+   --> src/main.rs:5:61
+    |
+  4 |     let shared = Rc::new(42);
+    |         ------ has type `Rc<i32>` which is not `Send`
+  5 |     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    |                                                             ^^^^^ await occurs here, with `shared` maybe used later
+note: required by a bound in `tokio::spawn`
+   --> tokio-1.53.1/src/task/spawn.rs:176:21
+    |
+174 |     pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
+    |            ----- required by a bound in this function
+175 |     where
+176 |         F: Future + Send + 'static,
+    |                     ^^^^ required by this bound in `spawn`
+```
+
+Note the diagnostic's own phrasing — `Rc<i32>` is "used across an await", meaning it is still alive on both sides of a suspend point. Swap `Rc::new` for `Arc::new` and the future becomes `Send` again, exactly as in the threads lesson. This is the same `Send` bound from `std::thread::spawn`, just enforced against the state a suspended async fn's generated struct has to carry between polls instead of a closure's captures.
+
+### Two Async-Specific Smells
+
+**A synchronous `Mutex` held across `.await`** looks fine to the borrow checker but is a real liveness hazard: the executor can suspend your task mid-`.await` while still holding the guard, and if that executor happens to run another task on the *same* thread that also wants the lock, you get a deadlock the type system cannot see (the same class of bug as the two-lock deadlock in the threads lesson, but now with only one lock).
+
+```rust
+// @skip-verify crate: tokio
+use std::sync::Mutex;
+
+async fn bad_pattern(shared: &Mutex<i32>) {
+    let guard = shared.lock().unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await; // guard is still held here
+    println!("{}", *guard);
+}
+```
+
+```text
+warning: this `MutexGuard` is held across an await point
+ --> src/main.rs:4:9
+  |
+4 |     let guard = shared.lock().unwrap();
+  |         ^^^^^
+  |
+  = help: consider using an async-aware `Mutex` type or ensuring the `MutexGuard` is dropped before calling `await`
+  = note: `#[warn(clippy::await_holding_lock)]` on by default
+```
+
+The fix: drop the guard before the `.await` (compute what you need, then release the lock), or use an async-aware lock like `tokio::sync::Mutex` if you genuinely need to hold it across a suspend point.
+
+**`std::thread::sleep` inside an `async fn`** blocks the entire OS thread the executor is using — including every other task scheduled on that thread — because it is a synchronous call with no `.await`, so the executor gets no chance to run anything else while it waits:
+
+```rust
+// @skip-verify crate: tokio
+async fn bad_delay() {
+    std::thread::sleep(std::time::Duration::from_millis(100)); // blocks the whole executor thread
+    println!("done");
+}
+
+async fn good_delay() {
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await; // yields control back to the executor
+    println!("done");
+}
+```
+
+`tokio::time::sleep(...).await` yields control back to the executor for the duration, letting other tasks run on that thread in the meantime. If the delay is actually unavoidable CPU-bound work rather than a sleep (e.g., a heavy computation), the right tool is `tokio::task::spawn_blocking`, which moves the blocking work onto a dedicated thread pool reserved for exactly this purpose, keeping the async executor's threads free.
+
+### `async fn` in Traits
+
+Since Rust 1.75, you can write `async fn` directly inside a trait definition — no `async-trait` crate needed for the common case:
+
+```rust
+trait Greeter {
+    async fn greet(&self, name: &str) -> String;
+}
+
+struct English;
+
+impl Greeter for English {
+    async fn greet(&self, name: &str) -> String {
+        format!("Hello, {name}!")
+    }
+}
+```
+
+This compiles and runs on plain `std` — it does not even need `tokio` for a call site that just `.await`s it directly. The one real limitation: you cannot make a trait with `async fn` into a `dyn Trait` object today (each implementation's future is a distinct, differently-sized anonymous type, and `dyn` needs one fixed size) — for a trait object you still need the `async-trait` crate's `Box<dyn Future<...>>`-based desugaring, or to write the `-> impl Future<Output = ...>` signature by hand.
+
 ### async vs Threads: When to Use Which
 
 | Criterion | OS Threads (`std::thread`) | Async (`tokio`) |
@@ -133,46 +319,107 @@ async fn main() {
 The `async`/`.await` syntax is built into Rust, but executing futures requires an **executor runtime**. The standard library does not include one. The most widely used executor is `tokio`. Add it with `cargo add tokio --features full` and annotate your entry point with `#[tokio::main]`. This code is **not runnable in the browser Playground** — run it in a local Cargo project.
 </Callout>
 
+## Mental Model
+
+An `async fn` compiles to an anonymous struct implementing `Future` — one field per value that needs to survive across an `.await` point, and a `poll` method that is a state machine jumping to wherever it last returned `Pending`. `.await` is not a keyword that "waits" in the thread-blocking sense; it is closer to `return Poll::Pending` with a bookmark, handed back up to whatever called `poll`. Nothing runs "in the background" on its own — an executor (`tokio`, or this lesson's toy `block_on`) must keep calling `poll` for any progress to happen at all.
+
+## Trade-offs
+
+Futures cost effectively nothing until polled — you can build and store thousands without any thread or memory overhead beyond the state machine's own fields. But that laziness means correctness now depends on *something* actually polling every future you care about; an `async fn` call whose result you never `.await` and never pass to `tokio::spawn` simply never runs, silently, with no error. Threads guarantee progress the moment you spawn them, at real OS cost; futures guarantee nothing until an executor drives them, at near-zero cost.
+
+## Common Misconceptions
+
+- **"`.await` blocks the current thread while it waits."** It suspends the current *task*, not the thread — the executor is free to run other tasks on that same OS thread while this one is pending. `std::thread::sleep` genuinely blocks the thread; `tokio::time::sleep(...).await` does not.
+- **"Calling an async fn starts its work immediately, like a regular function."** Calling `greet("Rust")` only constructs a `Future` value — as the `block_on` demo above shows directly, the body's `println!` does not run until something polls it.
+- **"tokio and async/await are the same thing."** `async`/`.await` and the `Future` trait are part of the language and `std`. `tokio` is one (widely used) executor among several (`async-std`, `smol`) that knows how to actually run those futures.
+
+## Reading AI-generated Code
+
+AI-generated async Rust frequently reaches for `std::sync::Mutex` (the synchronous one, from the threads lesson) inside `async fn` bodies and holds the guard across an `.await`, because the code "looks the same" as the thread-based examples it was trained on — without noticing the executor-level liveness hazard that introduces.
+
+<SpotTheBug code={`use std::sync::Mutex;
+use std::time::Duration;
+
+async fn record_event(log: &Mutex<Vec<String>>, event: String) {
+    let mut guard = log.lock().unwrap();
+    guard.push(event);
+    tokio::time::sleep(Duration::from_millis(10)).await; // simulate flushing to disk
+    println!("logged, {} entries so far", guard.len());
+}
+`}>
+The `MutexGuard` from `log.lock()` is still alive across the `tokio::time::sleep(...).await` — the executor can suspend this task right there and run a different task on the same thread that also wants `log`'s lock, and now that task is stuck waiting for a guard that will not be released until this task is polled again. The fix: do the `push` and read `guard.len()` before the `.await`, dropping the guard first — or switch to an async-aware lock (`tokio::sync::Mutex`) if the lock genuinely must be held across the suspend point.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`async fn` is lazy by construction — nothing runs until an executor polls it — and every suspend point (`.await`) is a place your task might resume on a different thread, which is exactly why a synchronous `Mutex` guard or a `std::thread::sleep` held across one is a hazard that would be perfectly fine in ordinary, non-async code.
+</Callout>
+
 export const quizAsync = [
     {
         q: "What does an async fn return in Rust?",
         options: [
-            "A Future that resolves to the return type when awaited",
             "The computed value immediately",
+            "A Future that resolves to the return type when awaited",
             "A thread handle",
             "A Result wrapping the return type"
         ],
-        answer: 0
+        answer: 1,
+        explain: "Calling an async fn builds and returns a value implementing Future — it does not run the body. The body only executes once something polls (awaits) that Future."
     },
     {
         q: "Why does Rust require an external executor like tokio to run async code?",
         options: [
             "Because async is only available on nightly Rust",
-            "Because tokio provides the async/await syntax",
             "Because the standard library does not include a runtime — futures are lazy and need something to poll them",
+            "Because tokio provides the async/await syntax",
             "Because async fn cannot be called from a regular fn without tokio"
         ],
-        answer: 2
+        answer: 1,
+        explain: "async/.await and the Future trait are part of std, but std deliberately ships no executor. Something has to call poll() repeatedly to drive a future to completion — that's the executor's job."
     },
     {
         q: "What is the difference between tokio::join! and sequential awaits?",
         options: [
-            "join! runs tasks on separate OS threads; sequential awaits do not",
             "There is no difference — both are equivalent",
+            "join! drives all futures concurrently; sequential awaits run one at a time",
             "join! only works with futures that implement Copy",
-            "join! drives all futures concurrently; sequential awaits run one at a time"
+            "join! runs tasks on separate OS threads; sequential awaits do not"
         ],
-        answer: 3
+        answer: 1,
+        explain: "join! polls all its futures on the same task, advancing whichever one can make progress at each poll, rather than fully finishing one before starting the next.",
+    },
+    {
+        q: "What does the block_on demo prove by printing \"after calling greet(), before polling\" before \"greet body is running\"?",
+        options: [
+            "That println! is unreliable in async code",
+            "That greet(\"Rust\") only builds a Future — the function body does not execute until block_on actually polls it",
+            "That block_on runs the future on a separate thread",
+            "That async functions execute top-to-bottom immediately when called"
+        ],
+        answer: 1,
+        explain: "This is the laziness proof: constructing the Future (calling greet) and running its body (polling it) are two separate, observably ordered steps.",
+    },
+    {
+        q: "Why is holding a std::sync::Mutex guard across an .await point a smell?",
+        options: [
+            "It is always a compile error",
+            "The executor can suspend the task while the guard is held, so another task on the same thread waiting for that lock can deadlock",
+            "std::sync::Mutex cannot be used in async code at all",
+            "It causes a memory leak"
+        ],
+        answer: 1,
+        explain: "This compiles fine — the borrow checker sees nothing wrong. It's a runtime liveness hazard the clippy::await_holding_lock lint exists specifically to catch.",
     },
     {
         q: "When should you use spawn_blocking instead of a regular tokio::spawn?",
         options: [
-            "When the task needs to read from a file",
-            "When you need more than 8 concurrent tasks",
+            "spawn_blocking is deprecated — never use it",
             "When the task performs heavy CPU-bound work that would block the async executor thread",
-            "spawn_blocking is deprecated — never use it"
+            "When you need more than 8 concurrent tasks",
+            "When the task needs to read from a file"
         ],
-        answer: 2
+        answer: 1,
+        explain: "spawn_blocking moves work onto a dedicated thread pool meant for blocking/CPU-heavy work, so it doesn't starve the async executor's own worker threads of the ability to poll other tasks."
     }
 ];
 

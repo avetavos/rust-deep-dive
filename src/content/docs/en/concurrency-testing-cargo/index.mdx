@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Fearless Concurrency — What This Module Covers
 
@@ -37,6 +39,13 @@ In most languages, data races are a runtime problem. You write the code, run it,
 - A type is `Sync` if it is safe to share a reference across threads.
 - The compiler rejects code that violates these contracts — no sanitizers, no runtime checks needed.
 
+<Mermaid code={`flowchart TD
+    A["What kind of work am I scheduling?"] --> B{"CPU-bound, or I/O-bound?"}
+    B -->|CPU-bound| C["std::thread — real OS thread, ~8 MB stack"]
+    B -->|I/O-bound, many at once| D["async/.await — lightweight task, needs an executor"]
+    C --> E["Share state with Arc + Mutex/RwLock"]
+    D --> F["Share state the same way, but never hold a sync lock across .await"]`} title="Choosing between OS threads and async tasks" />
+
 ### Quick Preview
 
 Here is the smallest meaningful concurrent Rust program — spawn a thread, wait for it, continue in main.
@@ -57,36 +66,139 @@ fn main() {
 The `Send` and `Sync` marker traits are the mechanism behind fearless concurrency. `Send` means a value can be moved to another thread; `Sync` means a shared reference to the value can be sent. Types like `Rc<T>` and raw pointers are neither, so the compiler stops you from sharing them across threads.
 </Callout>
 
+## What the Compiler Says: Using a Value After It Was Moved Into a Thread
+
+`thread::spawn` requires its closure to own everything it captures (via `move`), because the spawned thread might still be running after the function that created it returns. That ownership transfer is real — the value is genuinely gone from the caller, not just borrowed:
+
+```rust
+// @expect-error E0382
+use std::thread;
+
+fn main() {
+    let data = vec![1, 2, 3];
+    let handle = thread::spawn(move || {
+        println!("sum from thread: {}", data.iter().sum::<i32>());
+    });
+    handle.join().unwrap();
+    println!("data length: {}", data.len()); // ERROR: data was moved into the thread above
+}
+```
+
+```text
+error[E0382]: borrow of moved value: `data`
+ --> src/main.rs:9:33
+  |
+4 |     let data = vec![1, 2, 3];
+  |         ---- move occurs because `data` has type `Vec<i32>`, which does not implement the `Copy` trait
+5 |     let handle = thread::spawn(move || {
+  |                                ------- value moved into closure here
+6 |         println!("sum from thread: {}", data.iter().sum::<i32>());
+  |                                          ---- variable moved due to use in closure
+...
+9 |     println!("data length: {}", data.len());
+  |                                  ^^^^ value borrowed here after move
+  |
+help: consider cloning the value before moving it into the closure
+  |
+5 ~     let value = data.clone();
+6 ~     let handle = thread::spawn(move || {
+7 ~         println!("sum from thread: {}", value.iter().sum::<i32>());
+  |
+```
+
+The compiler's own suggestion is `.clone()` — and that is a legitimate fix here, since `main` genuinely needs `data` in two places. But treat that suggestion as a last resort, not a reflex: the better fix is usually to have the thread compute and return the value `main` needs (via `JoinHandle::join()`) instead of a second copy existing on both sides.
+
+## Mental Model
+
+Every value in Rust has exactly one owner at a time, and `thread::spawn`'s closure becomes a new owner the moment you write `move`. Nothing "magic" happens at the thread boundary — it is the same move-semantics rule that governs passing a `String` to a function, just enforced against the extra constraint that the closure (and everything it captures) must be `'static` and `Send`, because the compiler cannot know when the spawned thread will finish relative to the rest of the program.
+
+## Trade-offs
+
+OS threads give you true parallelism and a simple mental model (each thread just runs), at the cost of a real OS stack (~8 MB) and a hard ceiling around hundreds to low thousands of threads. `async`/`.await` tasks are ~cheap — you can have thousands to millions of them — but every one of them needs an executor like `tokio` to actually run, and CPU-bound work on that executor blocks every other task sharing its thread.
+
+## Common Misconceptions
+
+- **"Fearless concurrency means Rust prevents all concurrency bugs."** It prevents *data races* (two threads touching the same memory unsynchronized, at least one write) at compile time. It does not prevent deadlocks, logic races, or lock poisoning after a panic — those are still your responsibility, covered later in this module.
+- **"`Send` and `Sync` are things you implement yourself for most types."** Almost every type gets both automatically (they are auto traits) as long as every field is `Send`/`Sync`. You only think about them when the compiler tells you a bound is *not* satisfied, usually because of `Rc<T>`, `RefCell<T>`, or a raw pointer somewhere inside.
+- **"async is always faster than threads."** For CPU-bound work, `async` adds overhead (polling, state-machine allocation) with no benefit — threads or `rayon`-style parallelism are the right tool there.
+
+## Reading AI-generated Code
+
+AI-generated concurrent Rust reaches for `thread::spawn` and pushes the returned `JoinHandle` into a `Vec`, but sometimes drops the handle immediately (or never collects the `Vec` at all) because the surrounding code "looked done" without it.
+
+<SpotTheBug code={`use std::thread;
+
+fn process_all(items: Vec<i32>) {
+    for item in items {
+        thread::spawn(move || {
+            println!("processed: {}", item * 2);
+        });
+    }
+    println!("all items processed");
+}
+`}>
+`thread::spawn` returns a `JoinHandle`, and this code never stores it — the handle is dropped immediately, which detaches the thread but does **not** wait for it. `process_all` can print `"all items processed"` and return before any spawned thread has run at all; if `main` exits right after, the process can terminate mid-work with some (or all) of the `println!("processed: ...")` lines never printed. The fix: collect every `JoinHandle` into a `Vec` and call `.join().unwrap()` on each one before returning.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Rust turns cross-thread data races into compile errors via `Send`/`Sync` and ownership, but it cannot catch a forgotten `.join()`, a deadlock, or a poisoned lock for you — those are the topics the rest of this module builds toward.
+</Callout>
+
 export const quizIndex = [
     {
         q: "What does it mean for a type to be Send in Rust?",
         options: [
-            "It can be serialized to JSON",
+            "It can be copied without a clone",
             "It can be moved safely to another thread",
-            "It can be shared via a network socket",
-            "It can be copied without a clone"
+            "It can be serialized to JSON",
+            "It can be shared via a network socket"
         ],
-        answer: 1
+        answer: 1,
+        explain: "Send means ownership of a value can be transferred to another thread without causing a data race. It says nothing about serialization or networking."
     },
     {
         q: "Which standard library type is used to share mutable state safely between threads?",
         options: [
+            "Cell<T>",
             "Rc<RefCell<T>>",
-            "Box<T>",
             "Arc<Mutex<T>>",
-            "Cell<T>"
+            "Box<T>"
         ],
-        answer: 2
+        answer: 2,
+        explain: "Arc gives multiple threads shared, atomically-reference-counted ownership; Mutex gives exclusive access to the value inside. Rc and RefCell are explicitly !Send/not thread-safe."
     },
     {
         q: "When should you prefer async/await over OS threads?",
         options: [
-            "For CPU-intensive number crunching",
+            "Async/await is always slower than threads",
             "For I/O-bound tasks with many concurrent lightweight operations",
             "When you need more than 8 threads",
-            "Async/await is always slower than threads"
+            "For CPU-intensive number crunching"
         ],
-        answer: 1
+        answer: 1,
+        explain: "Async tasks are cheap to create and scale to thousands or millions of concurrent I/O waits; CPU-bound work is better served by OS threads (or spawn_blocking from within async)."
+    },
+    {
+        q: "What happens when this compiles and runs?\n```rust\nuse std::thread;\nfn main() {\n    let data = vec![1, 2, 3];\n    let h = thread::spawn(move || {\n        println!(\"{}\", data.len());\n    });\n    h.join().unwrap();\n    println!(\"{}\", data.len());\n}\n```",
+        options: [
+            "It prints 3 twice",
+            "It fails to compile: error[E0382], data was moved into the closure",
+            "It prints 3 then panics at runtime",
+            "It compiles but data.len() after join() returns 0"
+        ],
+        answer: 1,
+        explain: "move transfers ownership of data into the closure. main no longer owns it, so the second data.len() after join() is a compile-time E0382, not a runtime issue.",
+    },
+    {
+        q: "In the SpotTheBug example, why can \"all items processed\" print before any spawned thread finishes?",
+        options: [
+            "println! is asynchronous by default",
+            "thread::spawn blocks until the thread finishes, so this cannot happen",
+            "The JoinHandle returned by thread::spawn is dropped immediately instead of joined, so nothing waits for the threads",
+            "process_all needs #[tokio::main] to run threads correctly"
+        ],
+        answer: 2,
+        explain: "Dropping a JoinHandle detaches the thread rather than waiting for it. Without collecting and joining every handle, the calling code has no guarantee the spawned work has completed.",
     }
 ];
 

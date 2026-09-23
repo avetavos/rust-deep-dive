@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Spawning Threads with `std::thread`
 
@@ -90,6 +92,39 @@ help: to force the closure to take ownership of `message` (and any other referen
   |                                ++++
 ```
 
+### `thread::scope`: Borrowing Without `Arc`
+
+`thread::spawn` requires `'static` because nothing stops the spawned thread from outliving the function that created it. `thread::scope` gives the compiler a stronger guarantee instead: every thread spawned inside the scope is joined automatically before `scope` returns, so borrowing local, non-`'static` data is sound — no `Arc`, no cloning, no `move` of ownership at all.
+
+```rust
+use std::thread;
+
+fn main() {
+    let numbers = vec![1, 2, 3, 4, 5];
+
+    thread::scope(|s| {
+        s.spawn(|| {
+            let sum: i32 = numbers.iter().sum();
+            println!("sum: {sum}");
+        });
+        s.spawn(|| {
+            let max = numbers.iter().max().unwrap();
+            println!("max: {max}");
+        });
+    }); // both threads are joined here, automatically
+
+    println!("numbers is still usable: {:?}", numbers);
+}
+```
+
+```text
+sum: 15
+max: 5
+numbers is still usable: [1, 2, 3, 4, 5]
+```
+
+Reach for `thread::scope` whenever the threads only need to live as long as one function call — it is strictly less ceremony than `Arc<Mutex<T>>` and gives the same borrow-checker guarantees you already trust for single-threaded code.
+
 ### Sharing State with `Arc<Mutex<T>>`
 
 To share mutable data between multiple threads, wrap it in `Arc<Mutex<T>>`:
@@ -124,6 +159,46 @@ fn main() {
 }
 ```
 
+### Lock Poisoning
+
+`lock().unwrap()` is not just a lazy shortcut — `lock()` returns a `Result`, and it is an `Err` in exactly one situation: another thread panicked while holding the same lock. When that happens, the `Mutex` is marked **poisoned**, because the panicking thread might have left the protected data in a half-updated, inconsistent state.
+
+```rust
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn main() {
+    let data = Arc::new(Mutex::new(vec![1, 2, 3]));
+
+    let d = Arc::clone(&data);
+    let handle = thread::spawn(move || {
+        let mut guard = d.lock().unwrap();
+        guard.push(4);
+        panic!("worker thread panics while holding the lock");
+    });
+
+    let _ = handle.join(); // Err — the panic already printed to stderr
+
+    match data.lock() {
+        Ok(_) => println!("lock was not poisoned"),
+        Err(poisoned) => {
+            // The data is still there — into_inner() recovers it despite poisoning.
+            let guard = poisoned.into_inner();
+            println!("recovered data despite poisoning: {:?}", guard);
+        }
+    }
+}
+```
+
+```text
+thread '<unnamed>' (<id>) panicked at src/main.rs:11:9:
+worker thread panics while holding the lock
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+recovered data despite poisoning: [1, 2, 3, 4]
+```
+
+Every subsequent `.lock()` on this `Mutex` returns `Err` forever — poisoning does not clear itself. `PoisonError::into_inner()` lets you recover the guard anyway (the data is not corrupted here; `push` completed before the `panic!`), which is the right call when you know the invariant still holds. Blindly calling `.unwrap()` on every `lock()` — as almost every example in this lesson has done so far, for brevity — means a single panicked worker thread turns every future `.lock().unwrap()` call anywhere in the program into a fresh panic.
+
 export const ifLetScopeCode = `use std::sync::RwLock;
 
 fn ensure_initialized(value: &RwLock<Option<bool>>) {
@@ -154,6 +229,42 @@ A lock guard is a temporary value, and the 2024 edition changed when temporaries
 <Playground code={ifLetScopeCode} />
 
 It prints `initialized`, then `already set to true`. Compiled on `edition = "2021"` the same program hangs on the first call. If you ever want the old scoping back, write the condition as a `match` — `match` still holds its temporaries for the whole expression.
+
+### `std::sync::atomic`: Skipping the Lock Entirely
+
+A `Mutex<i32>` is overkill for something as simple as a shared counter — every increment pays for a full lock/unlock cycle. `std::sync::atomic` types perform the increment as one indivisible CPU instruction, with no lock, no `Result`, and no poisoning to think about:
+
+```rust
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Arc;
+use std::thread;
+
+fn main() {
+    let counter = Arc::new(AtomicI32::new(0));
+    let mut handles = Vec::new();
+
+    for _ in 0..4 {
+        let counter = Arc::clone(&counter);
+        handles.push(thread::spawn(move || {
+            for _ in 0..1000 {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    println!("Final count: {}", counter.load(Ordering::SeqCst));
+}
+```
+
+```text
+Final count: 4000
+```
+
+Same result as the `Arc<Mutex<i32>>` version above, no lock in sight. `Ordering::SeqCst` (sequentially consistent) is the easiest ordering to reason about and a safe default; weaker orderings (`Relaxed`, `Acquire`/`Release`) exist for when profiling shows the extra synchronization actually costs something. Reach for an atomic when the shared state really is one primitive number or flag — the moment you need to update *two* related values together, you need a `Mutex` (or `RwLock`) to make that update atomic as a whole.
 
 ### Collecting Results from Multiple Threads
 
@@ -224,52 +335,250 @@ error[E0277]: `Rc<i32>` cannot be sent between threads safely
     = help: within `{closure@src/main.rs:6:32: 6:39}`, the trait `Send` is not implemented for `Rc<i32>`
 ```
 
-Swapping `Rc::new` for `Arc::new` fixes it — `Arc<i32>` is `Send`, so the closure captures a type that is safe to move across the thread boundary.
+Swapping `Rc::new` for `Arc::new` fixes it — `Arc<i32>` is `Send`, so the closure captures a type that is safe to move across the thread boundary. In one sentence: `Rc<T>` is `!Send` because its reference count is a plain `Cell<usize>` increment/decrement with no synchronization — two threads racing on it would corrupt the count itself, so the compiler forbids it outright rather than risk that race.
+
+### A Data Race Is a Compile Error, Even with `thread::scope`
+
+`thread::scope` removes the `'static` requirement, but it does not remove the borrow-checker's exclusivity rule: two scoped threads cannot both hold a mutable borrow of the same variable at the same time, for exactly the same reason two `&mut` references cannot coexist in single-threaded code.
+
+```rust
+// @expect-error E0499
+use std::thread;
+
+fn main() {
+    let mut counter = 0;
+
+    thread::scope(|s| {
+        s.spawn(|| {
+            counter += 1; // first mutable borrow
+        });
+        s.spawn(|| {
+            counter += 1; // ERROR: second mutable borrow of counter at the same time
+        });
+    });
+
+    println!("{counter}");
+}
+```
+
+```text
+error[E0499]: cannot borrow `counter` as mutable more than once at a time
+   --> src/main.rs:11:17
+    |
+  7 |       thread::scope(|s| {
+    |                      - has type `&'1 Scope<'1, '_>`
+  8 |           s.spawn(|| {
+    |           -       -- first mutable borrow occurs here
+    |  _________|
+    | |
+  9 | |             counter += 1; // first mutable borrow
+    | |             ------- first borrow occurs due to use of `counter` in closure
+ 10 | |         });
+    | |__________- argument requires that `counter` is borrowed for `'1`
+ 11 |           s.spawn(|| {
+    |                   ^^ second mutable borrow occurs here
+ 12 |               counter += 1; // ERROR: second mutable borrow of counter at the same time
+    |               ------- second borrow occurs due to use of `counter` in closure
+    |
+note: requirement that the value outlives `'1` introduced here
+   --> library/std/src/thread/scoped.rs:203:35
+    |
+203 |         F: FnOnce() -> T + Send + 'scope,
+    |                                   ^^^^^^
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0499`.
+```
+
+This is the whole point of "fearless concurrency" in one diagnostic: the exact bug that would be a silent data race (two threads incrementing `counter` with no synchronization, losing updates) in C or Go never produces a running binary in Rust at all. Fix it the same way you would fix two conflicting `&mut` borrows in single-threaded code — synchronize with a `Mutex`/`AtomicI32`, or restructure so each thread owns a disjoint piece of the data.
+
+### A Deadlock Is Not a Compile Error
+
+The borrow checker only catches conflicts the type system can see — it cannot see *when*, at runtime, two threads will each be waiting on a lock the other one holds. Locking two mutexes in inconsistent order across threads is the classic deadlock:
+
+<Mermaid code={`sequenceDiagram
+    participant T1 as Thread 1
+    participant A as lock_a
+    participant B as lock_b
+    participant T2 as Thread 2
+    T1->>A: lock "A"
+    T2->>B: lock "B"
+    T1->>B: wants "B" — blocked, T2 holds it
+    T2->>A: wants "A" — blocked, T1 holds it
+    Note over T1,T2: Neither thread can proceed — deadlock`} title="Two threads locking in opposite order deadlock" />
+
+```rust
+// @no-run
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
+fn main() {
+    let lock_a = Arc::new(Mutex::new(0));
+    let lock_b = Arc::new(Mutex::new(0));
+
+    let (a1, b1) = (Arc::clone(&lock_a), Arc::clone(&lock_b));
+    let t1 = thread::spawn(move || {
+        let _g1 = a1.lock().unwrap();
+        thread::sleep(Duration::from_millis(50)); // give t2 time to take lock_b
+        let _g2 = b1.lock().unwrap(); // waits for t2 to release lock_b — forever
+        println!("t1 acquired both locks");
+    });
+
+    let (a2, b2) = (Arc::clone(&lock_a), Arc::clone(&lock_b));
+    let t2 = thread::spawn(move || {
+        let _g1 = b2.lock().unwrap();
+        thread::sleep(Duration::from_millis(50)); // give t1 time to take lock_a
+        let _g2 = a2.lock().unwrap(); // waits for t1 to release lock_a — deadlock
+        println!("t2 acquired both locks");
+    });
+
+    t1.join().unwrap();
+    t2.join().unwrap();
+    // This program compiles cleanly and then hangs forever — neither thread
+    // ever prints, and the process never exits.
+}
+```
+
+`t1` takes `lock_a` then wants `lock_b`; `t2` takes `lock_b` then wants `lock_a`. Each thread sleeps just long enough to guarantee the other one has already taken its first lock, so both threads end up waiting for a lock the other is holding — forever. The fix is a discipline the compiler cannot enforce for you: **always acquire multiple locks in the same global order everywhere in the program** (e.g., always `lock_a` before `lock_b`). With a consistent order, one thread always wins the race for the first lock and the second thread simply waits its turn instead of deadlocking.
+
+### How Many Threads Should I Spawn?
+
+`std::thread::available_parallelism()` reports how many threads can plausibly run at once on the current machine (roughly, the number of CPU cores):
+
+```rust
+use std::thread::available_parallelism;
+
+fn main() {
+    let n = available_parallelism().map(|p| p.get()).unwrap_or(1);
+    println!("available parallelism is at least 1: {}", n >= 1);
+}
+```
+
+```text
+available parallelism is at least 1: true
+```
+
+Spawning far more OS threads than `available_parallelism()` reports does not add throughput for CPU-bound work — it adds context-switching overhead. Use it (or a thread-pool crate that already does) to size a worker pool instead of guessing a fixed number.
 
 <Callout title="Send and Sync make data races a compile error">
 Rust's type system enforces thread safety through the `Send` and `Sync` marker traits. `Arc<Mutex<T>>` is `Send` (you can move it to another thread) and `Sync` (you can share a reference to it across threads). If you try to share a `Rc<T>` or `RefCell<T>` across threads, the compiler rejects the code with a clear error — no sanitizers needed, no runtime panics from data races.
+</Callout>
+
+## Mental Model
+
+Every synchronization primitive in this lesson is really answering the same question the borrow checker already asks in single-threaded code — "who is allowed to touch this data right now?" — just enforced across threads instead of within one function. `Arc` answers "who owns it" (everyone, via shared, reference-counted ownership). `Mutex`/`RwLock` answer "who can touch it *right now*" (whoever holds the guard — the same exclusivity as `&mut T`, checked at runtime instead of compile time). `Send`/`Sync` answer "is it even legal to hand this to another thread at all" — checked at compile time, before any of the runtime machinery runs.
+
+## Trade-offs
+
+`thread::scope` beats `Arc<Mutex<T>>` whenever the threads' lifetime matches one function call — less code, no heap allocation for the `Arc`, no lock. `Arc<Mutex<T>>` is what you reach for when threads (or the data itself) need to outlive the function that spawned them. Atomics beat `Mutex` for a single primitive value — no lock, no poisoning — but stop being an option the moment two related values must change together atomically. `RwLock` beats `Mutex` only when reads vastly outnumber writes; under mixed or write-heavy workloads a plain `Mutex` is simpler and often just as fast, since `RwLock`'s reader-tracking has its own overhead.
+
+## Common Misconceptions
+
+- **"`Arc<Mutex<T>>` is the default way to share state between threads."** It is the default when threads must outlive the spawning function. When they don't, `thread::scope` avoids the `Arc` and the lock entirely. When the shared state is one number or flag, an atomic avoids the lock too.
+- **"A poisoned `Mutex` means the data inside is corrupted."** Poisoning only means *some* thread panicked while holding the lock — it says nothing about whether the data itself is actually in a bad state. `into_inner()` lets you inspect and decide; `.unwrap()`-ing every `lock()` treats "maybe corrupted" the same as "definitely corrupted" and panics regardless.
+- **"If it compiles, it can't deadlock."** The borrow checker prevents *data races* (unsynchronized concurrent access), not deadlocks (two threads waiting on each other's locks forever). A deadlocking program is perfectly valid, race-free Rust — it just never makes progress.
+
+## Reading AI-generated Code
+
+AI-generated Rust defaults to `Arc<Mutex<i32>>` for shared counters even when the update is a single, simple increment — the pattern it has seen most often in tutorials — without considering whether an atomic would do the exact same job with less overhead and no `Result`/poisoning to handle.
+
+<SpotTheBug code={`use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn count_events(n: usize) -> i32 {
+    let counter = Arc::new(Mutex::new(0));
+    let mut handles = Vec::new();
+
+    for _ in 0..n {
+        let counter = Arc::clone(&counter);
+        handles.push(thread::spawn(move || {
+            let mut guard = counter.lock().unwrap();
+            *guard += 1;
+        }));
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    *counter.lock().unwrap()
+}
+`}>
+This works, but every increment pays for a full lock acquire/release, and `.lock().unwrap()` will panic the entire program the moment any other user of this `Mutex` ever panics while holding it. Since the shared state is a single `i32` being incremented — not two values that need to change together — `AtomicI32` with `fetch_add(1, Ordering::SeqCst)` does the identical job with no lock, no `Result` to `.unwrap()`, and no poisoning to think about at all. Reach for `Mutex`/`RwLock` only once you need to update more than one related value as a single atomic step.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Pick the cheapest tool that gives the guarantee you need: `thread::scope` when threads don't outlive the function, an atomic when the shared state is one primitive, `Mutex`/`RwLock` when several values must change together — and always assume `.lock()` can return `Err` from a poisoned lock, even if you `.unwrap()` it for brevity in a lesson.
 </Callout>
 
 export const quizThreads = [
     {
         q: "What does JoinHandle::join() do?",
         options: [
+            "Detaches the thread so it runs independently",
             "Blocks the calling thread until the spawned thread finishes and returns its result",
             "Merges two threads into one",
-            "Kills the spawned thread immediately",
-            "Detaches the thread so it runs independently"
+            "Kills the spawned thread immediately"
         ],
-        answer: 0
+        answer: 1,
+        explain: "join() blocks the caller until the spawned thread's closure returns, then hands back its return value (or the panic payload, as an Err, if it panicked)."
     },
     {
         q: "Why do thread closures typically use the move keyword?",
         options: [
-            "Because closures without move cannot use println!",
             "Because move makes the closure run faster",
-            "Because move is required by std::thread::spawn for all closures",
-            "Because the thread may outlive the scope where variables were defined, so they must be owned by the thread"
+            "Because the thread may outlive the scope where variables were defined, so they must be owned by the thread",
+            "Because closures without move cannot use println!",
+            "Because move is required by std::thread::spawn for all closures"
         ],
-        answer: 3
+        answer: 1,
+        explain: "thread::spawn requires 'static data because the compiler cannot bound how long the spawned thread might run. move transfers ownership so the closure doesn't depend on borrowed data that could go out of scope."
     },
     {
         q: "What is the role of Arc in Arc<Mutex<T>>?",
         options: [
-            "Arc provides the lock that prevents concurrent access",
-            "Arc is a deprecated alias for Box",
+            "Arc converts the inner type to Send automatically",
             "Arc ensures the value is dropped when the last reference disappears, and is safe to clone across threads",
-            "Arc converts the inner type to Send automatically"
+            "Arc provides the lock that prevents concurrent access",
+            "Arc is a deprecated alias for Box"
         ],
-        answer: 2
+        answer: 1,
+        explain: "Arc is shared ownership with an atomic reference count. Mutex, not Arc, provides the lock — Arc just lets multiple threads hold a handle to the same Mutex safely."
     },
     {
-        q: "Why do we sort results after joining all threads?",
+        q: "A thread panics while holding a Mutex's lock. What happens to that Mutex afterward?",
         options: [
-            "Rust requires sorted data before printing",
-            "Thread scheduling is non-deterministic, so insertion order into a shared Vec varies between runs",
-            "sort() is the only way to unlock a Mutex",
-            "Unsorted results would cause a panic"
+            "Nothing — the next .lock() call works normally",
+            "The Mutex is destroyed and any further use is a compile error",
+            "The Mutex becomes poisoned; every future .lock() returns an Err until you explicitly recover it (e.g. with into_inner())",
+            "The data inside is automatically reset to its default value"
         ],
-        answer: 1
+        answer: 2,
+        explain: "Poisoning is std::sync::Mutex's way of flagging that a panic happened mid-update, so you can decide whether the data is still trustworthy instead of silently trusting it."
+    },
+    {
+        q: "What does this program do?\n```rust\nuse std::thread;\nfn main() {\n    let mut counter = 0;\n    thread::scope(|s| {\n        s.spawn(|| counter += 1);\n        s.spawn(|| counter += 1);\n    });\n    println!(\"{counter}\");\n}\n```",
+        options: [
+            "Prints 2",
+            "Fails to compile with error[E0499]: cannot borrow counter as mutable more than once at a time",
+            "Prints 0 or 1 depending on thread scheduling",
+            "Panics at runtime with a data race error"
+        ],
+        answer: 1,
+        explain: "thread::scope removes the 'static requirement but not the borrow checker's exclusivity rule — two scoped closures both mutably capturing counter is the same E0499 as two &mut references coexisting in single-threaded code.",
+    },
+    {
+        q: "Why does this deadlock instead of finishing?\n```rust\n// t1: locks a, sleeps, then locks b\n// t2: locks b, sleeps, then locks a\n```",
+        options: [
+            "It doesn't — Rust's borrow checker prevents deadlocks at compile time",
+            "Each thread sleeps long enough to guarantee the other has taken its first lock, so both end up waiting forever for a lock the other holds",
+            "Mutex::lock() has a hidden 50ms timeout that causes a panic",
+            "Deadlocks only happen with more than 2 locks"
+        ],
+        answer: 1,
+        explain: "The borrow checker only prevents data races (unsynchronized access), not deadlocks. Acquiring two locks in inconsistent order across threads compiles fine and can hang forever at runtime — the fix is a coding discipline (consistent lock order), not something the compiler enforces.",
     }
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Message Passing with `std::sync::mpsc`
 
@@ -31,6 +33,37 @@ fn main() {
 ```
 
 `mpsc::channel()` returns the `(Sender<T>, Receiver<T>)` pair. The type `T` is inferred from the first `send` call.
+
+<Mermaid code={`flowchart LR
+    P1["Producer thread 1"] -->|"tx.clone().send(msg)"| C["Channel queue"]
+    P2["Producer thread 2"] -->|"tx.clone().send(msg)"| C
+    C -->|"rx.recv()"| CONS["Consumer thread"]`} title="Multiple producers, one consumer" />
+
+## What the Compiler Says: A Receiver Cannot Be Cloned
+
+The "single-consumer" half of mpsc is not just a naming convention — `Receiver<T>` genuinely does not implement `Clone`. Only `Sender<T>` does:
+
+```rust
+// @expect-error E0599
+use std::sync::mpsc;
+
+fn main() {
+    let (tx, rx) = mpsc::channel::<i32>();
+    tx.send(1).unwrap();
+    let rx2 = rx.clone(); // ERROR: Receiver does not implement Clone — mpsc is single-consumer
+    println!("{:?} {:?}", rx.recv(), rx2.recv());
+}
+```
+
+```text
+error[E0599]: no method named `clone` found for struct `std::sync::mpsc::Receiver<T>` in the current scope
+ --> src/main.rs:6:18
+  |
+6 |     let rx2 = rx.clone(); // ERROR: Receiver does not implement Clone — mpsc is single-consumer
+  |                  ^^^^^ method not found in `std::sync::mpsc::Receiver<i32>`
+```
+
+If you need multiple *consumers*, `mpsc` is the wrong tool — reach for a crate like `crossbeam-channel` (which supports multi-consumer) or fan work back out through per-worker channels, as the "Fan-Out" pattern below does.
 
 ### Sending Values Across Threads
 
@@ -87,6 +120,120 @@ fn main() {
 ```
 
 `rx.iter()` yields values until all `Sender` handles are dropped. Dropping the original `tx` (after cloning) is essential so the iterator knows when to stop.
+
+### Dropping the Last `Sender` Closes the Channel
+
+`mpsc::channel()` is unbounded — `send` never blocks, it just grows an internal queue. Once every `Sender` (including every clone) is dropped, the channel is permanently closed: `recv()` on an empty, sender-less channel returns `Err` instead of blocking forever.
+
+```rust
+use std::sync::mpsc;
+
+fn main() {
+    let (tx, rx) = mpsc::channel::<i32>();
+    drop(tx); // no more senders — the channel is now permanently closed
+
+    match rx.recv() {
+        Ok(v) => println!("got {v}"),
+        Err(e) => println!("recv failed: {e}"),
+    }
+}
+```
+
+```text
+recv failed: receiving on a closed channel
+```
+
+This is exactly the mechanism `rx.iter()` relies on above: it is really a loop of `recv()` calls that stops the moment `recv()` returns this `Err`.
+
+### `sync_channel`: Bounded Channels and Backpressure
+
+An unbounded `mpsc::channel()` has a real cost: a producer faster than its consumer piles up memory indefinitely. `mpsc::sync_channel(n)` bounds the queue to `n` items — once it's full, `send` **blocks** the producer until the consumer makes room. `sync_channel(0)` is the extreme case: a *rendezvous* channel with no buffer at all, where `send` blocks until a receiver is actively waiting.
+
+```rust
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+fn main() {
+    // sync_channel(0) is a rendezvous channel: send() blocks until a receiver
+    // is ready to take the value right now — there is no internal buffer.
+    let (tx, rx) = mpsc::sync_channel::<i32>(0);
+
+    let producer = thread::spawn(move || {
+        let start = Instant::now();
+        tx.send(1).unwrap(); // blocks here until main calls rx.recv()
+        start.elapsed()
+    });
+
+    thread::sleep(Duration::from_millis(100)); // simulate a slow consumer
+    let value = rx.recv().unwrap();
+    let blocked_for = producer.join().unwrap();
+
+    // Round to the nearest 50ms bucket so the printed value is stable
+    // across machines instead of an exact, jitter-sensitive duration.
+    let bucket = (blocked_for.as_millis() / 50) * 50;
+    println!("received: {value}, sender was blocked for at least ~{bucket}ms");
+}
+```
+
+```text
+received: 1, sender was blocked for at least ~100ms
+```
+
+The producer's `send` measurably blocks for as long as the consumer takes to call `recv()` — that blocking is the backpressure. An unbounded channel would let the producer race ahead and buffer everything in memory instead; a bounded one forces the producer to slow down to the consumer's pace, which is exactly what you want when the consumer is the bottleneck and unbounded buffering would eventually exhaust memory.
+
+### `try_recv` and `recv_timeout`: Not Blocking Forever
+
+`recv()` blocks indefinitely if nothing is coming. `try_recv()` never blocks — it returns immediately either way — and `recv_timeout()` blocks, but gives up after a deadline:
+
+```rust
+use std::sync::mpsc;
+use std::time::Duration;
+
+fn main() {
+    let (tx, rx) = mpsc::channel::<i32>();
+
+    // try_recv never blocks — it returns immediately if nothing is waiting.
+    match rx.try_recv() {
+        Ok(v) => println!("try_recv got {v}"),
+        Err(e) => println!("try_recv: {e}"),
+    }
+
+    tx.send(7).unwrap();
+
+    // recv_timeout blocks, but gives up after the deadline instead of forever.
+    match rx.recv_timeout(Duration::from_millis(50)) {
+        Ok(v) => println!("recv_timeout got {v}"),
+        Err(e) => println!("recv_timeout: {e}"),
+    }
+
+    drop(tx);
+    match rx.recv_timeout(Duration::from_millis(50)) {
+        Ok(v) => println!("recv_timeout got {v}"),
+        Err(e) => println!("recv_timeout: {e}"),
+    }
+}
+```
+
+```text
+try_recv: receiving on an empty channel
+recv_timeout got 7
+recv_timeout: channel is empty and sending half is closed
+```
+
+Use `try_recv` when a thread has other work to do and just wants to poll for a message without stopping; use `recv_timeout` when waiting is fine, but forever is not — e.g., a worker that should periodically check a shutdown flag even with no messages arriving.
+
+### Channels vs. Shared State: When to Use Which
+
+| Situation | Prefer |
+|-----------|--------|
+| Ownership of a value should transfer to exactly one place | Channel |
+| A pipeline: stage A produces, stage B consumes | Channel |
+| Many threads need to read (and occasionally write) the *same* long-lived value | `Arc<Mutex<T>>` / `Arc<RwLock<T>>` |
+| A single shared counter or flag | `std::sync::atomic` |
+| Producer is faster than consumer and must be slowed down | `sync_channel(n)` (bounded, backpressure) |
+
+The Go proverb applies directly here: *"Do not communicate by sharing memory; share memory by communicating."* A channel makes the ownership transfer explicit in the type system (the value really does move), whereas shared state requires every reader and writer to remember to take the lock — channels remove an entire class of "forgot to lock" bugs by construction.
 
 ### Fan-Out: Distributing Work
 
@@ -161,46 +308,118 @@ fn main() {
 When you call `tx.send(value)`, ownership of `value` is moved into the channel. The sending thread can no longer access it. The receiving thread then owns the value after `rx.recv()`. This ownership transfer is the reason channels are data-race-free by construction — only one thread owns the value at any point in time.
 </Callout>
 
+## Mental Model
+
+A channel is a `Mutex`-protected queue with `Sender`/`Receiver` handles wrapped around it — but you never see the lock, because the API only exposes the two operations that need it (`send` pushes, `recv` pops). The type system's ownership rules do the rest: `send` takes `self`-by-move semantics for the value (not the sender), so "ownership transferred" is not a metaphor, it is the actual Rust move you already know from every other API.
+
+## Trade-offs
+
+An unbounded `mpsc::channel()` never makes a producer wait, which is simplest to reason about but risks unbounded memory growth if the consumer falls behind. `sync_channel(n)` trades that simplicity for a hard memory ceiling and automatic backpressure — the producer physically cannot get more than `n` messages ahead. `sync_channel(0)` (rendezvous) is the strictest version: producer and consumer are forced to hand off in lockstep, which is useful for synchronization but throughput-limiting if either side is bursty.
+
+## Common Misconceptions
+
+- **"Cloning `rx` gives you multiple consumers."** `Receiver<T>` has no `Clone` impl at all — the "single-consumer" in mpsc is enforced by the type system, not just a suggestion. Multiple *senders* are supported (`tx.clone()`); multiple *receivers* are not.
+- **"An unbounded channel is always the safe default."** It is safe from *blocking*, but not from unbounded memory growth if the producer outruns the consumer indefinitely. `sync_channel(n)` is the deliberate choice once that risk is real.
+- **"`send` on a channel with no receiver panics."** It returns an `Err` (carrying the value back to you) — no receiver just means the channel is closed on that end, handled the same `Result`-based way as every other fallible operation in Rust.
+
+## Reading AI-generated Code
+
+AI-generated worker-pool code often reaches for `mpsc::channel()` (unbounded) for a producer that can generate work far faster than the workers can consume it, without considering whether that is actually the desired behavior — under real load, the queue just grows without limit.
+
+<SpotTheBug code={`use std::sync::mpsc;
+use std::thread;
+
+fn process_urls(urls: Vec<String>) {
+    let (tx, rx) = mpsc::channel();
+
+    let worker = thread::spawn(move || {
+        for url in rx {
+            // Pretend this is a slow network call.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            println!("fetched: {url}");
+        }
+    });
+
+    for url in urls {
+        tx.send(url).unwrap(); // producer can enqueue millions of these instantly
+    }
+    drop(tx);
+    worker.join().unwrap();
+}
+`}>
+`mpsc::channel()` is unbounded, so the `for url in urls { tx.send(url).unwrap(); }` loop enqueues every URL — potentially millions — as fast as the CPU can move them, regardless of how slowly the single worker actually processes each one (50ms per URL here). If `urls` is large, this buffers an unbounded amount of pending work in memory before the worker even gets to look at it. Switching to `mpsc::sync_channel(n)` for a small `n` (say, 100) would make the producer's `send` block once the queue is full, applying backpressure so memory use stays bounded and matched to the actual processing rate.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A channel makes ownership transfer explicit in the type system instead of relying on everyone remembering to take a lock — reach for `sync_channel(n)` instead of the unbounded default the moment a producer could plausibly outrun its consumer.
+</Callout>
+
 export const quizChannels = [
     {
         q: "What does mpsc stand for in std::sync::mpsc?",
         options: [
-            "Multi-process single-channel",
-            "Multi-producer single-consumer",
             "Message-passing safe channel",
-            "Mutex-protected shared channel"
+            "Multi-producer single-consumer",
+            "Mutex-protected shared channel",
+            "Multi-process single-channel"
         ],
-        answer: 1
+        answer: 1,
+        explain: "mpsc = multi-producer, single-consumer: many Sender handles (via clone) can feed one Receiver, but a Receiver itself cannot be cloned."
     },
     {
         q: "What happens to a value after tx.send(value) is called?",
         options: [
-            "The value is copied into the channel; the sender retains its copy",
+            "The value is cloned automatically if it does not implement Copy",
             "The value is moved into the channel; the sender can no longer use it",
-            "The value is serialized to bytes before sending",
-            "The value is cloned automatically if it does not implement Copy"
+            "The value is copied into the channel; the sender retains its copy",
+            "The value is serialized to bytes before sending"
         ],
-        answer: 1
+        answer: 1,
+        explain: "send takes the value by move. Ownership genuinely transfers to the channel — the sending thread cannot reference it again, and the receiving thread owns it after recv()."
     },
     {
         q: "Why must the original tx be dropped (drop(tx)) before collecting from rx.iter()?",
         options: [
-            "drop(tx) flushes any buffered messages",
-            "rx.iter() blocks forever if any Sender handle remains alive, because the channel is still open",
             "The compiler requires it for memory safety",
+            "rx.iter() blocks forever if any Sender handle remains alive, because the channel is still open",
+            "drop(tx) flushes any buffered messages",
             "drop(tx) signals the receiver to start in blocking mode"
         ],
-        answer: 1
+        answer: 1,
+        explain: "rx.iter() is really a loop of recv() calls; it only ends once recv() returns Err, which only happens once every Sender (including every clone) has been dropped."
     },
     {
-        q: "How do you create multiple producers for a single receiver?",
+        q: "What does this print?\n```rust\nuse std::sync::mpsc;\nfn main() {\n    let (tx, rx) = mpsc::channel::<i32>();\n    drop(tx);\n    match rx.recv() {\n        Ok(v) => println!(\"got {v}\"),\n        Err(e) => println!(\"recv failed: {e}\"),\n    }\n}\n```",
         options: [
-            "Call mpsc::channel() once per producer",
-            "Clone the Receiver — each clone is an independent producer",
-            "Clone the Sender (tx.clone()) — each clone can send to the same Receiver",
-            "Multiple producers are not possible with std::sync::mpsc"
+            "It hangs forever waiting for a value",
+            "recv failed: receiving on a closed channel",
+            "got 0",
+            "It panics because rx has no matching sender"
         ],
-        answer: 2
+        answer: 1,
+        explain: "Dropping the only Sender before any recv() call closes the channel immediately. recv() on a closed, empty channel returns Err right away instead of blocking.",
+    },
+    {
+        q: "What does this fail to compile with?\n```rust\nuse std::sync::mpsc;\nfn main() {\n    let (tx, rx) = mpsc::channel::<i32>();\n    tx.send(1).unwrap();\n    let rx2 = rx.clone();\n    println!(\"{:?} {:?}\", rx.recv(), rx2.recv());\n}\n```",
+        options: [
+            "It compiles fine — Receiver implements Clone",
+            "error[E0599]: no method named `clone` found for struct `Receiver<T>`",
+            "error[E0382]: use of moved value: `rx`",
+            "error[E0277]: `Receiver<i32>` cannot be sent between threads safely"
+        ],
+        answer: 1,
+        explain: "mpsc's single-consumer guarantee is enforced by the type system: Receiver<T> simply has no Clone implementation, so calling .clone() on it is E0599, not found in scope.",
+    },
+    {
+        q: "Why does sync_channel(0) make a producer's send() block until the consumer calls recv()?",
+        options: [
+            "sync_channel(0) is a bug — it should behave like an unbounded channel",
+            "It has zero buffer capacity, so a value can only move from sender to receiver as a direct, synchronous handoff — this is backpressure",
+            "sync_channel always blocks regardless of the number passed",
+            "The 0 means zero receivers are allowed"
+        ],
+        answer: 1,
+        explain: "sync_channel(n) bounds the internal queue to n items; sync_channel(0) has no buffer at all, forcing a synchronous rendezvous between sender and receiver — the mechanism behind backpressure.",
     }
 ];
 
