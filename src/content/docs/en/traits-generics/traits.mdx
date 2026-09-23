@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 export const traitsCode = `trait Shape {
     fn area(&self) -> f64;
@@ -52,6 +54,7 @@ export const quizTraits = [
             '`struct Flyable { fly: fn(&self) }`',
         ],
         answer: 0,
+        explain: '`trait` is the keyword that declares a trait; the method has no body, so it is a required method every implementor must provide.',
     },
     {
         q: 'What is a default method in a trait?',
@@ -62,11 +65,13 @@ export const quizTraits = [
             'A method that must be implemented by every type that uses the trait',
         ],
         answer: 1,
+        explain: 'A default method ships a body inside the trait definition. Implementors inherit it for free and may override it with their own implementation if the default is wrong for them.',
     },
     {
         q: 'In the `Shape` trait example, which method has a default implementation?',
         options: ['`area`', '`describe`', 'Both `area` and `describe`', 'Neither — both must be implemented'],
         answer: 1,
+        explain: '`describe` has a body in the trait and calls `self.area()`; `area` has no body, so every implementor must supply its own.',
     },
     {
         q: 'Which syntax correctly implements the `Shape` trait for a struct named `Triangle`?',
@@ -77,6 +82,51 @@ export const quizTraits = [
             '`trait Shape impl Triangle { ... }`',
         ],
         answer: 2,
+        explain: 'The pattern is always `impl TraitName for TypeName` — the trait name comes first, then `for`, then the implementing type.',
+    },
+    {
+        q: 'Why does this fail to compile?\n```rust\nimpl std::fmt::Display for Vec<i32> {\n    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {\n        write!(f, "{:?}", self)\n    }\n}\n```',
+        options: [
+            'It compiles fine — Display can be implemented for any type',
+            'error[E0117] — the orphan rule forbids implementing a foreign trait (Display) for a foreign type (Vec)',
+            'error[E0308] — mismatched types in the fmt signature',
+            'error[E0038] — Display is not dyn compatible',
+        ],
+        answer: 1,
+        explain: 'Both Display and Vec are defined outside this crate. The orphan rule requires the trait or the type (or both) to be local — the fix is a newtype wrapper like `struct MyVec(Vec<i32>);`.',
+    },
+    {
+        q: 'What does this program print?\n```rust\nuse std::ops::Add;\n#[derive(Debug, Clone, Copy)]\nstruct Point { x: i32, y: i32 }\nimpl Add for Point {\n    type Output = Point;\n    fn add(self, other: Point) -> Point {\n        Point { x: self.x + other.x, y: self.y + other.y }\n    }\n}\nfn main() {\n    let a = Point { x: 1, y: 2 };\n    let b = Point { x: 3, y: 4 };\n    println!("{:?}", a + b);\n}\n```',
+        options: [
+            'It fails to compile — Point cannot use the + operator',
+            'Point { x: 1, y: 2 }',
+            'Point { x: 4, y: 6 }',
+            '(4, 6)',
+        ],
+        answer: 2,
+        explain: 'Implementing `std::ops::Add` overloads `+` for Point: `a + b` desugars to `Add::add(a, b)`, which adds each field, producing `Point { x: 4, y: 6 }` printed via the derived Debug.',
+    },
+    {
+        q: 'What is wrong with implementing `Deref<Target = f64>` for a newtype like `struct Meters(f64)`?',
+        options: [
+            'Nothing — it is the recommended way to add convenience methods to a newtype',
+            'It does not compile — Deref cannot target a primitive type',
+            'It silently exposes every f64 method (like .sqrt()) on Meters, undermining the type-safety the newtype existed for',
+            'It makes Meters unable to implement any other trait',
+        ],
+        answer: 2,
+        explain: 'Deref is meant for smart pointers that genuinely stand in for their target. Using it on a newtype just to avoid writing `.0` lets unrelated f64 operations "leak" through Meters silently.',
+    },
+    {
+        q: 'Why does `Iterator` declare `type Item;` as an associated type instead of a generic parameter `Iterator<Item>`?',
+        options: [
+            'Associated types are faster at runtime than generic parameters',
+            'A generic parameter would let one type implement Iterator many times for different Item types, but each type should only iterate one kind of item',
+            'Generic parameters are not allowed inside trait definitions',
+            'There is no real difference — it is purely a style choice',
+        ],
+        answer: 1,
+        explain: 'An associated type fixes exactly one choice per implementor. Iterator uses it because a given type (like Counter) only ever produces one kind of item — there is no reason to allow multiple Item types for the same iterator.',
     },
 ];
 
@@ -137,7 +187,7 @@ let d = Dog { name: String::from("Rex") };
 println!("{}", d.hello()); // Woof! I'm Rex.
 ```
 
-## Default Methods
+## Default Methods and Overriding
 
 A trait can provide a default body for any method. Implementors can override it or use the default:
 
@@ -153,6 +203,35 @@ trait Shape {
 ```
 
 `Circle` and `Rectangle` only need to implement `area`. The `describe` method is inherited automatically and calls their concrete `area` at runtime.
+
+An implementor is free to **override** a default method with its own body — the default is a fallback, not a final answer:
+
+```rust
+trait Shape {
+    fn area(&self) -> f64;
+    fn describe(&self) -> String {
+        format!("I am a shape with area {:.2}", self.area())
+    }
+}
+
+struct Circle { radius: f64 }
+
+impl Shape for Circle {
+    fn area(&self) -> f64 {
+        std::f64::consts::PI * self.radius * self.radius
+    }
+
+    // Overrides the default -- Circle wants a more specific message
+    fn describe(&self) -> String {
+        format!("A circle with radius {:.1}", self.radius)
+    }
+}
+
+fn main() {
+    let c = Circle { radius: 2.0 };
+    println!("{}", c.describe()); // uses Circle's override, not the trait's default
+}
+```
 
 ## Calling Trait Methods
 
@@ -210,11 +289,489 @@ fn make_counter(start: u32) -> impl FnMut() -> u32 + use<> {
 }
 ```
 
+(The Lifetimes lesson covers what "captures a lifetime" means in more depth — this `use<>` opt-out is the same feature seen from the generics side.)
+
+## Supertraits
+
+A trait can require that any implementor *also* implement another trait — this is a **supertrait**. `trait Greet: Named` means "you may only implement `Greet` for a type that already implements `Named`," and it lets `Greet`'s default methods call `Named`'s methods with no extra bound needed:
+
+```rust
+trait Named {
+    fn name(&self) -> String;
+}
+
+// `Greet` requires any implementor to also implement `Named`
+trait Greet: Named {
+    fn greet(&self) -> String {
+        format!("Hello, {}!", self.name())
+    }
+}
+
+struct Person { name: String }
+
+impl Named for Person {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+}
+
+impl Greet for Person {} // no methods to write -- the default calls Named::name
+
+fn main() {
+    let p = Person { name: String::from("Ferris") };
+    println!("{}", p.greet());
+}
+```
+
+```text
+Hello, Ferris!
+```
+
+This is composition, not inheritance: `Greet` does not gain `Named`'s fields or replace `Person`'s type — it simply declares a dependency on a capability it needs.
+
+## Blanket Implementations and the Orphan Rule
+
+A **blanket implementation** implements a trait for every type that satisfies some bound, in one `impl` block, instead of writing an `impl` per concrete type:
+
+```rust
+trait Describe {
+    fn describe(&self) -> String;
+}
+
+// Every type that implements Display automatically implements Describe too
+impl<T: std::fmt::Display> Describe for T {
+    fn describe(&self) -> String {
+        format!("value: {}", self)
+    }
+}
+
+fn main() {
+    println!("{}", 42.describe());
+    println!("{}", "hello".describe());
+}
+```
+
+This compiles because `Describe` is a trait defined in *this* crate — you can implement your own trait for any type, foreign or local, as long as the trait itself is local. What you cannot do is implement a **foreign trait** (one defined elsewhere, like `std::fmt::Display`) for a **foreign type** (one defined elsewhere, like `Vec<i32>`) — this is the **orphan rule**, and the compiler enforces it with a dedicated error:
+
+```rust
+// @expect-error E0117
+impl std::fmt::Display for Vec<i32> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+fn main() {}
+```
+
+```text
+error[E0117]: only traits defined in the current crate can be implemented for types defined outside of the crate
+ --> src/main.rs:1:1
+  |
+1 | impl std::fmt::Display for Vec<i32> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^--------
+  |                            |
+  |                            `Vec` is not defined in the current crate
+  |
+  = note: impl doesn't have any local type before any uncovered type parameters
+  = note: for more information see https://doc.rust-lang.org/reference/items/implementations.html#orphan-rules
+  = note: define and implement a trait or new type instead
+```
+
+The orphan rule exists so two unrelated crates can never write conflicting implementations of the same trait for the same type — if both were allowed, the compiler would have no way to decide which `impl` a downstream crate should get. The standard fix rustc suggests, "define ... a new type," is the newtype pattern: wrap the foreign type in your own tuple struct (`struct MyVec(Vec<i32>);`) and implement the foreign trait for *that*, since your new type is local.
+
+## Converting Between Types: `From`, `Into`, and `TryFrom`
+
+`From<T>` defines an infallible conversion into your type; implementing it gives you `Into` for free in the other direction, because the standard library provides a blanket `impl<T, U: From<T>> Into<U> for T`:
+
+```rust
+#[derive(Debug)]
+struct Meters(f64);
+
+#[derive(Debug)]
+struct Feet(f64);
+
+impl From<Feet> for Meters {
+    fn from(feet: Feet) -> Self {
+        Meters(feet.0 * 0.3048)
+    }
+}
+
+fn describe_height(feet: Feet) -> String {
+    let meters: Meters = feet.into(); // Into is the automatic mirror of From
+    format!("{:?}", meters)
+}
+
+fn main() {
+    println!("{}", describe_height(Feet(6.0)));
+}
+```
+
+```text
+Meters(1.8288000000000002)
+```
+
+`TryFrom<T>` is the fallible sibling for conversions that can fail — it returns a `Result` instead of the value directly, so it composes naturally with `?`:
+
+```rust
+#[derive(Debug)]
+struct EvenNumber(i32);
+
+impl TryFrom<i32> for EvenNumber {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        if value % 2 == 0 {
+            Ok(EvenNumber(value))
+        } else {
+            Err(format!("{value} is not even"))
+        }
+    }
+}
+
+fn make_even(n: i32) -> Result<EvenNumber, String> {
+    let even = EvenNumber::try_from(n)?; // short-circuits with Err if try_from fails
+    Ok(even)
+}
+
+fn main() {
+    println!("{:?}", make_even(4));
+    println!("{:?}", make_even(5));
+}
+```
+
+```text
+Ok(EvenNumber(4))
+Err("5 is not even")
+```
+
+## `Display` vs `Debug`
+
+`Debug` (`{:?}`) is for developers: `#[derive(Debug)]` generates a mechanical, structural representation with no formatting decisions to make. `Display` (`{}`) is for end users: it has no derive, because there is no single "correct" user-facing format the compiler could guess — you must implement it by hand.
+
+```rust
+use std::fmt;
+
+struct Point { x: i32, y: i32 }
+
+impl fmt::Display for Point {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "({}, {})", self.x, self.y)
+    }
+}
+
+#[derive(Debug)]
+struct Rect { top_left: (i32, i32), width: i32, height: i32 }
+
+fn main() {
+    let p = Point { x: 3, y: 4 };
+    println!("{}", p); // Display: chosen by you
+
+    let r = Rect { top_left: (0, 0), width: 10, height: 20 };
+    println!("{:?}", r);  // Debug: compact, derived
+    println!("{:#?}", r); // Debug: pretty-printed, still derived
+}
+```
+
+```text
+(3, 4)
+Rect { top_left: (0, 0), width: 10, height: 20 }
+Rect {
+    top_left: (
+        0,
+        0,
+    ),
+    width: 10,
+    height: 20,
+}
+```
+
+`{:#?}` is still `Debug` — the `#` flag just asks the same derived implementation to spread itself across multiple indented lines. There is no `{:#}` equivalent for `Display`; pretty-printing is a `Debug`-only convention.
+
+## Operator Overloading
+
+Operators like `+` are themselves traits — `a + b` is sugar for `Add::add(a, b)`. Implementing `std::ops::Add` lets your own type use `+`:
+
+```rust
+use std::ops::Add;
+
+#[derive(Debug, Clone, Copy)]
+struct Point { x: i32, y: i32 }
+
+impl Add for Point {
+    type Output = Point;
+
+    fn add(self, other: Point) -> Point {
+        Point { x: self.x + other.x, y: self.y + other.y }
+    }
+}
+
+fn main() {
+    let a = Point { x: 1, y: 2 };
+    let b = Point { x: 3, y: 4 };
+    println!("{:?}", a + b);
+}
+```
+
+```text
+Point { x: 4, y: 6 }
+```
+
+The same pattern extends to `Sub`, `Mul`, `Index`, `Neg`, and every other operator — each is one trait with one method, in `std::ops`.
+
+## The `Deref` Smell
+
+`Deref` lets `*value` (and, through auto-deref, method calls like `value.method()`) reach through your type to a `Target` type — it is how `Box<T>` lets you call `T`'s methods directly, and how `String` gives you every `&str` method for free.
+
+```rust
+use std::ops::Deref;
+
+struct Meters(f64);
+
+impl Deref for Meters {
+    type Target = f64;
+    fn deref(&self) -> &f64 {
+        &self.0
+    }
+}
+
+fn main() {
+    let distance = Meters(42.0);
+    println!("{}", distance.sqrt()); // f64's sqrt "leaks" through Meters
+}
+```
+
+```text
+6.48074069840786
+```
+
+This compiles, but it undermines the entire reason `Meters` exists as a newtype: every `f64` method — `.sqrt()`, `.floor()`, arithmetic through further auto-deref — is now silently available on a type that was supposed to be a distinct, type-safe unit. `Deref` is meant for smart pointers that genuinely *stand in* for their target (`Box<T>`, `Rc<T>`, `String` for `str`), not as a shortcut to avoid writing a specific method or to fake an "is-a" relationship between two otherwise-unrelated types. If you find yourself implementing `Deref` just so callers don't have to write `.0` or an explicit accessor method, that is the smell — write the accessor instead.
+
+## `AsRef`, `Borrow`, and `Cow` — Which One?
+
+Three standard-library tools solve three different "give me a reference, cheaply" problems:
+
+**`AsRef<str>`** — accept either an owned or borrowed string with one function signature, when you only need to read it:
+
+```rust
+fn print_it(s: impl AsRef<str>) {
+    println!("{}", s.as_ref());
+}
+
+fn main() {
+    print_it("literal");
+    print_it(String::from("owned"));
+}
+```
+
+**`Borrow<str>`** — lets a `HashMap<String, V>` be looked up with a `&str` key, because `String: Borrow<str>` guarantees the borrowed form hashes and compares identically to the owned one:
+
+```rust
+use std::collections::HashMap;
+
+fn main() {
+    let mut map: HashMap<String, i32> = HashMap::new();
+    map.insert(String::from("one"), 1);
+    println!("{:?}", map.get("one")); // &str key looks up a String-keyed map
+}
+```
+
+**`Cow<str>`** ("clone on write") — return a borrowed value when you *can*, and only allocate an owned one when you *must*:
+
+```rust
+use std::borrow::Cow;
+
+fn ensure_exclamation(input: &str) -> Cow<str> {
+    if input.ends_with('!') {
+        Cow::Borrowed(input) // no allocation needed
+    } else {
+        Cow::Owned(format!("{input}!")) // allocate only when we must modify
+    }
+}
+
+fn main() {
+    println!("{}", ensure_exclamation("already loud!"));
+    println!("{}", ensure_exclamation("quiet"));
+}
+```
+
+```text
+already loud!
+quiet!
+```
+
+Reach for `AsRef<str>` on a read-only parameter, `Borrow` when a collection's key type needs to match a borrowed lookup type, and `Cow` when a function sometimes needs to allocate and sometimes does not, and you want to avoid paying for the allocation on the common path.
+
+## Associated Types vs Generic Parameters
+
+`Iterator` declares `type Item;` — an **associated type** — rather than a generic parameter `Iterator<Item>`. The difference matters: a generic trait can be implemented multiple times for the same type with different parameters (`From<i32> for MyType` and `From<f64> for MyType` can coexist), but an associated type fixes exactly **one** choice per implementor, because a single type only ever produces one kind of item from iterating it:
+
+```rust
+struct Counter { count: u32 }
+
+impl Iterator for Counter {
+    type Item = u32; // fixed once for Counter -- not chosen by the caller
+
+    fn next(&mut self) -> Option<u32> {
+        if self.count < 5 {
+            self.count += 1;
+            Some(self.count)
+        } else {
+            None
+        }
+    }
+}
+
+fn main() {
+    let sum: u32 = Counter { count: 0 }.sum();
+    println!("{}", sum);
+}
+```
+
+```text
+15
+```
+
+Use a generic parameter when a type can meaningfully implement a trait more than once for different types; use an associated type when each implementor has exactly one natural choice, and you want call sites to read `Counter::Item` instead of threading a type parameter through everywhere `Counter` appears.
+
+## Associated Constants
+
+A trait can also require a constant value, not just methods — declared with `const` inside the trait, and given a concrete value in each `impl`:
+
+```rust
+trait Shape {
+    const SIDES: u32;
+    fn describe() -> String {
+        format!("a shape with {} sides", Self::SIDES)
+    }
+}
+
+struct Triangle;
+impl Shape for Triangle {
+    const SIDES: u32 = 3;
+}
+
+fn main() {
+    println!("{}", Triangle::describe());
+}
+```
+
+```text
+a shape with 3 sides
+```
+
+Associated constants are resolved at compile time, per implementing type — useful for things like a fixed buffer size, a version number, or (as here) a value every instance of a type shares and that a default method can rely on.
+
+## `impl Trait`: Argument, Return, and Field Position
+
+`impl Trait` is legal in exactly two places — a function's argument type and its return type — and the compiler rejects it in a struct's field type outright, with no ambiguity in the error:
+
+```rust
+// @expect-error E0562
+struct Handler {
+    callback: impl Fn() -> i32,
+}
+
+fn main() {}
+```
+
+```text
+error[E0562]: `impl Trait` is not allowed in field types
+ --> src/main.rs:2:15
+  |
+2 |     callback: impl Fn() -> i32,
+  |               ^^^^^^^^^^^^^^^^
+  |
+  = note: `impl Trait` is only allowed in arguments and return types of functions and methods
+```
+
+The reason is structural: `impl Trait` in argument position is sugar for a generic parameter (resolved per call site), and in return position it names one concrete-but-hidden type (resolved per function). A struct field has no "call site" to resolve against — the field's type has to be nameable once, for every instance of the struct. The fix is a generic parameter on the struct itself (`struct Handler<F: Fn() -> i32> { callback: F }`) or, when the concrete type genuinely varies at runtime, `Box<dyn Fn() -> i32>` — the Trait Objects lesson covers exactly when that trade is worth it.
+
+## `Send` and `Sync`: A Teaser
+
+`Send` and `Sync` are **auto traits**: the compiler implements them for you automatically based on a type's fields, with no `impl` block written by hand. `Send` means a value can be moved to another thread; `Sync` means a shared reference to it can be. Most ordinary types get both for free:
+
+```rust
+fn is_send<T: Send>() {}
+fn is_sync<T: Sync>() {}
+
+struct Data { value: i32 }
+
+fn main() {
+    is_send::<Data>(); // auto-implemented: every field is Send
+    is_sync::<Data>(); // auto-implemented: every field is Sync
+    println!("Data is Send and Sync");
+}
+```
+
+```text
+Data is Send and Sync
+```
+
+A handful of types (`Rc<T>`, `RefCell<T>`) deliberately opt out, and sending one across threads becomes a compile error rather than a runtime data race — the Concurrency module covers `Send`/`Sync` and that exact error in depth.
+
 ## Try It
 
 The playground below defines a `Shape` trait with a required `area` method and a default `describe` method. Both `Circle` and `Rectangle` implement `area`, and they inherit `describe` for free.
 
 <Playground code={traitsCode} />
+
+<Mermaid code={`flowchart TD
+    A["impl SomeTrait for SomeType"]
+    A --> B{Is SomeTrait local to this crate?}
+    B -->|Yes| OK1[Allowed -- any type, local or foreign]
+    B -->|No, foreign trait| C{Is SomeType local to this crate?}
+    C -->|Yes| OK2[Allowed -- local type covers a foreign trait]
+    C -->|No, foreign type| ERR["E0117: orphan rule violation"]`} title="The orphan rule as a decision" />
+
+## Mental Model
+
+A trait is a promise about behavior, not a description of data — implementing one adds capabilities to a type without touching its layout or its relationship to any other type. Default methods, supertraits, and blanket impls are all just different ways of writing that promise once and reusing it: a default method reuses a body across implementors of the *same* trait, a supertrait reuses another trait's guarantee as a building block, and a blanket impl reuses one implementation across every type that already satisfies some bound.
+
+## Trade-offs
+
+Default methods and blanket impls both trade a small amount of indirection for a large amount of reuse: a blanket `impl<T: Display> Describe for T` means you never write a per-type `impl`, but it also means every `Display` type in the crate — including ones you didn't anticipate — now implements `Describe`, whether that is wanted or not. `Deref`, `AsRef`, `Borrow`, and `Cow` all trade a small amount of ergonomic sugar for a real question of intent: each one changes what a caller can pass or what leaks through automatically, and picking the wrong one (most often `Deref`, reached for as a shortcut) hides a design decision instead of stating it.
+
+## Common Misconceptions
+
+- **"A default method is fixed — implementors just get whatever the trait author wrote."** A default is only ever a fallback; any implementor can override it with a more specific body, as `Circle::describe` does above.
+- **"I can implement any trait for any type, since Rust doesn't have Java-style access modifiers on traits."** The orphan rule blocks exactly one combination — a foreign trait for a foreign type — specifically so two crates can never both legally implement the same trait for the same type.
+- **"`Deref` is just a convenience for skipping `.0` or a getter method."** That is precisely the smell described above: `Deref` is for types that are smart pointers *to* their target, not a way to avoid writing an explicit accessor on an unrelated type.
+- **"`{:#?}` is a different trait from `{:?}`, closer to `Display`."** Both come from the same derived `Debug` implementation — `#` only changes formatting (multi-line, indented), never which trait is used.
+
+## Reading AI-generated code
+
+Generated code reaches for `Deref` surprisingly often as a way to make a wrapper type feel like its inner type "for free," instead of writing the one accessor method the call site actually needed.
+
+<SpotTheBug code={`use std::ops::Deref;
+
+struct Engine { horsepower: u32 }
+impl Engine {
+    fn start(&self) -> String {
+        format!("engine running at {} hp", self.horsepower)
+    }
+}
+
+struct Car { engine: Engine }
+
+impl Deref for Car {
+    type Target = Engine;
+    fn deref(&self) -> &Engine {
+        &self.engine
+    }
+}
+
+fn main() {
+    let car = Car { engine: Engine { horsepower: 300 } };
+    println!("{}", car.start()); // looks like Car has a start() method -- it doesn't
+}
+`}>
+This compiles and prints `engine running at 300 hp`, which looks like `Car` inherited `start()` from `Engine` — it did not. `Car` has no `start` method at all; `car.start()` compiles only because method lookup auto-derefs `Car` to `&Engine` and finds `start` there, the same mechanism that lets you call `String`'s methods through a `Box<String>`. `Deref` is meant for smart pointers that really do stand in for their target, not for modeling an "is-a" relationship between unrelated domain types — a `Car` is not an `Engine`, and giving it one implicitly through `Deref` hides that fact from anyone reading `Car`'s own API. The fix is composition without `Deref`: write `fn start(&self) -> String { self.engine.start() }` explicitly on `Car`, so the delegation is visible where a reader would look for it.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A trait is a promise about behavior, not a family tree — default methods, supertraits, and blanket impls all let you write that promise once, but `Deref` is the one tool in this lesson that can quietly fake a relationship your type doesn't actually have.
+</Callout>
 
 <Quiz client:visible id="traits-generics/traits" questions={quizTraits} />
 

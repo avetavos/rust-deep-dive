@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## ยินดีต้อนรับสู่ Traits และ Generics
 
@@ -37,14 +39,53 @@ struct ใดก็ตามที่ implement `Greet` ต้องจัดห
 
 ส่วน `T: PartialOrd` คือ **trait bound** — เป็นตัวบอก compiler ว่า "function นี้ทำงานกับ type `T` ใดก็ได้ที่รองรับการเปรียบเทียบ" จากนั้น compiler จะสร้าง copy เฉพาะสำหรับแต่ละ concrete type ที่คุณใช้จริง (กระบวนการนี้เรียกว่า *monomorphization*)
 
+## Compiler พูดว่าอย่างไร: Generic Function ที่ไม่มี Bound
+
+Traits และ generics ไม่ใช่สองฟีเจอร์แยกกันที่เรียนตามลำดับ — trait bound คือสิ่งที่ทำให้ body ของ generic function ถูกกฎหมายตั้งแต่แรก ถ้าตัด bound ออก compiler จะบอกคุณตรง ๆ ว่าขาดความสามารถอะไร:
+
+```rust
+// @expect-error E0369
+fn largest<T>(a: T, b: T) -> T {
+    if a > b { a } else { b }
+}
+
+fn main() {
+    println!("{}", largest(3, 7));
+}
+```
+
+```text
+error[E0369]: binary operation `>` cannot be applied to type `T`
+ --> src/main.rs:2:10
+  |
+2 |     if a > b { a } else { b }
+  |        - ^ - T
+  |        |
+  |        T
+  |
+help: consider restricting type parameter `T` with trait `PartialOrd`
+  |
+1 | fn largest<T: std::cmp::PartialOrd>(a: T, b: T) -> T {
+  |             ++++++++++++++++++++++
+```
+
+`T` เดี่ยว ๆ หมายถึง "type อะไรก็ได้" และ type ส่วนใหญ่ไม่รองรับ `>` คำแนะนำที่ compiler ให้เองคือ trait bound: `T: PartialOrd` จำกัด `T` ให้เหลือเฉพาะ type ที่ `>` เป็น operation ที่ถูกต้อง นี่คือ pattern ที่เกิดซ้ำตลอดทั้งโมดูล: generic parameter เริ่มต้นด้วยความสามารถแทบเป็นศูนย์ และทุก trait bound ที่คุณเพิ่มคือการแลกความยืดหยุ่นกับความสามารถอย่างจงใจ
+
 ## แผนการเรียนในโมดูลนี้
 
 | บทเรียน | สิ่งที่จะได้เรียนรู้ |
 |---|---|
-| **Traits** | นิยาม behavior ร่วมกัน, default methods, การเรียก trait method |
-| **Generics** | Generic function, generic struct, trait bound, `where` clause |
-| **Trait Objects** | `dyn Trait`, `Box<dyn Trait>`, static vs dynamic dispatch |
-| **Lifetimes** | Lifetime annotation, dangling reference, elision rules |
+| **Traits** | Default methods, supertraits, blanket impls, `From`/`Into`/`TryFrom`, operator overloading, `Deref`, associated types และ consts |
+| **Generics** | Generic function, generic struct, monomorphization, `where` clause, `PhantomData`, generic vs `dyn` vs enum |
+| **Trait Objects** | `dyn Trait`, `Box<dyn Trait>`, fat pointer, vtable, `dyn Any`, static vs dynamic dispatch |
+| **Lifetimes** | Lifetime annotation, elision rules, `'static`, struct lifetime, higher-ranked trait bound |
+
+<Mermaid code={`flowchart TD
+    Q{What are you trying to express?}
+    Q -->|One shared capability many types can provide| TR[Traits lesson]
+    Q -->|One function or struct body for many concrete types| GEN[Generics lesson]
+    Q -->|A collection of mixed concrete types, chosen at runtime| TO[Trait Objects lesson]
+    Q -->|How long a reference stays valid| LT[Lifetimes lesson]`} title="บทเรียนไหนตอบคำถามของคุณ" />
 
 ## ลองเลย
 
@@ -81,6 +122,49 @@ export const traitsGenericsIndexCode = `fn main() {
 
 <Playground code={traitsGenericsIndexCode} />
 
+<Callout title="Zero-cost โดยค่าเริ่มต้น เป็น dynamic ได้เมื่อต้องการ">
+Generics และ static-dispatch trait bound หายไปหมดตอน compile — machine code ที่ได้เหมือนกับที่คุณเขียนมือแยกต่อ type ทุกประการ Dynamic dispatch (`dyn Trait` บทเรียน Trait Objects) คือจุดเดียวในโมดูลนี้ที่คุณจงใจจ่าย runtime cost เล็กน้อยเพื่อแลกกับความยืดหยุ่นที่ generics ให้ไม่ได้: การเก็บ type ที่ต่างกันจริง ๆ ไว้ใน collection เดียว
+</Callout>
+
+## Mental Model
+
+มองว่า trait ตอบคำถาม "type นี้ *ทำ* อะไรได้บ้าง" และ generic parameter ตอบคำถาม "ตอนนี้กำลังทำงานกับ type อะไรอยู่" Trait bound (`T: Trait`) คือจุดที่ทั้งสองมาบรรจบกัน: มันให้ generic function หรือ struct พูดว่า "ฉันไม่สนว่า concrete type จะเป็นอะไร ตราบใดที่มันทำ X ได้" ทุกอย่างในโมดูลนี้ — default methods, blanket impls, `dyn Trait`, lifetime บน generic reference — ล้วนเป็นรูปแบบต่าง ๆ ของการเชื่อมต่อนี้
+
+## Trade-offs
+
+Static dispatch (generics, trait bound, `impl Trait`) ไม่มีค่าใช้จ่าย ณ runtime เลย แต่มีค่าใช้จ่ายที่ compile time และขนาด binary: ทุก concrete type ที่คุณ instantiate generic ด้วยจะได้ copy ของ machine code เป็นของตัวเอง และทุก constraint ที่คุณเพิ่มจะจำกัดว่าใครเรียก function ได้บ้าง Dynamic dispatch (`dyn Trait`) กลับด้าน: code copy เดียว, vtable indirection เล็กน้อยต่อการเรียก, และความสามารถผสม concrete type ที่ไม่เคยรู้จักกันตอน compile time ไม่มีอันไหนดีกว่ากันเสมอไป — ที่เหลือของโมดูลนี้ส่วนใหญ่คือการรู้จักว่าปัญหาแบบไหนต้องการ trade-off แบบไหน
+
+## Common Misconceptions
+
+- **"Trait ก็คือ inheritance เวอร์ชัน Rust"** จริง ๆ แล้วใกล้เคียง interface มากกว่า: trait ไม่ให้ data field, ไม่มี automatic field access, และไม่มี hierarchy ระหว่าง type สอง type ที่ implement trait เดียวกันไม่มีความสัมพันธ์กันเลยนอกจากสัญญาที่ใช้ร่วมกัน — เป็น composition ไม่ใช่ inheritance
+- **"Generics กับ trait bound เป็นคนละเรื่องกัน"** Generic parameter เปล่า ๆ `T` แทบทำอะไรไม่ได้เลย — เปรียบเทียบไม่ได้ print ไม่ได้ คำนวณไม่ได้ — จนกว่า trait bound จะให้ความสามารถเฉพาะ การเรียน generics *คือ* การเรียนว่า trait bound ไหนปลดล็อก operation ไหน
+- **"`dyn Trait` คือวิธีใช้ trait แบบ 'ขั้นสูง' หรือ 'ดีกว่า' ส่วน generics คือเวอร์ชันมือใหม่"** ไม่มีอันไหน advanced กว่ากัน — ทั้งสองแก้ปัญหาคนละแบบ การหยิบ `dyn Trait` มาใช้เป็นค่าเริ่มต้นมี vtable indirection และ heap allocation ที่ไม่จำเป็นเมื่อรู้ type แน่ชัด ณ compile time อยู่แล้ว
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ generate มาบ่อยครั้งเพิ่ม `Clone` bound ให้ generic function "เผื่อไว้" แล้วเรียก `.clone()` ในลูปกับค่าที่ต้องการแค่การอ่านผ่าน reference เท่านั้น — bound compile ผ่าน clone ก็รันได้ และดูเผิน ๆ ไม่มีอะไรผิด
+
+<SpotTheBug code={`fn sum_lengths<T: Clone + AsRef<str>>(items: &[T]) -> usize {
+    let mut total = 0;
+    for item in items {
+        let owned = item.clone(); // cloned every iteration for no reason
+        total += owned.as_ref().len();
+    }
+    total
+}
+
+fn main() {
+    let words = vec![String::from("hello"), String::from("world")];
+    println!("{}", sum_lengths(&words));
+}
+`}>
+โค้ดนี้ compile ผ่านและ print คำตอบที่ถูกต้อง (`10`) ซึ่งเป็นเหตุผลที่มันรอดจากการ review ไปได้ — บั๊กคือการ allocate ที่สูญเปล่า ไม่ใช่คำตอบผิด `.clone()` ในลูปทำสำเนา `String` ทุกตัวขึ้นมาใหม่เพียงเพื่อเรียก `.as_ref().len()` ซึ่งเป็น method ที่ต้องการแค่ borrow เท่านั้น bound `Clone` เองก็ไม่ได้ทำอะไรมีประโยชน์ตรงนี้เลย — ลดเหลือ `fn sum_lengths<T: AsRef<str>>(items: &[T]) -> usize` แล้วเรียก `item.as_ref().len()` ตรง ๆ จะเอา allocation และ bound ที่ไม่จำเป็นออกไปในการแก้ครั้งเดียว — bound ที่แคบที่สุดที่ให้ความสามารถที่คุณใช้จริงคือตัวที่ถูกต้อง ไม่ใช่ bound ที่กว้างที่สุดที่บังเอิญ compile ผ่าน
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Trait บอกว่า type ทำอะไรได้ generic parameter บอกว่ากำลังทำกับ type ไหน และ trait bound คือ syntax หนึ่งบรรทัดที่เชื่อมทั้งสองเข้าด้วยกัน — ที่เหลือในโมดูลนี้ล้วนเป็นผลพวงของการเชื่อมต่อนั้น
+</Callout>
+
 export const quizTraitsGenericsIndex = [
     {
         q: "จุดประสงค์หลักของ trait ใน Rust คืออะไร?",
@@ -91,6 +175,7 @@ export const quizTraitsGenericsIndex = [
             "จัดการ thread safety โดยอัตโนมัติ",
         ],
         answer: 1,
+        explain: "Trait คือชุดของ method signature ที่ตั้งชื่อไว้ ซึ่ง type ใดก็ได้ implement ได้อย่างอิสระ — มันนิยามความสามารถ ไม่ใช่ memory layout หรือพฤติกรรม thread",
     },
     {
         q: "Generic type parameter ช่วยให้คุณทำอะไรได้?",
@@ -101,6 +186,7 @@ export const quizTraitsGenericsIndex = [
             "ข้าม borrow checker สำหรับ parameter นั้น",
         ],
         answer: 2,
+        explain: "Generic parameter อย่าง `T` ให้คุณเขียน function body เดียวที่ compiler จะสร้างเฉพาะสำหรับแต่ละ concrete type ที่ใช้จริงตอนเรียก",
     },
     {
         q: "ใช้ keyword ใดในการ implement trait ให้กับ struct ใน Rust?",
@@ -111,6 +197,29 @@ export const quizTraitsGenericsIndex = [
             "derive",
         ],
         answer: 2,
+        explain: "`impl TraitName for TypeName { ... }` คือ syntax สำหรับปฏิบัติตามสัญญาของ trait ให้กับ type หนึ่ง ๆ",
+    },
+    {
+        q: "compile ไหม?\n```rust\nfn largest<T>(a: T, b: T) -> T {\n    if a > b { a } else { b }\n}\nfn main() {\n    println!(\"{}\", largest(3, 7));\n}\n```",
+        options: [
+            "ใช่ — integer รองรับการเปรียบเทียบเสมอ",
+            "ไม่ — error[E0369] เพราะ `T` เดี่ยว ๆ ไม่มีการรับประกันว่ารองรับ `>`",
+            "ใช่ แต่เฉพาะ debug build",
+            "ไม่ — generic function ไม่สามารถ return `T` ได้",
+        ],
+        answer: 1,
+        explain: "หากไม่มี bound `PartialOrd` compiler ไม่มีเหตุผลจะเชื่อว่า `T` ที่เป็นอะไรก็ได้รองรับ operator `>` จึงปฏิเสธการ compile ด้วย error[E0369] พร้อมแนะนำ bound ที่ต้องเพิ่ม",
+    },
+    {
+        q: "rustc รายงาน error code อะไรสำหรับ function `largest<T>` ด้านบน และแก้ยังไง?",
+        options: [
+            "E0308 mismatched types; แก้โดยเปลี่ยน return type",
+            "E0369 binary operation cannot be applied; แก้โดยเพิ่ม `T: PartialOrd`",
+            "E0502 cannot borrow as mutable; แก้โดยเพิ่ม `mut`",
+            "E0038 not dyn compatible; แก้โดยใช้ `Box<dyn T>`",
+        ],
+        answer: 1,
+        explain: "คำแนะนำของ rustc เองสำหรับ error นี้คือ `fn largest<T: std::cmp::PartialOrd>(a: T, b: T) -> T` — trait bound คือสิ่งที่ให้ `T` มี operator `>`",
     },
 ];
 

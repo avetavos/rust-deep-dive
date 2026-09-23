@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Why Lifetimes Exist
 
@@ -87,6 +89,38 @@ error[E0515]: cannot return reference to local variable `s`
 
 No lifetime annotation can fix this — `'a` can only ever name a lifetime that already exists somewhere in the caller. `dangle` has no input reference to borrow `'a` from, so there is nothing valid to name. The real fix, as rustc's own second suggestion said, is to return an owned `String` instead of a reference.
 
+## What the Compiler Says: A Borrow That Outlives Its Data
+
+`E0106`/`E0515` catch a dangling *return value*. The same underlying problem shows up just as often with a local variable whose borrow is used after the variable itself is gone — caught as a different error, `E0597`:
+
+```rust
+// @expect-error E0597
+fn main() {
+    let r;
+    {
+        let x = 5;
+        r = &x;
+    }
+    println!("{}", r);
+}
+```
+
+```text
+error[E0597]: `x` does not live long enough
+ --> src/main.rs:5:13
+  |
+4 |         let x = 5;
+  |             - binding `x` declared here
+5 |         r = &x;
+  |             ^^ borrowed value does not live long enough
+6 |     }
+  |     - `x` dropped here while still borrowed
+7 |     println!("{}", r);
+  |                    - borrow later used here
+```
+
+`x` is dropped at the end of the inner block, but `r` is used after that point — the compiler catches the use-after-free before your program can ever run it. `E0106`, `E0515`, and `E0597` are three different diagnostics for the same root idea: a reference must never outlive the value it points to, whether the value would go away by returning from a function or by leaving a block.
+
 ## Lifetime Annotations in Structs
 
 If a struct holds a reference, you must annotate the lifetime so the compiler knows the struct cannot outlive the data it borrows:
@@ -97,17 +131,74 @@ struct Excerpt<'a> {
 }
 ```
 
-This says: "an `Excerpt` cannot outlive the string it borrows from." The compiler enforces this guarantee automatically.
+This says: "an `Excerpt` cannot outlive the string it borrows from." The compiler enforces this guarantee automatically. Methods on a struct with a lifetime parameter repeat it in the `impl` line:
+
+```rust
+struct Excerpt<'a> {
+    text: &'a str,
+}
+
+impl<'a> Excerpt<'a> {
+    fn announce(&self) -> &str {
+        self.text
+    }
+}
+```
+
+`impl<'a> Excerpt<'a>` declares `'a` for the block, then uses it to say "this impl is for an `Excerpt` borrowing for some lifetime `'a`" — `announce`'s return type doesn't need to repeat `'a` explicitly here because of elision rule 3, covered next.
 
 ## The Three Lifetime Elision Rules
 
-In many common patterns Rust can infer lifetimes automatically using three elision rules, so you do not need to write annotations every time:
+In many common patterns Rust can infer lifetimes automatically using three elision rules, so you do not need to write annotations every time. Each rule has a shape simple enough to show in isolation:
 
-1. **Each reference parameter gets its own lifetime.** `fn foo(x: &str, y: &str)` becomes `fn foo<'a, 'b>(x: &'a str, y: &'b str)`.
-2. **If there is exactly one input reference, its lifetime is assigned to all output references.** `fn foo(x: &str) -> &str` becomes `fn foo<'a>(x: &'a str) -> &'a str`.
-3. **If one of the parameters is `&self` or `&mut self`, its lifetime is assigned to all output references.**
+**Rule 1 — every reference parameter gets its own, independent lifetime.** This is the starting point the other two rules build on. When nothing needs to relate the parameters to each other or to the return type, rule 1 alone is enough:
 
-When all three rules apply, no annotation is needed. When they do not fully determine the output lifetime (as in `longest`), you must annotate explicitly.
+```rust
+fn describe_pair(a: &str, b: &str) -> String {
+    format!("{a} and {b}")
+}
+```
+
+The compiler treats this as `fn describe_pair<'a, 'b>(a: &'a str, b: &'b str) -> String` — `a` and `b` get independent lifetimes `'a` and `'b` because the return type is an owned `String` that borrows nothing, so there is no output lifetime that needs to match either one.
+
+**Rule 2 — with exactly one input reference, its lifetime is assigned to every output reference.**
+
+```rust
+fn first_word(s: &str) -> &str {
+    s.split_whitespace().next().unwrap_or("")
+}
+```
+
+Desugars to `fn first_word<'a>(s: &'a str) -> &'a str` — there is only one reference parameter, so any borrowed return value can only have come from it.
+
+**Rule 3 — if one parameter is `&self` or `&mut self`, its lifetime is assigned to every output reference**, regardless of how many other parameters exist:
+
+```rust
+struct Wrapper { text: String }
+
+impl Wrapper {
+    fn get(&self) -> &str {
+        &self.text
+    }
+}
+```
+
+Desugars to `fn get<'a>(&'a self) -> &'a str` — the method borrows from `self`, so the returned `&str` is understood to borrow from `self` too.
+
+`longest` from earlier needs an explicit annotation precisely because none of these three rules apply to it: it has *two* reference parameters (so rule 2 doesn't apply — there isn't "exactly one"), and neither is `&self` (so rule 3 doesn't apply). Only when all three rules taken together fully determine the output lifetime does Rust let you omit the annotation.
+
+<Mermaid code={`flowchart TD
+    Start["Function has reference parameters and/or a returned reference"]
+    R1["Rule 1: give each input reference its own lifetime"]
+    R2{"Exactly one input reference?"}
+    R3{"Is one parameter '&self' or '&mut self'?"}
+    Ambiguous["Output lifetime is ambiguous -- write it explicitly"]
+    Resolved["Elision succeeds -- no annotation needed"]
+    Start --> R1 --> R2
+    R2 -->|Yes| Resolved
+    R2 -->|No| R3
+    R3 -->|Yes| Resolved
+    R3 -->|No| Ambiguous`} title="The three elision rules as one decision" />
 
 ## The `'static` Lifetime
 
@@ -123,6 +214,59 @@ let s: &'static str = "I have a static lifetime.";
 - **`T: 'static` as a trait bound** (common on generic parameters, especially with `Box<dyn Trait + 'static>` or when spawning threads) means "this type contains no non-`'static` references" — most owned types (`String`, `Vec<T>`, `i32`) satisfy this trivially, since they own their data rather than borrowing it. It does **not** mean "lives forever" for an owned value; it means the value isn't secretly borrowing from something that could go away.
 
 Reaching for `'static` to silence a lifetime error is a common but usually wrong instinct — it rarely fixes a genuine dangling-reference problem (as the `dangle` example above shows, rustc's own `'static` suggestion does not actually solve anything), and more often means the code should own its data instead of borrowing it.
+
+## Returning `impl Trait`: A Lifetime Feature in Disguise
+
+The Traits lesson's `impl Trait` return-position example is really a lifetime feature: in the Rust 2024 edition, a returned `impl Trait` automatically captures every lifetime in scope, so a function borrowing from a parameter needs no `+ '_` annotation the way it did on `edition = "2021"` (`error[E0700]`). The opt-out for "capture nothing" is the empty `use<>` bound shown there. If you haven't seen that example yet, it's worth reading now that you understand elision — it is the same "which lifetime does the output relate to" question, just answered automatically by the edition instead of by an explicit `'a`.
+
+## Higher-Ranked Trait Bounds: A Teaser
+
+Every lifetime you've annotated so far is chosen once, by the caller, at the point a function is called. Sometimes you need the opposite: a bound that must hold *for every possible lifetime*, not just one specific one — most commonly when accepting a closure that will be called with a freshly borrowed reference each time. This is a **higher-ranked trait bound**, written `for<'a>`:
+
+```rust
+fn apply_to_local<F>(f: F) -> i32
+where
+    F: for<'a> Fn(&'a i32) -> i32,
+{
+    let x = 10;
+    f(&x)
+}
+
+fn main() {
+    let double = |n: &i32| n * 2;
+    println!("{}", apply_to_local(double));
+}
+```
+
+```text
+20
+```
+
+`for<'a> Fn(&'a i32) -> i32` means "for *any* lifetime `'a` the caller of `f` picks, `f` must accept a `&'a i32`" — `apply_to_local` creates `x` and borrows it *inside* the function, so no single lifetime named up front could describe it. In practice you rarely write `for<'a>` by hand; the compiler infers it automatically for closure parameters like this one, and you mostly meet the syntax when reading a compiler error or library documentation rather than writing it yourself.
+
+## Variance: A `&'static str` Fits Anywhere a Shorter `&'a str` Is Expected
+
+A reference with a longer lifetime can always be used where a shorter one is expected — this property is called **variance**, and it's why the following compiles with no coercion syntax at all:
+
+```rust
+fn main() {
+    let s: &'static str = "hello";
+    let owned = String::from("world");
+    let r: &str = &owned;
+
+    fn takes_short<'a>(x: &'a str) -> &'a str { x }
+
+    println!("{}", takes_short(s)); // a &'static str satisfies any shorter &'a
+    println!("{}", takes_short(r));
+}
+```
+
+```text
+hello
+world
+```
+
+Think of a lifetime as a guarantee of "valid for at least this long" — `'static` is the strongest possible guarantee, so it satisfies any weaker requirement automatically. This relationship only goes one direction: you cannot pass a short-lived `&'a str` where a `&'static str` is specifically required, since a shorter guarantee cannot stand in for a stronger one.
 
 export const lifetimesCode = `// A function with a lifetime annotation:
 // the returned reference lives at least as long as the shorter of x or y.
@@ -162,6 +306,46 @@ fn main() {
 Lifetime annotations do not change how long values live in memory. They are purely a compile-time mechanism that tells the borrow checker how the lifetimes of multiple references relate to each other. At runtime there is no lifetime information — it is all erased after the compiler finishes checking.
 </Callout>
 
+## Mental Model
+
+A lifetime is not a duration in seconds or a runtime concept at all — it is a name the compiler gives to a *region of code* where a particular borrow is valid, so it can compare regions against each other ("does this borrow's region end before that value is dropped?"). Elision rules are just the compiler's built-in guesses for the most common shapes of that comparison; when a function's shape doesn't match one of those guesses, you supply the name yourself so the comparison has something to check.
+
+## Trade-offs
+
+Explicit lifetime annotations are the most syntactically unusual part of Rust for newcomers, and elision exists specifically to minimize how often you need to write them — most real functions never need an explicit `'a` at all. What you get in exchange is dangling-reference bugs (use-after-free, returning a pointer to a freed stack frame) moving from "a runtime crash or, worse, silent memory corruption in C/C++" to "a compile error with a specific line number," at zero runtime cost — lifetimes are completely erased before the program runs.
+
+## Common Misconceptions
+
+- **"Lifetime annotations make a value live longer."** They do the opposite of "control" lifetime — they only *describe* an existing relationship between borrows for the compiler to check; they cannot extend how long any value actually stays alive.
+- **"Adding `'static` to a struct field or bound is a safe way to make a lifetime error go away."** As the `dangle` and `Cache` examples show, `'static` either fails to compile for an unrelated reason or forces every caller to only pass in data that genuinely lives for the whole program — it is almost never the fix a borrow-related error is actually asking for.
+- **"`for<'a>` is something I'll need to write constantly once I use closures."** The compiler infers higher-ranked trait bounds automatically for the overwhelming majority of closure parameters; you mainly encounter the syntax itself while reading, not writing, function signatures.
+- **"A `&'static str` needs an explicit conversion to be used where a `&'a str` is expected."** No conversion or coercion syntax is needed — this is what variance guarantees: a longer-lived reference already satisfies any shorter requirement.
+
+## Reading AI-generated code
+
+When a function triggers a lifetime error, generated code often "fixes" it by adding a `'static` bound to a generic parameter or the struct's own lifetime, instead of restructuring so the value is owned or borrowed for a shorter, correct duration.
+
+<SpotTheBug code={`struct Cache<'a> {
+    data: &'a str,
+}
+
+fn build_cache(input: &str) -> Cache<'static> {
+    Cache { data: input }
+}
+
+fn main() {
+    let text = String::from("local data");
+    let cache = build_cache(&text);
+    println!("{}", cache.data);
+}
+`}>
+This does not compile — `error: lifetime may not live long enough`, pointing at `Cache { data: input }` and explaining that `input`'s lifetime "must outlive `'static`." This is exactly the shape of fix an AI assistant reaches for when a lifetime error appears: slap `'static` on the return type so the error looks "handled." But `input: &str` here can be a reference to any short-lived local data — the function has no way to promise the caller's data lives forever, and the compiler catches the lie at the point the (impossible) promise is made, before the caller-side bug it would otherwise cause. There is no annotation that fixes this version: either the function should return `Cache<'a>` tied to the actual input lifetime (`fn build_cache<'a>(input: &'a str) -> Cache<'a>`), or `Cache` should own a `String` instead of borrowing a `&str` at all.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A lifetime names a region of code, not a duration — elision covers the common shapes automatically, and reaching for `'static` to silence an error you don't understand almost always trades a clear compile-time message for a requirement you didn't actually mean to make.
+</Callout>
+
 export const quizLifetimes = [
     {
         q: "Why do lifetime annotations exist in Rust?",
@@ -172,6 +356,7 @@ export const quizLifetimes = [
             "To mark variables as immutable for the duration of a scope",
         ],
         answer: 0,
+        explain: "Lifetimes let the borrow checker compare the region a reference is valid for against the region the data it points to is valid for, catching dangling references before the program runs.",
     },
     {
         q: "In the function signature `fn longest<'a>(x: &'a str, y: &'a str) -> &'a str`, what does the `'a` annotation guarantee?",
@@ -182,26 +367,62 @@ export const quizLifetimes = [
             "Both `x` and `y` must have the same length",
         ],
         answer: 2,
+        explain: "Sharing one lifetime `'a` across x, y, and the return type tells the compiler the output cannot outlive whichever input has the shorter valid region.",
     },
     {
-        q: "When can the compiler infer lifetimes automatically without explicit annotations?",
+        q: "Which of the three elision rules applies to `fn get(&self) -> &str` on some struct, letting it compile with no explicit lifetime?",
         options: [
-            "Always — annotations are optional and only for documentation",
-            "Never — every reference in every function must be annotated",
-            "When the three lifetime elision rules fully determine the output lifetime",
-            "Only when the function has a single return statement",
+            "Rule 1 only -- each parameter gets its own lifetime",
+            "Rule 2 -- there is exactly one input reference",
+            "Rule 3 -- a `&self` parameter's lifetime is assigned to the output reference",
+            "None -- this signature requires an explicit annotation",
         ],
         answer: 2,
+        explain: "Rule 3 specifically covers methods taking &self or &mut self: the output reference is assumed to borrow from self, exactly as this method's body does.",
     },
     {
-        q: "What does it mean to say that lifetime annotations are 'compile-time only'?",
+        q: "Does this compile?\n```rust\nfn main() {\n    let r;\n    {\n        let x = 5;\n        r = &x;\n    }\n    println!(\"{}\", r);\n}\n```",
         options: [
-            "The annotations are stripped from the binary, so they have no effect on program behavior or runtime performance",
-            "The annotations cause the compiler to insert runtime checks for dangling pointers",
-            "Lifetimes are only valid inside `const` functions",
-            "The annotations prevent the optimizer from inlining functions across lifetime boundaries",
+            "Yes -- it prints 5",
+            "No -- error[E0597], x does not live long enough because it's dropped while r still borrows it",
+            "No -- error[E0106], missing lifetime specifier",
+            "Yes, but only in release builds",
+        ],
+        answer: 1,
+        explain: "x is dropped at the end of the inner block, but r (which borrows x) is used afterward in println! -- the compiler reports error[E0597] and refuses to compile.",
+    },
+    {
+        q: "What does this program print?\n```rust\nfn main() {\n    let s: &'static str = \"hello\";\n    fn takes_short<'a>(x: &'a str) -> &'a str { x }\n    println!(\"{}\", takes_short(s));\n}\n```",
+        options: [
+            "It fails to compile -- a &'static str cannot be passed where &'a str is expected",
+            "hello",
+            "It fails to compile -- takes_short needs a &'static bound",
+            "It panics at runtime because 'static outlives 'a",
+        ],
+        answer: 1,
+        explain: "A &'static str satisfies any shorter lifetime requirement automatically (variance) -- no conversion is needed, and the function simply prints hello.",
+    },
+    {
+        q: "Why does adding `'static` to `Cache<'static>` in `fn build_cache(input: &str) -> Cache<'static> { Cache { data: input } }` fail to compile?",
+        options: [
+            "Because Cache cannot have a lifetime parameter at all",
+            "Because `input`'s lifetime cannot be proven to outlive `'static` -- the function has no way to guarantee the caller's reference lives for the whole program",
+            "Because `'static` can only be used on string literals",
+            "It compiles fine -- this is the correct fix for a lifetime error",
+        ],
+        answer: 1,
+        explain: "input is an ordinary, short-lived &str. Claiming the returned Cache is Cache<'static> requires input to actually be 'static, which the compiler cannot verify and rejects with a lifetime error.",
+    },
+    {
+        q: "What is a higher-ranked trait bound like `for<'a> Fn(&'a i32) -> i32` used for?",
+        options: [
+            "Requiring a closure to work for every possible lifetime the caller might use, not just one fixed lifetime chosen up front",
+            "Making a lifetime last for the entire program, like 'static",
+            "Declaring two independent generic type parameters",
+            "Opting a return type out of lifetime capture entirely",
         ],
         answer: 0,
+        explain: "for<'a> means the bound must hold for any lifetime 'a, which is needed when a function (like one borrowing a local variable to pass to a closure) can't name a single fixed lifetime up front.",
     },
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Static vs Dynamic Dispatch
 
@@ -19,10 +21,11 @@ Rust มีสองวิธีในการใช้ trait polymorphism:
 
 ## Syntax `dyn Trait`
 
-เมื่อคุณเขียน `dyn Animal` คุณกำลังขอให้ Rust ใช้ dynamic dispatch เนื่องจาก size ของ concrete type ไม่ทราบ ณ compile time คุณต้องวาง `dyn Trait` ไว้หลัง pointer รูปแบบที่พบบ่อยที่สุดสองแบบคือ:
+เมื่อคุณเขียน `dyn Animal` คุณกำลังขอให้ Rust ใช้ dynamic dispatch เนื่องจาก size ของ concrete type ไม่ทราบ ณ compile time คุณต้องวาง `dyn Trait` ไว้หลัง pointer รูปแบบที่พบบ่อยสามแบบคือ:
 
 - `&dyn Trait` — trait object แบบ borrowed (ไม่ allocate heap)
 - `Box<dyn Trait>` — trait object แบบ owned ที่เก็บบน heap
+- `Rc<dyn Trait>` — trait object แบบ shared ที่นับ reference (หลายเจ้าของ single-threaded)
 
 ```rust
 trait Animal {
@@ -36,6 +39,74 @@ fn make_sound(animal: &dyn Animal) {
 ```
 
 ฟังก์ชันนี้รับ type *ใดก็ได้* ที่ implement `Animal` — คุณไม่จำเป็นต้องรู้ concrete type ณ compile time
+
+## Compiler พูดว่าอย่างไร: `dyn Trait` โดยไม่มี Pointer
+
+`dyn Trait` เดี่ยว ๆ ไม่ใช่ type ที่คุณถือแบบ by-value ได้ — size ของมันขึ้นอยู่กับว่า concrete type ไหนอยู่ข้างหลัง และนั่นไม่รู้จนกว่าจะถึง runtime:
+
+```rust
+// @expect-error E0277
+trait Animal {
+    fn sound(&self) -> &str;
+}
+
+fn make_sound(animal: dyn Animal) {
+    println!("{}", animal.sound());
+}
+
+fn main() {}
+```
+
+```text
+error[E0277]: the size for values of type `(dyn Animal + 'static)` cannot be known at compilation time
+ --> src/main.rs:5:23
+  |
+5 | fn make_sound(animal: dyn Animal) {
+  |                       ^^^^^^^^^^ doesn't have a size known at compile-time
+  |
+  = help: the trait `Sized` is not implemented for `(dyn Animal + 'static)`
+help: you can use `impl Trait` as the argument type
+  |
+5 - fn make_sound(animal: dyn Animal) {
+5 + fn make_sound(animal: impl Animal) {
+  |
+help: function arguments must have a statically known size, borrowed types always have a known size
+  |
+5 | fn make_sound(animal: &dyn Animal) {
+  |                       +
+```
+
+Function parameter ทุกตัวต้องมี size ที่รู้แน่นอน ณ compile time โดยค่าเริ่มต้น (generic parameter ทุกตัวมี `Sized` bound แบบ implicit) และ `dyn Animal` ไม่ผ่านเงื่อนไขนั้น — `Dog` กับ struct ที่ใหญ่กว่ามากที่ implement `Animal` มีขนาดต่างกัน ดังนั้น "a `dyn Animal`" จึงเป็น stack value ขนาดคงที่ไม่ได้ Pointer (`&dyn Animal`, `Box<dyn Animal>`) มีขนาดคงที่เสมอไม่ว่าจะชี้ไปที่อะไร นี่คือเหตุผลพอดีที่ `dyn Trait` ต้องอยู่หลัง pointer เสมอ
+
+## `dyn Trait + 'a`: Lifetime ที่ซ่อนอยู่
+
+ทุก `dyn Trait` type จริง ๆ แบก lifetime bound อยู่ ปกติถูก elide: `Box<dyn Animal>` คือ `Box<dyn Animal + 'static>` จริง ๆ และ `&'a dyn Animal` คือ `&'a (dyn Animal + 'a)` จริง ๆ ค่าเริ่มต้นคือ "นานเท่าที่ container ต้องการ" — `'static` สำหรับ `Box`/`Rc` แบบ owning (ไม่มีอะไรที่ borrow มาจะมีชีวิตนานกว่า box ได้ เว้นแต่บอกไว้เป็นอื่น) และ lifetime ของ pointer เองสำหรับ `&dyn Trait` แบบ borrowed คุณจะเขียน `+ 'a` อย่างชัดเจนก็ต่อเมื่อค่าเริ่มต้นผิดสำหรับกรณีของคุณ ซึ่งบ่อยที่สุดคือเมื่อ trait object ต้อง borrow data ที่ไม่ใช่ `'static`:
+
+```rust
+trait Animal {
+    fn sound(&self) -> &str;
+}
+
+struct Dog<'a> {
+    tag: &'a str,
+}
+
+impl<'a> Animal for Dog<'a> {
+    fn sound(&self) -> &str {
+        self.tag
+    }
+}
+
+fn make_animal<'a>(tag: &'a str) -> Box<dyn Animal + 'a> {
+    Box::new(Dog { tag }) // the trait object borrows `tag`, so it cannot be `+ 'static`
+}
+
+fn main() {
+    let tag = String::from("Woof");
+    let animal = make_animal(&tag);
+    println!("{}", animal.sound());
+}
+```
 
 ## เก็บหลาย Type ใน Collection เดียว
 
@@ -66,6 +137,16 @@ let animals: Vec<Box<dyn Animal>> = vec![
 
 แต่ละ element เป็น `Box<dyn Animal>` — pointer แบบ owned ไปยัง type ใดก็ตามที่ implement `Animal` vtable ที่เก็บคู่กับแต่ละค่ารับประกันว่า `sound()` และ `name()` ที่ถูกต้องจะถูกเรียก
 
+## `&dyn Trait` vs `Box<dyn Trait>` vs `Rc<dyn Trait>`
+
+ทั้งสามคือ trait object พวกมันต่างกันแค่เรื่อง ownership เหมือนกับคู่ที่ไม่ใช่ `dyn` ของมันทุกประการ:
+
+| รูปแบบ | Ownership | ควรใช้เมื่อ |
+|---|---|---|
+| `&dyn Trait` | Borrowed ไม่ allocate | Function แค่ต้องเรียก method ไม่ต้องเก็บค่าไว้ |
+| `Box<dyn Trait>` | Owned เจ้าของเดียว heap-allocated | เก็บ trait object หนึ่งตัวที่ scope นี้เป็นเจ้าของ (`Vec<Box<dyn Trait>>`, field ของ struct) |
+| `Rc<dyn Trait>` | Shared นับ reference heap-allocated | หลายเจ้าของต้องการ trait object เดียวกัน single-threaded (`Arc<dyn Trait>` คือคู่เทียบสำหรับ multi-threaded) |
+
 ## `impl Trait` vs `dyn Trait`
 
 ทั้ง `&impl Animal` และ `&dyn Animal` รับ "type ใดก็ได้ที่ implement `Animal`" เป็น parameter ของฟังก์ชัน แต่ compile ออกมาต่างกันมาก:
@@ -94,6 +175,46 @@ fn main() {
 ```
 
 `&impl Animal` เป็น shorthand ของ generic type parameter (`fn notify_static<T: Animal>(item: &T)`) — compiler จะ monomorphize มันเหมือนกับ generics ที่คุณเห็นในบทก่อนหน้า ส่วน `&dyn Animal` คือ trait object — ฟังก์ชันเดียว ที่ dispatch ผ่าน vtable ณ runtime ใช้ `impl Trait` เมื่อรู้ type ณ compile time และต้องการประสิทธิภาพสูงสุด ใช้ `dyn Trait` เมื่อต้องการความยืดหยุ่น ณ runtime เช่นเก็บหลาย type ใน `Vec` หรือ return type ต่างกันจากแต่ละ branch
+
+## วัดขนาด Fat Pointer
+
+`dyn Trait` reference คือ **fat pointer**: มันแบก data pointer *และ* vtable pointer ดังนั้นมันมีขนาดเป็นสองเท่าของ reference ธรรมดา นี่ไม่ใช่ข้อกล่าวอ้างที่ต้องเชื่อเฉย ๆ:
+
+```rust
+trait Animal {
+    fn sound(&self) -> &str;
+}
+
+struct Dog;
+impl Animal for Dog {
+    fn sound(&self) -> &str { "Woof" }
+}
+
+fn main() {
+    let d = Dog;
+    let r: &Dog = &d;
+    let dyn_r: &dyn Animal = &d;
+    println!("&Dog: {} bytes", std::mem::size_of_val(&r));
+    println!("&dyn Animal: {} bytes", std::mem::size_of_val(&dyn_r));
+}
+```
+
+```text
+&Dog: 8 bytes
+&dyn Animal: 16 bytes
+```
+
+`&Dog` คือ machine word เดียว (8 byte บน 64-bit target) — แค่ address `&dyn Animal` คือสอง word: address ข้อมูลเดียวกัน บวก pointer ไปยัง vtable ของ `Animal` สำหรับ `Dog` `Box<dyn Animal>` และ `Rc<dyn Animal>` ก็ fat แบบเดียวกันด้วยเหตุผลเดียวกัน
+
+<Mermaid code={`flowchart LR
+    subgraph FatPointer["&dyn Animal (16 bytes)"]
+        DataPtr["data pointer"]
+        VtablePtr["vtable pointer"]
+    end
+    DataPtr --> DogData["Dog value on the stack or heap"]
+    VtablePtr --> Vtable["Dog's Animal vtable"]
+    Vtable --> SoundFn["fn sound(&self) -> &str"]
+    Vtable --> DropFn["fn drop_in_place"]`} title="สิ่งที่ fat pointer ของ trait object ชี้ไปจริง ๆ" />
 
 ## Trait Objects และ Dyn Compatibility
 
@@ -181,6 +302,43 @@ fn main() {
 }
 ```
 
+## `dyn Any` และ Downcasting
+
+`std::any::Any` คือ trait พิเศษที่ทุก `'static` type implement ให้อัตโนมัติ มันให้คุณ type-erase ค่าได้อย่างสมบูรณ์ แล้วถามภายหลัง ณ runtime ว่า "นี่คือ `Dog` จริงหรือเปล่า" ผ่าน `downcast_ref::<T>()`:
+
+```rust
+use std::any::Any;
+
+struct Dog;
+struct Cat;
+
+fn describe(animal: &dyn Any) {
+    if let Some(_d) = animal.downcast_ref::<Dog>() {
+        println!("it's a dog");
+    } else if let Some(_c) = animal.downcast_ref::<Cat>() {
+        println!("it's a cat");
+    } else {
+        println!("unknown animal");
+    }
+}
+
+fn main() {
+    describe(&Dog);
+    describe(&Cat);
+}
+```
+
+```text
+it's a dog
+it's a cat
+```
+
+การใช้แบบนี้มีความชอบธรรม — ระบบที่ type-erased จริง ๆ เช่น plugin registry หรือ heterogeneous event bus ที่ชุด type ที่เป็นไปได้ไม่ได้ถูกกำหนดตายตัวโดยโค้ดนี้เลย มันเป็นกลิ่นของปัญหาทันทีที่ชุด type ทั้งหมด *รู้แล้ว* และตายตัว อย่างในกรณีนี้: `Dog` และ `Cat` คือสอง struct ที่ hard-code ไว้ในไฟล์เดียวกันนี้ และ chain `if`/`else if` ของ downcast กำลังทำ ด้วยมือและไม่มี exhaustiveness checking สิ่งที่ `match` บน `enum Animal { Dog, Cat }` จะทำได้อัตโนมัติและปลอดภัยกว่า
+
+## กรอบคิดเรื่อง Performance
+
+การเรียก `dyn Trait` มีค่าใช้จ่ายเพิ่มคือ pointer indirection หนึ่งครั้งเพื่อค้นหา function ใน vtable บวกกับว่าการเรียกมักจะ inline ไม่ได้ (compiler ไม่รู้ ณ compile time ว่าจะกระโดดไป function ไหน) สำหรับโค้ดส่วนใหญ่นี่น้อยมากจนแทบไม่มีนัย — เทียบเท่ากับ memory load เพิ่มหนึ่งครั้ง — แต่มันไม่ได้ฟรีจริง ๆ แบบที่ monomorphized generic call เป็น `#[inline]` บน concrete method ไม่มีผลกับการเรียก *ผ่าน* `dyn Trait` เพราะ inlining ต้องรู้ function ที่แน่ชัด ณ compile time — มันช่วยได้แค่ path ที่ dispatch แบบ static โดยตรงเท่านั้น
+
 ## เมื่อใดควรใช้แบบไหน
 
 | แนวทาง | รู้ type ณ compile time? | Runtime cost | เก็บหลาย type ใน collection เดียวได้? |
@@ -230,6 +388,50 @@ fn main() {
 เมื่อคุณใช้ `dyn Trait` Rust จะเก็บ fat pointer: pointer ไปยังข้อมูล และ pointer ไปยัง vtable (ตารางของ function pointer สำหรับ trait implementation ของ type นั้น) สิ่งนี้ทำให้ concrete type ต่างกันเก็บร่วมกันใน collection ได้ ค่าใช้จ่ายคือ indirection เล็กน้อยต่อการเรียก method — ปกติแล้วเล็กน้อยมาก แต่ควรรู้ไว้
 </Callout>
 
+## Mental Model
+
+Trait object คือค่าที่จงใจลืม concrete type ของตัวเอง เพื่อแลกกับรูปร่างที่คงที่และเหมือนกันเสมอ: สอง word (data pointer, vtable pointer) ไม่ว่าจะมีอะไรอยู่ข้างหลังจริง ๆ ทุกการเรียก method ผ่านมันคือการค้นหา — "ไปที่ vtable นี้ หา slot ของ method นี้ กระโดดไปที่นั่น" — แทนที่จะเป็นการเรียกตรงที่ compiler resolve ไว้ล่วงหน้า การค้นหานั้นคือค่าใช้จ่าย runtime ทั้งหมด และมันก็เป็นเหตุผลทั้งหมดที่ `Vec<Box<dyn Animal>>` เก็บ `Dog` กับ `Cat` เคียงข้างกันได้ ในขณะที่ `Vec<Dog>` ทำแบบนั้นไม่ได้เลยโดยพื้นฐาน
+
+## Trade-offs
+
+`dyn Trait` ให้ความยืดหยุ่นจริง ๆ — heterogeneous collection, extensibility แบบ plugin, compiled code ชุดเดียวไม่ว่าจะมี type กี่ตัว implement trait นั้นในที่สุด — แลกกับค่าใช้จ่ายเล็กน้อยแต่จริง: vtable indirection ต่อการเรียก, ไม่มี inlining ข้ามการเรียกนั้น, และข้อจำกัดเรื่องขนาดกับ dyn-compatibility ที่ generics ไม่ต้องคิดถึงเลย `dyn Any` ผลักดันสิ่งนี้ไปไกลกว่า โดยแลก exhaustiveness checking ของ type system ทั้งหมดเพื่อ type erasure ที่แท้จริง — คุ้มค่าสำหรับ plugin system เป็นความเสี่ยงจริงเมื่อ type ทั้งหมดรู้อยู่แล้วตั้งแต่ต้น
+
+## Common Misconceptions
+
+- **"`dyn Trait` กับ `impl Trait` เป็น syntax sugar แบบเดียวกันโดยพื้นฐาน"** พวกมัน compile ไปคนละกลยุทธ์: `impl Trait` resolve ต่อ call site ณ compile time (monomorphization); `dyn Trait` resolve ครั้งเดียว ณ runtime ผ่าน function เดียวที่ dispatch ด้วย vtable ร่วมกัน
+- **"`dyn Trait` value ส่งผ่านแบบ by value ได้เหมือน type อื่น"** ทำไม่ได้ — `dyn Trait` เดี่ยว ๆ ไม่มี size ที่รู้ ณ compile time (`error[E0277]` ที่แสดงข้างบน) จึงต้องมี pointer ล้อมรอบเสมอ
+- **"`dyn Any` กับ downcasting คือวิธี Rust 'ที่แท้จริง' ในการตรวจสอบ type ของค่า ณ runtime"** พวกมันคือ escape hatch ที่จงใจสำหรับ type erasure จริง ๆ ไม่ใช่ตัวแทนทั่วไปของ pattern matching บน enum — หันไปใช้ enum ก่อนเสมอเมื่อชุด type ทั้งหมดรู้อยู่แล้ว
+- **"Object safety กับ dyn compatibility เป็นคนละแนวคิดกัน"** มันคือข้อกำหนดเดียวกันภายใต้สองชื่อ — "object safety" คือชื่อเก่า — diagnostic ของ rustc ปัจจุบันพูดแค่ "is not dyn compatible" เท่านั้น
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ generate มาบางครั้งหยิบ `dyn Any` บวกกับ chain ของ `downcast_ref` มาแยกความแตกต่างระหว่าง type ที่ hardcode ไว้แค่ไม่กี่ตัว แทนที่จะใช้ enum ที่มีอยู่ให้ใช้อยู่แล้วตลอดเวลา
+
+<SpotTheBug code={`use std::any::Any;
+
+struct Cat;
+struct Dog;
+
+fn feed(animal: &dyn Any) {
+    if animal.downcast_ref::<Cat>().is_some() {
+        println!("give it fish");
+    } else if animal.downcast_ref::<Dog>().is_some() {
+        println!("give it kibble");
+    }
+}
+
+fn main() {
+    feed(&Cat);
+    feed(&Dog);
+}
+`}>
+โค้ดนี้ compile ผ่านและรันได้ถูกต้อง — `give it fish` แล้ว `give it kibble` — ซึ่งเป็นเหตุผลพอดีที่มันรอดจากการ review ปัญหาคือสิ่งที่มันเสียไป: `dyn Any` type-erase ทุกอย่าง แล้ว `downcast_ref` ไล่กลับทีละ type ที่ hardcode ไว้ด้วย `if`/`else if` เป็นรูปร่างเดียวกับ `match` ที่ compiler จะ exhaustiveness-check ให้ได้ ไม่มีอะไรในนี้จับ animal type ที่สามที่เพิ่มเข้ามาทีหลังและลืมจัดการใน `feed` — chain `if` แค่ไม่ทำอะไรเงียบ ๆ สำหรับมัน `enum Animal { Cat, Dog }` ธรรมดาพร้อม `match` ใน `feed` ทำงานเหมือนกันวันนี้ และเปลี่ยน "ลืมจัดการ variant ใหม่" ให้เป็น compile error ในวันพรุ่งนี้ `dyn Any` มีไว้สำหรับสถานการณ์ที่ type-erased จริง ๆ — plugin system ที่เก็บ type ที่ไม่เกี่ยวข้องกันตามอำเภอใจ — ไม่ใช่ตัวแทนของ enum ที่คุณรู้รูปร่างอยู่แล้ว
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Trait object คือ fat pointer (data + vtable) ที่แลกค่าใช้จ่ายเล็กน้อยที่วัดได้ต่อการเรียก กับสิ่งเดียวที่ generics ทำไม่ได้ — การเก็บ concrete type ที่ต่างกันจริง ๆ ไว้ใน collection เดียวกัน
+</Callout>
+
 export const quizTraitObjects = [
     {
         q: "`dyn Trait` ใน Rust หมายความว่าอะไร?",
@@ -240,6 +442,7 @@ export const quizTraitObjects = [
             "Trait ที่สามารถ implement ได้โดย type เดียวเท่านั้น",
         ],
         answer: 2,
+        explain: "dyn Trait ลบล้าง concrete type ไว้หลัง fat pointer; การเรียก method ผ่าน vtable ที่ค้นหา ณ runtime แทนที่จะ resolve ณ compile time",
     },
     {
         q: "vtable คืออะไร?",
@@ -250,6 +453,7 @@ export const quizTraitObjects = [
             "Keyword พิเศษของ Rust สำหรับ virtual method dispatch",
         ],
         answer: 0,
+        explain: "vtable คือ word ที่สองของ fat pointer ของ dyn Trait — ตารางของ function pointer เฉพาะสำหรับ trait implementation ของ concrete type นั้น",
     },
     {
         q: "ทำไม `dyn Trait` ต้องวางไว้หลัง pointer เช่น `Box<dyn Trait>` หรือ `&dyn Trait`?",
@@ -260,6 +464,7 @@ export const quizTraitObjects = [
             "เพราะ value ของ `dyn Trait` ไม่ implement `Sized` marker trait และ pointer มี size ที่ทราบแน่นอน",
         ],
         answer: 3,
+        explain: "dyn Trait ไม่ใช่ Sized — size ของมันเปลี่ยนตาม concrete type ข้างหลัง — ซึ่งเป็นสิ่งที่ error[E0277] รายงานพอดีเมื่อคุณลองใช้มันแบบเปล่า ๆ pointer ที่ล้อมรอบมันมี size คงที่เสมอ",
     },
     {
         q: "แนวทางใดที่รองรับการเก็บค่าของ concrete type ต่างกันไว้ใน `Vec` เดียวกัน?",
@@ -270,6 +475,35 @@ export const quizTraitObjects = [
             "ทั้ง generics และ trait object ทำงานได้เหมือนกันสำหรับจุดประสงค์นี้",
         ],
         answer: 1,
+        explain: "Vec<T> เก็บได้แค่ T ตัวเดียวเสมอ Vec<Box<dyn Animal>> เก็บ fat pointer ต่อ element ดังนั้นแต่ละ element เป็น concrete type ต่างกันที่ implement Animal ได้",
+    },
+    {
+        q: "สองบรรทัดนี้ print อะไร?\n```rust\ntrait Animal { fn sound(&self) -> &str; }\nstruct Dog;\nimpl Animal for Dog { fn sound(&self) -> &str { \"Woof\" } }\nfn main() {\n    let d = Dog;\n    println!(\"{}\", std::mem::size_of_val(&(&d)));\n    let dyn_r: &dyn Animal = &d;\n    println!(\"{}\", std::mem::size_of_val(&dyn_r));\n}\n```",
+        options: ["8 แล้ว 8", "16 แล้ว 16", "8 แล้ว 16", "16 แล้ว 8"],
+        answer: 2,
+        explain: "&Dog เป็น reference ธรรมดา: หนึ่ง machine word 8 byte &dyn Animal เป็น fat pointer: data pointer บวก vtable pointer รวม 16 byte บน 64-bit target",
+    },
+    {
+        q: "ทำไม code นี้ compile ไม่ผ่าน?\n```rust\ntrait Animal { fn sound(&self) -> &str; }\nfn make_sound(animal: dyn Animal) {\n    println!(\"{}\", animal.sound());\n}\n```",
+        options: [
+            "error[E0038] — Animal ไม่ dyn compatible",
+            "error[E0277] — size สำหรับ value ของ type dyn Animal ไม่รู้ ณ compile time เพราะไม่มี pointer ล้อมรอบ",
+            "error[E0308] — type ไม่ตรงกันระหว่าง dyn Animal กับ &dyn Animal",
+            "Compile ผ่านสบาย ๆ — dyn Trait ใช้ by value ได้",
+        ],
+        answer: 1,
+        explain: "Parameter dyn Animal เปล่า ๆ ไม่มี size ที่รู้แน่นอน ณ compile time และ function parameter ทุกตัวต้องมี size โดยค่าเริ่มต้น วิธีแก้คือใส่ pointer: &dyn Animal หรือ Box<dyn Animal>",
+    },
+    {
+        q: "ทำไม chain `if`/`else if` ของ `downcast_ref` บน `dyn Any` แบบเขียนมือถึงเป็นกลิ่นของปัญหาเมื่อชุด type ทั้งหมด (เช่น Cat กับ Dog) รู้อยู่แล้ว?",
+        options: [
+            "downcast_ref ช้ากว่าการ lookup ด้วย HashMap",
+            "dyn Any ใช้กับ struct ไม่ได้ ใช้ได้แค่ enum",
+            "มันสละ compile-time exhaustiveness checking ที่ match บน enum จะให้ ทำให้ type ใหม่ที่ลืมจัดการหลุดผ่านไปเงียบ ๆ แทนที่จะ compile ไม่ผ่าน",
+            "downcast_ref panic เสมอถ้า type ไม่ตรงกัน",
+        ],
+        answer: 2,
+        explain: "dyn Any มีไว้สำหรับ type erasure จริง ๆ (plugin system, type ที่ไม่รู้จัก) เมื่อทุก type รู้อยู่แล้ว enum พร้อม match ให้พฤติกรรมเดียวกันบวกกับ compile error ถ้ามี variant ใหม่ที่เพิ่มมาแล้วไม่ได้จัดการ",
     },
 ];
 

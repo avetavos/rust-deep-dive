@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 export const traitsCode = `trait Shape {
     fn area(&self) -> f64;
@@ -52,6 +54,7 @@ export const quizTraits = [
             '`struct Flyable { fly: fn(&self) }`',
         ],
         answer: 0,
+        explain: '`trait` คือ keyword ที่ประกาศ trait method ไม่มี body จึงเป็น required method ที่ผู้ implement ทุกคนต้องจัดหาให้',
     },
     {
         q: 'default method ใน trait คืออะไร?',
@@ -62,11 +65,13 @@ export const quizTraits = [
             'Method ที่ต้อง implement ในทุก type ที่ใช้ trait',
         ],
         answer: 1,
+        explain: 'Default method มี body อยู่ใน trait definition ผู้ implement รับมันมาฟรีและสามารถ override ด้วย implementation ของตัวเองได้ถ้า default ไม่เหมาะกับพวกเขา',
     },
     {
         q: 'ใน trait `Shape` ตัวอย่าง method ใดที่มี default implementation?',
         options: ['`area`', '`describe`', 'ทั้ง `area` และ `describe`', 'ไม่มี — ทั้งสองต้อง implement เอง'],
         answer: 1,
+        explain: '`describe` มี body อยู่ใน trait และเรียก `self.area()`; `area` ไม่มี body ดังนั้นผู้ implement ทุกคนต้องจัดหาของตัวเอง',
     },
     {
         q: 'syntax ใดที่ถูกต้องสำหรับการ implement trait `Shape` ให้กับ struct ชื่อ `Triangle`?',
@@ -77,6 +82,51 @@ export const quizTraits = [
             '`trait Shape impl Triangle { ... }`',
         ],
         answer: 2,
+        explain: 'Pattern จะเป็น `impl TraitName for TypeName` เสมอ — ชื่อ trait มาก่อน ตามด้วย `for` แล้วตามด้วย type ที่ implement',
+    },
+    {
+        q: 'ทำไม code นี้ compile ไม่ผ่าน?\n```rust\nimpl std::fmt::Display for Vec<i32> {\n    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {\n        write!(f, "{:?}", self)\n    }\n}\n```',
+        options: [
+            'Compile ผ่านสบาย ๆ — Display implement ให้ type อะไรก็ได้',
+            'error[E0117] — orphan rule ห้าม implement foreign trait (Display) ให้กับ foreign type (Vec)',
+            'error[E0308] — type ไม่ตรงกันใน signature ของ fmt',
+            'error[E0038] — Display ไม่ dyn compatible',
+        ],
+        answer: 1,
+        explain: 'ทั้ง Display และ Vec ถูกนิยามนอก crate นี้ orphan rule ต้องการให้ trait หรือ type (หรือทั้งคู่) เป็น local — วิธีแก้คือ wrap ด้วย newtype เช่น `struct MyVec(Vec<i32>);`',
+    },
+    {
+        q: 'โปรแกรมนี้ print อะไร?\n```rust\nuse std::ops::Add;\n#[derive(Debug, Clone, Copy)]\nstruct Point { x: i32, y: i32 }\nimpl Add for Point {\n    type Output = Point;\n    fn add(self, other: Point) -> Point {\n        Point { x: self.x + other.x, y: self.y + other.y }\n    }\n}\nfn main() {\n    let a = Point { x: 1, y: 2 };\n    let b = Point { x: 3, y: 4 };\n    println!("{:?}", a + b);\n}\n```',
+        options: [
+            'Compile ไม่ผ่าน — Point ใช้ operator + ไม่ได้',
+            'Point { x: 1, y: 2 }',
+            'Point { x: 4, y: 6 }',
+            '(4, 6)',
+        ],
+        answer: 2,
+        explain: 'การ implement `std::ops::Add` คือการ overload `+` ให้ Point: `a + b` desugar เป็น `Add::add(a, b)` ซึ่งบวกแต่ละ field ได้ `Point { x: 4, y: 6 }` ที่ print ผ่าน derived Debug',
+    },
+    {
+        q: 'การ implement `Deref<Target = f64>` ให้ newtype อย่าง `struct Meters(f64)` มีปัญหาอะไร?',
+        options: [
+            'ไม่มีปัญหา — เป็นวิธีที่แนะนำสำหรับเพิ่ม convenience method ให้ newtype',
+            'Compile ไม่ผ่าน — Deref ไม่สามารถ target primitive type ได้',
+            'มันเปิดให้ method ของ f64 ทุกตัว (เช่น .sqrt()) ใช้กับ Meters ได้เงียบ ๆ ทำลาย type-safety ที่ newtype มีไว้เพื่อสิ่งนั้น',
+            'มันทำให้ Meters ไม่สามารถ implement trait อื่นได้เลย',
+        ],
+        answer: 2,
+        explain: 'Deref มีไว้สำหรับ smart pointer ที่ทำหน้าที่แทน target ของมันจริง ๆ การใช้มันกับ newtype แค่เพื่อเลี่ยงการเขียน `.0` เปิดให้ operation ของ f64 ที่ไม่เกี่ยวข้อง "รั่ว" ผ่าน Meters ได้เงียบ ๆ',
+    },
+    {
+        q: 'ทำไม `Iterator` ประกาศ `type Item;` เป็น associated type แทนที่จะเป็น generic parameter `Iterator<Item>`?',
+        options: [
+            'Associated type เร็วกว่า generic parameter ณ runtime',
+            'Generic parameter จะให้ type เดียว implement Iterator ได้หลายครั้งด้วย Item ต่างกัน แต่แต่ละ type ควร iterate item ชนิดเดียวเท่านั้น',
+            'Generic parameter ใช้ในนิยาม trait ไม่ได้',
+            'ไม่มีความต่างจริง ๆ เป็นแค่เรื่องสไตล์',
+        ],
+        answer: 1,
+        explain: 'Associated type กำหนดเลือกได้แค่หนึ่งอย่างต่อผู้ implement Iterator ใช้มันเพราะ type หนึ่ง (เช่น Counter) ควรผลิต item ได้แค่ชนิดเดียว ไม่มีเหตุผลต้องให้มี Item หลายชนิดสำหรับ iterator เดียวกัน',
     },
 ];
 
@@ -137,7 +187,7 @@ let d = Dog { name: String::from("Rex") };
 println!("{}", d.hello()); // Woof! I'm Rex.
 ```
 
-## Default Methods
+## Default Methods และการ Override
 
 Trait สามารถจัดหา body เริ่มต้นสำหรับ method ใดก็ได้ ผู้ implement สามารถ override หรือใช้ค่าเริ่มต้นได้:
 
@@ -153,6 +203,35 @@ trait Shape {
 ```
 
 `Circle` และ `Rectangle` ต้อง implement แค่ `area` เท่านั้น Method `describe` จะถูกรับมาโดยอัตโนมัติและเรียก `area` ของ type นั้น ณ runtime
+
+ผู้ implement มีอิสระที่จะ **override** default method ด้วย body ของตัวเอง — default เป็นแค่ fallback ไม่ใช่คำตอบสุดท้าย:
+
+```rust
+trait Shape {
+    fn area(&self) -> f64;
+    fn describe(&self) -> String {
+        format!("I am a shape with area {:.2}", self.area())
+    }
+}
+
+struct Circle { radius: f64 }
+
+impl Shape for Circle {
+    fn area(&self) -> f64 {
+        std::f64::consts::PI * self.radius * self.radius
+    }
+
+    // Overrides the default -- Circle wants a more specific message
+    fn describe(&self) -> String {
+        format!("A circle with radius {:.1}", self.radius)
+    }
+}
+
+fn main() {
+    let c = Circle { radius: 2.0 };
+    println!("{}", c.describe()); // uses Circle's override, not the trait's default
+}
+```
 
 ## การเรียก Trait Methods
 
@@ -210,11 +289,489 @@ fn make_counter(start: u32) -> impl FnMut() -> u32 + use<> {
 }
 ```
 
+(บทเรียน Lifetimes จะอธิบายว่า "capture lifetime" หมายความว่าอะไรลึกกว่านี้ — `use<>` opt-out นี้คือฟีเจอร์เดียวกันมองจากฝั่ง generics)
+
+## Supertraits
+
+Trait สามารถกำหนดให้ผู้ implement *ต้อง* implement trait อีกตัวด้วย — เรียกว่า **supertrait** `trait Greet: Named` หมายความว่า "คุณจะ implement `Greet` ได้ก็ต่อเมื่อ type นั้น implement `Named` อยู่แล้ว" และมันทำให้ default method ของ `Greet` เรียก method ของ `Named` ได้โดยไม่ต้องเพิ่ม bound อะไรอีก:
+
+```rust
+trait Named {
+    fn name(&self) -> String;
+}
+
+// `Greet` requires any implementor to also implement `Named`
+trait Greet: Named {
+    fn greet(&self) -> String {
+        format!("Hello, {}!", self.name())
+    }
+}
+
+struct Person { name: String }
+
+impl Named for Person {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+}
+
+impl Greet for Person {} // no methods to write -- the default calls Named::name
+
+fn main() {
+    let p = Person { name: String::from("Ferris") };
+    println!("{}", p.greet());
+}
+```
+
+```text
+Hello, Ferris!
+```
+
+นี่คือ composition ไม่ใช่ inheritance: `Greet` ไม่ได้รับ field ของ `Named` มา หรือแทนที่ type ของ `Person` — มันแค่ประกาศว่าต้องการความสามารถอย่างหนึ่ง
+
+## Blanket Implementations และ Orphan Rule
+
+**Blanket implementation** คือการ implement trait ให้กับทุก type ที่ผ่าน bound หนึ่ง ๆ ใน `impl` block เดียว แทนที่จะเขียน `impl` แยกต่อ concrete type:
+
+```rust
+trait Describe {
+    fn describe(&self) -> String;
+}
+
+// Every type that implements Display automatically implements Describe too
+impl<T: std::fmt::Display> Describe for T {
+    fn describe(&self) -> String {
+        format!("value: {}", self)
+    }
+}
+
+fn main() {
+    println!("{}", 42.describe());
+    println!("{}", "hello".describe());
+}
+```
+
+โค้ดนี้ compile ผ่านเพราะ `Describe` เป็น trait ที่นิยามใน crate *นี้* — คุณสามารถ implement trait ของตัวเองให้กับ type อะไรก็ได้ ทั้ง foreign หรือ local ตราบใดที่ trait เองเป็น local สิ่งที่คุณทำไม่ได้คือ implement **foreign trait** (นิยามที่อื่น เช่น `std::fmt::Display`) ให้กับ **foreign type** (นิยามที่อื่น เช่น `Vec<i32>`) — นี่คือ **orphan rule** และ compiler บังคับใช้ด้วย error เฉพาะทาง:
+
+```rust
+// @expect-error E0117
+impl std::fmt::Display for Vec<i32> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+fn main() {}
+```
+
+```text
+error[E0117]: only traits defined in the current crate can be implemented for types defined outside of the crate
+ --> src/main.rs:1:1
+  |
+1 | impl std::fmt::Display for Vec<i32> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^--------
+  |                            |
+  |                            `Vec` is not defined in the current crate
+  |
+  = note: impl doesn't have any local type before any uncovered type parameters
+  = note: for more information see https://doc.rust-lang.org/reference/items/implementations.html#orphan-rules
+  = note: define and implement a trait or new type instead
+```
+
+Orphan rule มีอยู่เพื่อไม่ให้สอง crate ที่ไม่เกี่ยวข้องกันเขียน implementation ที่ขัดแย้งกันของ trait เดียวกันให้กับ type เดียวกัน — ถ้าอนุญาต compiler จะไม่มีทางตัดสินใจได้ว่า downstream crate ควรได้ `impl` ไหน วิธีแก้มาตรฐานที่ rustc แนะนำคือ "define ... a new type" — นั่นคือ newtype pattern: wrap foreign type ด้วย tuple struct ของตัวเอง (`struct MyVec(Vec<i32>);`) แล้ว implement foreign trait ให้กับ *ตัวนั้น* เพราะ type ใหม่ของคุณเป็น local
+
+## การแปลงระหว่าง Type: `From`, `Into`, และ `TryFrom`
+
+`From<T>` นิยามการแปลงที่ไม่มีวันล้มเหลวเข้าสู่ type ของคุณ การ implement มันทำให้คุณได้ `Into` มาฟรีในทิศทางตรงข้าม เพราะ standard library มี blanket `impl<T, U: From<T>> Into<U> for T` ให้:
+
+```rust
+#[derive(Debug)]
+struct Meters(f64);
+
+#[derive(Debug)]
+struct Feet(f64);
+
+impl From<Feet> for Meters {
+    fn from(feet: Feet) -> Self {
+        Meters(feet.0 * 0.3048)
+    }
+}
+
+fn describe_height(feet: Feet) -> String {
+    let meters: Meters = feet.into(); // Into is the automatic mirror of From
+    format!("{:?}", meters)
+}
+
+fn main() {
+    println!("{}", describe_height(Feet(6.0)));
+}
+```
+
+```text
+Meters(1.8288000000000002)
+```
+
+`TryFrom<T>` คือคู่ที่อาจล้มเหลวได้ สำหรับการแปลงที่มีโอกาสพัง — มัน return `Result` แทนที่จะ return ค่าตรง ๆ จึงใช้ร่วมกับ `?` ได้อย่างเป็นธรรมชาติ:
+
+```rust
+#[derive(Debug)]
+struct EvenNumber(i32);
+
+impl TryFrom<i32> for EvenNumber {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        if value % 2 == 0 {
+            Ok(EvenNumber(value))
+        } else {
+            Err(format!("{value} is not even"))
+        }
+    }
+}
+
+fn make_even(n: i32) -> Result<EvenNumber, String> {
+    let even = EvenNumber::try_from(n)?; // short-circuits with Err if try_from fails
+    Ok(even)
+}
+
+fn main() {
+    println!("{:?}", make_even(4));
+    println!("{:?}", make_even(5));
+}
+```
+
+```text
+Ok(EvenNumber(4))
+Err("5 is not even")
+```
+
+## `Display` vs `Debug`
+
+`Debug` (`{:?}`) มีไว้สำหรับนักพัฒนา: `#[derive(Debug)]` สร้าง representation เชิงโครงสร้างแบบตรงไปตรงมาโดยไม่ต้องตัดสินใจเรื่อง format เลย `Display` (`{}`) มีไว้สำหรับผู้ใช้ปลายทาง: ไม่มี derive ให้ เพราะไม่มี format ที่ "ถูกต้อง" หนึ่งเดียวที่ compiler จะเดาได้ — คุณต้อง implement เอง:
+
+```rust
+use std::fmt;
+
+struct Point { x: i32, y: i32 }
+
+impl fmt::Display for Point {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "({}, {})", self.x, self.y)
+    }
+}
+
+#[derive(Debug)]
+struct Rect { top_left: (i32, i32), width: i32, height: i32 }
+
+fn main() {
+    let p = Point { x: 3, y: 4 };
+    println!("{}", p); // Display: chosen by you
+
+    let r = Rect { top_left: (0, 0), width: 10, height: 20 };
+    println!("{:?}", r);  // Debug: compact, derived
+    println!("{:#?}", r); // Debug: pretty-printed, still derived
+}
+```
+
+```text
+(3, 4)
+Rect { top_left: (0, 0), width: 10, height: 20 }
+Rect {
+    top_left: (
+        0,
+        0,
+    ),
+    width: 10,
+    height: 20,
+}
+```
+
+`{:#?}` ก็ยังคือ `Debug` — flag `#` แค่ขอให้ implementation ที่ derive มาเดียวกันกระจายตัวเองข้ามหลายบรรทัดแบบมี indent ไม่มี `{:#}` เทียบเท่าสำหรับ `Display` — pretty-printing เป็น convention เฉพาะของ `Debug` เท่านั้น
+
+## Operator Overloading
+
+Operator อย่าง `+` เป็น trait ในตัวมันเอง — `a + b` คือ syntax sugar ของ `Add::add(a, b)` การ implement `std::ops::Add` ทำให้ type ของคุณใช้ `+` ได้:
+
+```rust
+use std::ops::Add;
+
+#[derive(Debug, Clone, Copy)]
+struct Point { x: i32, y: i32 }
+
+impl Add for Point {
+    type Output = Point;
+
+    fn add(self, other: Point) -> Point {
+        Point { x: self.x + other.x, y: self.y + other.y }
+    }
+}
+
+fn main() {
+    let a = Point { x: 1, y: 2 };
+    let b = Point { x: 3, y: 4 };
+    println!("{:?}", a + b);
+}
+```
+
+```text
+Point { x: 4, y: 6 }
+```
+
+Pattern เดียวกันขยายไปถึง `Sub`, `Mul`, `Index`, `Neg` และ operator อื่น ๆ ทุกตัว — แต่ละตัวคือ trait เดียวที่มี method เดียว อยู่ใน `std::ops`
+
+## Deref Smell
+
+`Deref` ให้ `*value` (และผ่าน auto-deref การเรียก method อย่าง `value.method()`) เข้าถึง `Target` type ผ่าน type ของคุณได้ — นี่คือกลไกที่ทำให้ `Box<T>` ให้คุณเรียก method ของ `T` ได้โดยตรง และที่ทำให้ `String` ให้ method ของ `&str` มาฟรีทุกตัว:
+
+```rust
+use std::ops::Deref;
+
+struct Meters(f64);
+
+impl Deref for Meters {
+    type Target = f64;
+    fn deref(&self) -> &f64 {
+        &self.0
+    }
+}
+
+fn main() {
+    let distance = Meters(42.0);
+    println!("{}", distance.sqrt()); // f64's sqrt "leaks" through Meters
+}
+```
+
+```text
+6.48074069840786
+```
+
+โค้ดนี้ compile ผ่าน แต่มันทำลายเหตุผลทั้งหมดที่ `Meters` มีอยู่ในฐานะ newtype: ทุก method ของ `f64` — `.sqrt()`, `.floor()`, arithmetic ผ่าน auto-deref ต่อไป — ตอนนี้ใช้ได้กับ type ที่ควรจะเป็นหน่วยที่ type-safe แยกต่างหากอย่างเงียบ ๆ `Deref` มีไว้สำหรับ smart pointer ที่ทำหน้าที่แทน target ของมันจริง ๆ (`Box<T>`, `Rc<T>`, `String` แทน `str`) ไม่ใช่ทางลัดเพื่อเลี่ยงการเขียน method เฉพาะ หรือปลอมความสัมพันธ์แบบ "is-a" ระหว่าง type ที่ไม่เกี่ยวข้องกันสองตัว ถ้าคุณพบว่าตัวเอง implement `Deref` เพียงเพื่อให้ผู้เรียกไม่ต้องเขียน `.0` หรือ accessor method ที่ชัดเจน นั่นคือกลิ่นของปัญหา — เขียน accessor แทน
+
+## `AsRef`, `Borrow`, และ `Cow` — เลือกอันไหนดี?
+
+Standard library มีสามเครื่องมือที่แก้ปัญหา "ขอ reference มาแบบประหยัด" สามแบบต่างกัน:
+
+**`AsRef<str>`** — รับ string ทั้งแบบ owned หรือ borrowed ด้วย function signature เดียว เมื่อคุณต้องการแค่อ่านมัน:
+
+```rust
+fn print_it(s: impl AsRef<str>) {
+    println!("{}", s.as_ref());
+}
+
+fn main() {
+    print_it("literal");
+    print_it(String::from("owned"));
+}
+```
+
+**`Borrow<str>`** — ทำให้ `HashMap<String, V>` lookup ด้วย `&str` key ได้ เพราะ `String: Borrow<str>` รับประกันว่ารูปแบบ borrow จะ hash และเปรียบเทียบเหมือนกับรูปแบบ owned ทุกประการ:
+
+```rust
+use std::collections::HashMap;
+
+fn main() {
+    let mut map: HashMap<String, i32> = HashMap::new();
+    map.insert(String::from("one"), 1);
+    println!("{:?}", map.get("one")); // &str key looks up a String-keyed map
+}
+```
+
+**`Cow<str>`** ("clone on write") — return ค่าแบบ borrowed เมื่อ *ทำได้* และ allocate เป็น owned เฉพาะเมื่อ *จำเป็น* เท่านั้น:
+
+```rust
+use std::borrow::Cow;
+
+fn ensure_exclamation(input: &str) -> Cow<str> {
+    if input.ends_with('!') {
+        Cow::Borrowed(input) // no allocation needed
+    } else {
+        Cow::Owned(format!("{input}!")) // allocate only when we must modify
+    }
+}
+
+fn main() {
+    println!("{}", ensure_exclamation("already loud!"));
+    println!("{}", ensure_exclamation("quiet"));
+}
+```
+
+```text
+already loud!
+quiet!
+```
+
+หยิบ `AsRef<str>` มาใช้กับ parameter ที่อ่านอย่างเดียว `Borrow` เมื่อ key type ของ collection ต้องตรงกับ lookup type ที่ borrow มา และ `Cow` เมื่อ function บางครั้งต้อง allocate บางครั้งไม่ต้อง และคุณต้องการเลี่ยงค่าใช้จ่ายของ allocation ใน path ที่ใช้บ่อย
+
+## Associated Types vs Generic Parameters
+
+`Iterator` ประกาศ `type Item;` — **associated type** — แทนที่จะเป็น generic parameter `Iterator<Item>` ความต่างนี้สำคัญ: generic trait implement ซ้ำได้หลายครั้งให้ type เดียวกันด้วย parameter ต่างกัน (`From<i32> for MyType` และ `From<f64> for MyType` อยู่ร่วมกันได้) แต่ associated type กำหนดตายตัวแค่ **หนึ่ง** ตัวเลือกต่อผู้ implement เพราะ type หนึ่งควรผลิต item ชนิดเดียวจากการ iterate มันเท่านั้น:
+
+```rust
+struct Counter { count: u32 }
+
+impl Iterator for Counter {
+    type Item = u32; // fixed once for Counter -- not chosen by the caller
+
+    fn next(&mut self) -> Option<u32> {
+        if self.count < 5 {
+            self.count += 1;
+            Some(self.count)
+        } else {
+            None
+        }
+    }
+}
+
+fn main() {
+    let sum: u32 = Counter { count: 0 }.sum();
+    println!("{}", sum);
+}
+```
+
+```text
+15
+```
+
+ใช้ generic parameter เมื่อ type สามารถ implement trait ได้หลายครั้งอย่างมีความหมายให้กับ type ต่างกัน ใช้ associated type เมื่อผู้ implement แต่ละตัวมีตัวเลือกตามธรรมชาติแค่หนึ่งเดียว และคุณต้องการให้ call site อ่าน `Counter::Item` แทนที่จะต้องส่ง type parameter ผ่านไปทุกที่ที่ `Counter` ปรากฏ
+
+## Associated Constants
+
+Trait สามารถกำหนดให้มีค่าคงที่ ไม่ใช่แค่ method — ประกาศด้วย `const` ภายใน trait และให้ค่า concrete ในแต่ละ `impl`:
+
+```rust
+trait Shape {
+    const SIDES: u32;
+    fn describe() -> String {
+        format!("a shape with {} sides", Self::SIDES)
+    }
+}
+
+struct Triangle;
+impl Shape for Triangle {
+    const SIDES: u32 = 3;
+}
+
+fn main() {
+    println!("{}", Triangle::describe());
+}
+```
+
+```text
+a shape with 3 sides
+```
+
+Associated constant ถูก resolve ณ compile time ต่อ implementing type แต่ละตัว — มีประโยชน์สำหรับสิ่งอย่างขนาด buffer คงที่ เลขเวอร์ชัน หรือ (อย่างในตัวอย่างนี้) ค่าที่ทุก instance ของ type แชร์กันและ default method สามารถพึ่งพาได้
+
+## `impl Trait`: ตำแหน่ง Argument, Return, และ Field
+
+`impl Trait` ถูกกฎหมายในสองที่เท่านั้น — argument type และ return type ของ function — และ compiler ปฏิเสธมันในตำแหน่ง field ของ struct ทันที โดย error ไม่มีความคลุมเครือเลย:
+
+```rust
+// @expect-error E0562
+struct Handler {
+    callback: impl Fn() -> i32,
+}
+
+fn main() {}
+```
+
+```text
+error[E0562]: `impl Trait` is not allowed in field types
+ --> src/main.rs:2:15
+  |
+2 |     callback: impl Fn() -> i32,
+  |               ^^^^^^^^^^^^^^^^
+  |
+  = note: `impl Trait` is only allowed in arguments and return types of functions and methods
+```
+
+เหตุผลมาจากโครงสร้าง: `impl Trait` ในตำแหน่ง argument คือ syntax sugar ของ generic parameter (resolve ต่อ call site) และในตำแหน่ง return มันตั้งชื่อ concrete type ที่ซ่อนอยู่หนึ่งตัว (resolve ต่อ function) field ของ struct ไม่มี "call site" ให้ resolve — type ของ field ต้องตั้งชื่อได้ครั้งเดียวสำหรับทุก instance ของ struct วิธีแก้คือ generic parameter บน struct เอง (`struct Handler<F: Fn() -> i32> { callback: F }`) หรือเมื่อ concrete type เปลี่ยนแปลงจริง ๆ ณ runtime ก็ใช้ `Box<dyn Fn() -> i32>` — บทเรียน Trait Objects จะอธิบายว่าเมื่อไหร่ที่การแลกนั้นคุ้มค่า
+
+## `Send` และ `Sync`: ทีเซอร์
+
+`Send` และ `Sync` คือ **auto trait**: compiler implement ให้อัตโนมัติตาม field ของ type โดยไม่ต้องเขียน `impl` block เอง `Send` หมายความว่า value สามารถย้ายไป thread อื่นได้ `Sync` หมายความว่า shared reference ของมันก็ย้ายได้เช่นกัน type ทั่วไปส่วนใหญ่ได้ทั้งสองมาฟรี:
+
+```rust
+fn is_send<T: Send>() {}
+fn is_sync<T: Sync>() {}
+
+struct Data { value: i32 }
+
+fn main() {
+    is_send::<Data>(); // auto-implemented: every field is Send
+    is_sync::<Data>(); // auto-implemented: every field is Sync
+    println!("Data is Send and Sync");
+}
+```
+
+```text
+Data is Send and Sync
+```
+
+Type บางตัว (`Rc<T>`, `RefCell<T>`) จงใจไม่เอาด้วย และการส่งมันข้าม thread จะกลายเป็น compile error แทนที่จะเป็น runtime data race — โมดูล Concurrency จะอธิบาย `Send`/`Sync` และ error นี้อย่างละเอียด
+
 ## ลองเล่น
 
 Playground ด้านล่างนิยาม trait `Shape` พร้อม method `area` ที่ต้อง implement และ method `describe` แบบ default ทั้ง `Circle` และ `Rectangle` implement `area` และรับ `describe` มาฟรี
 
 <Playground code={traitsCode} />
+
+<Mermaid code={`flowchart TD
+    A["impl SomeTrait for SomeType"]
+    A --> B{Is SomeTrait local to this crate?}
+    B -->|Yes| OK1[Allowed -- any type, local or foreign]
+    B -->|No, foreign trait| C{Is SomeType local to this crate?}
+    C -->|Yes| OK2[Allowed -- local type covers a foreign trait]
+    C -->|No, foreign type| ERR["E0117: orphan rule violation"]`} title="Orphan rule ในรูปแบบการตัดสินใจ" />
+
+## Mental Model
+
+Trait คือสัญญาเกี่ยวกับ behavior ไม่ใช่คำอธิบายของ data — การ implement มันเพิ่มความสามารถให้ type โดยไม่แตะ layout หรือความสัมพันธ์กับ type อื่นเลย Default method, supertrait, และ blanket impl ล้วนเป็นวิธีต่าง ๆ ในการเขียนสัญญานั้นครั้งเดียวแล้วใช้ซ้ำ: default method ใช้ body ซ้ำข้ามผู้ implement ของ trait *เดียวกัน*, supertrait ใช้การรับประกันของ trait อื่นเป็นส่วนประกอบ, และ blanket impl ใช้ implementation เดียวซ้ำข้ามทุก type ที่ผ่าน bound หนึ่ง ๆ อยู่แล้ว
+
+## Trade-offs
+
+Default method และ blanket impl ต่างก็แลก indirection เล็กน้อยกับการใช้ซ้ำจำนวนมาก: blanket `impl<T: Display> Describe for T` หมายความว่าคุณไม่ต้องเขียน `impl` ต่อ type เลย แต่มันก็หมายความว่าทุก type ที่เป็น `Display` ใน crate — รวมถึงตัวที่คุณไม่ได้คาดไว้ — จะ implement `Describe` ด้วย ไม่ว่าจะต้องการหรือไม่ `Deref`, `AsRef`, `Borrow`, และ `Cow` ต่างก็แลก ergonomic sugar เล็กน้อยกับคำถามเรื่อง intent จริง ๆ: แต่ละตัวเปลี่ยนสิ่งที่ผู้เรียกส่งเข้ามาได้ หรือสิ่งที่รั่วผ่านมาโดยอัตโนมัติ และการเลือกผิด (ส่วนใหญ่คือ `Deref` ที่หยิบมาใช้เป็นทางลัด) ซ่อนการตัดสินใจเชิงออกแบบแทนที่จะระบุมันตรง ๆ
+
+## Common Misconceptions
+
+- **"Default method ตายตัว — ผู้ implement ได้แค่สิ่งที่ผู้เขียน trait เขียนไว้"** Default เป็นแค่ fallback เท่านั้น ผู้ implement คนไหนก็ override ด้วย body ที่เฉพาะเจาะจงกว่าได้ อย่างที่ `Circle::describe` ทำข้างบน
+- **"ฉัน implement trait อะไรให้ type อะไรก็ได้ เพราะ Rust ไม่มี access modifier แบบ Java บน trait"** Orphan rule บล็อกแค่หนึ่ง combination — foreign trait กับ foreign type — เพื่อไม่ให้สอง crate สามารถ implement trait เดียวกันให้ type เดียวกันได้ทั้งคู่อย่างถูกกฎหมาย
+- **"`Deref` เป็นแค่ความสะดวกในการข้าม `.0` หรือ getter method"** นั่นคือกลิ่นที่อธิบายไว้ข้างบนพอดี: `Deref` มีไว้สำหรับ type ที่เป็น smart pointer *ไปยัง* target ของมัน ไม่ใช่วิธีเลี่ยงการเขียน accessor ที่ชัดเจนบน type ที่ไม่เกี่ยวข้องกัน
+- **"`{:#?}` เป็นคนละ trait จาก `{:?}` ใกล้เคียง `Display` มากกว่า"** ทั้งคู่มาจาก derived `Debug` implementation เดียวกัน — `#` แค่เปลี่ยน formatting (หลายบรรทัด มี indent) ไม่เคยเปลี่ยน trait ที่ใช้เลย
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ generate มามักหยิบ `Deref` มาใช้บ่อยเกินคาด เพื่อทำให้ wrapper type รู้สึกเหมือน inner type ของมัน "ฟรี ๆ" แทนที่จะเขียน accessor method หนึ่งตัวที่ call site ต้องการจริง ๆ
+
+<SpotTheBug code={`use std::ops::Deref;
+
+struct Engine { horsepower: u32 }
+impl Engine {
+    fn start(&self) -> String {
+        format!("engine running at {} hp", self.horsepower)
+    }
+}
+
+struct Car { engine: Engine }
+
+impl Deref for Car {
+    type Target = Engine;
+    fn deref(&self) -> &Engine {
+        &self.engine
+    }
+}
+
+fn main() {
+    let car = Car { engine: Engine { horsepower: 300 } };
+    println!("{}", car.start()); // looks like Car has a start() method -- it doesn't
+}
+`}>
+โค้ดนี้ compile ผ่านและ print `engine running at 300 hp` ซึ่งดูเหมือน `Car` สืบทอด `start()` มาจาก `Engine` — แต่ไม่ได้เป็นแบบนั้น `Car` ไม่มี method `start` เลย `car.start()` compile ผ่านได้เพราะ method lookup auto-deref `Car` ไปเป็น `&Engine` แล้วเจอ `start` ที่นั่น กลไกเดียวกับที่ให้คุณเรียก method ของ `String` ผ่าน `Box<String>` ได้ `Deref` มีไว้สำหรับ smart pointer ที่ทำหน้าที่แทน target ของมันจริง ๆ ไม่ใช่สำหรับสร้างความสัมพันธ์แบบ "is-a" ระหว่าง domain type ที่ไม่เกี่ยวข้องกัน — `Car` ไม่ใช่ `Engine` และการให้มันมี `Engine` โดยปริยายผ่าน `Deref` ซ่อนความจริงนี้จากใครก็ตามที่อ่าน API ของ `Car` เอง วิธีแก้คือ composition โดยไม่ใช้ `Deref`: เขียน `fn start(&self) -> String { self.engine.start() }` อย่างชัดเจนบน `Car` เพื่อให้การ delegate เห็นได้ตรงจุดที่ผู้อ่านจะมองหา
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Trait คือสัญญาเกี่ยวกับ behavior ไม่ใช่แผนภูมิตระกูล — default method, supertrait, และ blanket impl ล้วนให้คุณเขียนสัญญานั้นครั้งเดียว แต่ `Deref` คือเครื่องมือเดียวในบทนี้ที่สามารถปลอมความสัมพันธ์ที่ type ของคุณไม่ได้มีอยู่จริงได้เงียบ ๆ
+</Callout>
 
 <Quiz client:visible id="traits-generics/traits" questions={quizTraits} />
 

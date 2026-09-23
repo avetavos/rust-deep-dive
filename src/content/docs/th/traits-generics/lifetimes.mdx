@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## ทำไม Lifetimes ถึงมีอยู่
 
@@ -87,6 +89,38 @@ error[E0515]: cannot return reference to local variable `s`
 
 ไม่มี lifetime annotation ใดแก้ปัญหานี้ได้ — `'a` จะตั้งชื่อได้แค่ lifetime ที่มีอยู่แล้วในฝั่งผู้เรียกเท่านั้น `dangle` ไม่มี input reference ให้ `'a` ยืมมาจาก จึงไม่มีอะไรให้ตั้งชื่อได้อย่างถูกต้อง ทางแก้ที่แท้จริง ตามที่ rustc แนะนำในข้อที่สอง คือ return `String` แบบ owned แทนที่จะเป็น reference
 
+## Compiler พูดว่าอย่างไร: Borrow ที่มีชีวิตอยู่นานกว่าข้อมูลของมัน
+
+`E0106`/`E0515` จับ return value ที่ dangling ปัญหาเดียวกันในหลักการเกิดขึ้นบ่อยพอ ๆ กันกับ local variable ที่ borrow ของมันถูกใช้หลังจาก variable เองหายไปแล้ว — จับได้ด้วย error คนละตัว คือ `E0597`:
+
+```rust
+// @expect-error E0597
+fn main() {
+    let r;
+    {
+        let x = 5;
+        r = &x;
+    }
+    println!("{}", r);
+}
+```
+
+```text
+error[E0597]: `x` does not live long enough
+ --> src/main.rs:5:13
+  |
+4 |         let x = 5;
+  |             - binding `x` declared here
+5 |         r = &x;
+  |             ^^ borrowed value does not live long enough
+6 |     }
+  |     - `x` dropped here while still borrowed
+7 |     println!("{}", r);
+  |                    - borrow later used here
+```
+
+`x` ถูก drop ตอนจบ inner block แต่ `r` ถูกใช้หลังจากจุดนั้น — compiler จับ use-after-free ได้ก่อนที่โปรแกรมของคุณจะรันมันเสียอีก `E0106`, `E0515`, และ `E0597` คือ diagnostic สามตัวที่ต่างกันสำหรับแนวคิดหลักเดียวกัน: reference ต้องไม่มีชีวิตอยู่นานกว่าค่าที่มันชี้ไปเลย ไม่ว่าค่านั้นจะหายไปเพราะ return จาก function หรือเพราะออกจาก block
+
 ## Lifetime Annotation ใน Structs
 
 ถ้า struct เก็บ reference คุณต้อง annotate lifetime เพื่อให้ compiler รู้ว่า struct ไม่สามารถมีชีวิตอยู่นานกว่าข้อมูลที่มัน borrow:
@@ -97,17 +131,74 @@ struct Excerpt<'a> {
 }
 ```
 
-นี่บอกว่า "`Excerpt` ไม่สามารถมีชีวิตอยู่นานกว่า string ที่มัน borrow มา" compiler บังคับใช้การรับประกันนี้โดยอัตโนมัติ
+นี่บอกว่า "`Excerpt` ไม่สามารถมีชีวิตอยู่นานกว่า string ที่มัน borrow มา" compiler บังคับใช้การรับประกันนี้โดยอัตโนมัติ Method บน struct ที่มี lifetime parameter ต้องระบุมันซ้ำในบรรทัด `impl`:
+
+```rust
+struct Excerpt<'a> {
+    text: &'a str,
+}
+
+impl<'a> Excerpt<'a> {
+    fn announce(&self) -> &str {
+        self.text
+    }
+}
+```
+
+`impl<'a> Excerpt<'a>` ประกาศ `'a` สำหรับ block นี้ แล้วใช้มันเพื่อบอกว่า "impl นี้สำหรับ `Excerpt` ที่ borrow ด้วย lifetime `'a` บางตัว" — return type ของ `announce` ไม่ต้องระบุ `'a` ซ้ำอย่างชัดเจนตรงนี้ เพราะ elision rule ข้อที่ 3 ซึ่งจะพูดถึงต่อไป
 
 ## กฎ Lifetime Elision สามข้อ
 
-ในหลาย pattern ที่พบบ่อย Rust สามารถอนุมาน lifetime โดยอัตโนมัติด้วย elision rule สามข้อ ทำให้คุณไม่ต้องเขียน annotation ทุกครั้ง:
+ในหลาย pattern ที่พบบ่อย Rust สามารถอนุมาน lifetime โดยอัตโนมัติด้วย elision rule สามข้อ ทำให้คุณไม่ต้องเขียน annotation ทุกครั้ง แต่ละกฎมีรูปร่างง่ายพอที่จะแสดงแยกกันได้:
 
-1. **แต่ละ reference parameter ได้ lifetime ของตัวเอง** `fn foo(x: &str, y: &str)` กลายเป็น `fn foo<'a, 'b>(x: &'a str, y: &'b str)`
-2. **ถ้ามี input reference แค่ตัวเดียว lifetime ของมันจะถูกกำหนดให้ output reference ทุกตัว** `fn foo(x: &str) -> &str` กลายเป็น `fn foo<'a>(x: &'a str) -> &'a str`
-3. **ถ้า parameter ตัวหนึ่งคือ `&self` หรือ `&mut self` lifetime ของมันจะถูกกำหนดให้ output reference ทุกตัว**
+**กฎที่ 1 — reference parameter แต่ละตัวได้ lifetime ของตัวเองที่เป็นอิสระ** นี่คือจุดเริ่มต้นที่อีกสองกฎต่อยอด เมื่อไม่มีอะไรต้องเชื่อมโยง parameter เข้าหากันหรือกับ return type กฎที่ 1 อย่างเดียวก็เพียงพอ:
 
-เมื่อกฎทั้งสามใช้ได้ครบ ไม่จำเป็นต้องมี annotation เมื่อกฎเหล่านั้นไม่สามารถกำหนด output lifetime ได้ครบถ้วน (เช่นใน `longest`) คุณต้อง annotate อย่างชัดเจน
+```rust
+fn describe_pair(a: &str, b: &str) -> String {
+    format!("{a} and {b}")
+}
+```
+
+Compiler ปฏิบัติกับมันเป็น `fn describe_pair<'a, 'b>(a: &'a str, b: &'b str) -> String` — `a` และ `b` ได้ lifetime ที่เป็นอิสระ `'a` และ `'b` เพราะ return type เป็น `String` แบบ owned ที่ไม่ได้ borrow อะไรเลย จึงไม่มี output lifetime ที่ต้องตรงกับตัวไหนเลย
+
+**กฎที่ 2 — เมื่อมี input reference แค่ตัวเดียว lifetime ของมันจะถูกกำหนดให้ output reference ทุกตัว**
+
+```rust
+fn first_word(s: &str) -> &str {
+    s.split_whitespace().next().unwrap_or("")
+}
+```
+
+Desugar เป็น `fn first_word<'a>(s: &'a str) -> &'a str` — มี reference parameter แค่ตัวเดียว ดังนั้น return value ที่ borrow มาได้มาจากตัวนั้นเท่านั้น
+
+**กฎที่ 3 — ถ้า parameter ตัวหนึ่งคือ `&self` หรือ `&mut self` lifetime ของมันจะถูกกำหนดให้ output reference ทุกตัว** ไม่ว่าจะมี parameter อื่นกี่ตัวก็ตาม:
+
+```rust
+struct Wrapper { text: String }
+
+impl Wrapper {
+    fn get(&self) -> &str {
+        &self.text
+    }
+}
+```
+
+Desugar เป็น `fn get<'a>(&'a self) -> &'a str` — method นี้ borrow จาก `self` ดังนั้น `&str` ที่ return มาถือว่า borrow จาก `self` ด้วย
+
+`longest` จากก่อนหน้านี้ต้องการ annotation ที่ชัดเจนพอดีเพราะไม่มีกฎทั้งสามข้อใช้ได้กับมันเลย: มี reference parameter *สอง* ตัว (กฎที่ 2 จึงใช้ไม่ได้ — ไม่ใช่ "แค่ตัวเดียว") และไม่มีตัวไหนเป็น `&self` (กฎที่ 3 จึงใช้ไม่ได้เช่นกัน) เฉพาะเมื่อกฎทั้งสามข้อรวมกันกำหนด output lifetime ได้ครบถ้วนเท่านั้น Rust จึงให้คุณละ annotation ได้
+
+<Mermaid code={`flowchart TD
+    Start["Function has reference parameters and/or a returned reference"]
+    R1["Rule 1: give each input reference its own lifetime"]
+    R2{"Exactly one input reference?"}
+    R3{"Is one parameter '&self' or '&mut self'?"}
+    Ambiguous["Output lifetime is ambiguous -- write it explicitly"]
+    Resolved["Elision succeeds -- no annotation needed"]
+    Start --> R1 --> R2
+    R2 -->|Yes| Resolved
+    R2 -->|No| R3
+    R3 -->|Yes| Resolved
+    R3 -->|No| Ambiguous`} title="กฎ elision สามข้อในหนึ่งการตัดสินใจ" />
 
 ## Lifetime `'static`
 
@@ -123,6 +214,59 @@ let s: &'static str = "I have a static lifetime.";
 - **`T: 'static` เป็น trait bound** (พบบ่อยบน generic parameter โดยเฉพาะกับ `Box<dyn Trait + 'static>` หรือตอน spawn thread) หมายความว่า "type นี้ไม่มี reference ที่ไม่ใช่ `'static` อยู่ข้างใน" — owned type ส่วนใหญ่ (`String`, `Vec<T>`, `i32`) ผ่านเงื่อนไขนี้โดยอัตโนมัติ เพราะมันเป็นเจ้าของข้อมูลแทนที่จะยืมมัน มันไม่ได้หมายความว่า "มีชีวิตอยู่ตลอดไป" สำหรับ owned value — มันหมายความว่า value นั้นไม่ได้แอบยืมข้อมูลจากที่ที่อาจหายไปได้
 
 การหยิบ `'static` มาใช้เพื่อทำให้ lifetime error เงียบลงเป็นสัญชาตญาณที่พบบ่อยแต่มักผิด — มันแทบไม่เคยแก้ปัญหา dangling reference ที่แท้จริง (อย่างที่ตัวอย่าง `dangle` ข้างบนแสดง คำแนะนำ `'static` ของ rustc เองก็ไม่ได้แก้อะไรจริงๆ) และบ่อยครั้งความหมายที่แท้จริงคือโค้ดควรเป็นเจ้าของข้อมูลแทนที่จะยืมมัน
+
+## การ Return `impl Trait`: ฟีเจอร์ Lifetime ที่ปลอมตัวมา
+
+ตัวอย่าง return-position `impl Trait` ในบทเรียน Traits จริง ๆ แล้วคือฟีเจอร์ lifetime: ใน edition 2024 `impl Trait` ที่ return ออกมาจะ capture ทุก lifetime ที่อยู่ใน scope โดยอัตโนมัติ ดังนั้น function ที่ borrow จาก parameter จึงไม่ต้องมี annotation `+ '_` แบบที่ต้องมีบน `edition = "2021"` (`error[E0700]`) ทางออกสำหรับ "ไม่ capture อะไรเลย" คือ bound `use<>` ที่ว่างซึ่งแสดงไว้ที่นั่น ถ้ายังไม่ได้อ่านตัวอย่างนั้น ตอนนี้เป็นเวลาที่ดีที่จะกลับไปอ่าน เพราะตอนนี้คุณเข้าใจ elision แล้ว — มันคือคำถาม "output เกี่ยวข้องกับ lifetime ไหน" คำถามเดียวกัน แค่ตอบโดยอัตโนมัติจาก edition แทนที่จะเป็น `'a` ที่ชัดเจน
+
+## Higher-Ranked Trait Bounds: ทีเซอร์
+
+ทุก lifetime ที่คุณ annotate มาจนถึงตอนนี้ถูกเลือกครั้งเดียวโดยผู้เรียก ณ จุดที่ function ถูกเรียก บางครั้งคุณต้องการสิ่งตรงข้าม: bound ที่ต้องเป็นจริง *สำหรับทุก lifetime ที่เป็นไปได้* ไม่ใช่แค่ lifetime หนึ่งที่เจาะจง ที่พบบ่อยที่สุดคือตอนรับ closure ที่จะถูกเรียกด้วย reference ที่ borrow ขึ้นมาใหม่ทุกครั้ง นี่คือ **higher-ranked trait bound** เขียนเป็น `for<'a>`:
+
+```rust
+fn apply_to_local<F>(f: F) -> i32
+where
+    F: for<'a> Fn(&'a i32) -> i32,
+{
+    let x = 10;
+    f(&x)
+}
+
+fn main() {
+    let double = |n: &i32| n * 2;
+    println!("{}", apply_to_local(double));
+}
+```
+
+```text
+20
+```
+
+`for<'a> Fn(&'a i32) -> i32` หมายความว่า "สำหรับ lifetime `'a` *ใดก็ได้* ที่ผู้เรียก `f` เลือก `f` ต้องรับ `&'a i32` ได้" — `apply_to_local` สร้าง `x` และ borrow มัน *ภายใน* function เอง จึงไม่มี lifetime เดียวที่ตั้งชื่อไว้ล่วงหน้าจะอธิบายมันได้ ในทางปฏิบัติคุณแทบไม่ต้องเขียน `for<'a>` ด้วยมือเลย compiler จะ infer มันโดยอัตโนมัติสำหรับ closure parameter แบบนี้ และคุณส่วนใหญ่จะเจอ syntax นี้ตอนอ่าน compiler error หรือ library documentation มากกว่าจะเขียนมันเอง
+
+## Variance: `&'static str` ใช้แทนที่ `&'a str` ที่สั้นกว่าได้ทุกที่
+
+Reference ที่มี lifetime ยาวกว่าใช้แทนที่ reference ที่สั้นกว่าได้เสมอ — คุณสมบัตินี้เรียกว่า **variance** และนี่คือเหตุผลที่โค้ดต่อไปนี้ compile ผ่านโดยไม่มี coercion syntax เลย:
+
+```rust
+fn main() {
+    let s: &'static str = "hello";
+    let owned = String::from("world");
+    let r: &str = &owned;
+
+    fn takes_short<'a>(x: &'a str) -> &'a str { x }
+
+    println!("{}", takes_short(s)); // a &'static str satisfies any shorter &'a
+    println!("{}", takes_short(r));
+}
+```
+
+```text
+hello
+world
+```
+
+มองว่า lifetime คือการรับประกัน "valid อย่างน้อยนานเท่านี้" — `'static` คือการรับประกันที่แข็งแกร่งที่สุดเท่าที่จะเป็นไปได้ จึงผ่านเงื่อนไขที่อ่อนกว่าได้โดยอัตโนมัติ ความสัมพันธ์นี้ไปทางเดียวเท่านั้น: คุณส่ง `&'a str` ที่มีชีวิตสั้นไปแทนที่ตำแหน่งที่ต้องการ `&'static str` โดยเฉพาะไม่ได้ เพราะการรับประกันที่สั้นกว่าไม่สามารถแทนที่การรับประกันที่แข็งแกร่งกว่าได้
 
 export const lifetimesCode = `// A function with a lifetime annotation:
 // the returned reference lives at least as long as the shorter of x or y.
@@ -162,6 +306,46 @@ fn main() {
 Lifetime annotation ไม่ได้เปลี่ยนระยะเวลาที่ value มีชีวิตอยู่ในหน่วยความจำ มันเป็นเพียงกลไกระดับ compile time ที่บอก borrow checker ว่า lifetime ของ reference หลายตัวสัมพันธ์กันอย่างไร ณ runtime ไม่มีข้อมูล lifetime หลงเหลืออยู่เลย — มันถูกลบทิ้งหลังจาก compiler ตรวจสอบเสร็จ
 </Callout>
 
+## Mental Model
+
+Lifetime ไม่ใช่ระยะเวลาเป็นวินาทีหรือแนวคิด runtime เลย — มันคือชื่อที่ compiler ตั้งให้กับ *ช่วงหนึ่งของโค้ด* ที่ borrow หนึ่ง ๆ valid อยู่ เพื่อให้เปรียบเทียบช่วงเหล่านั้นกันได้ ("borrow นี้จบก่อนที่ value นั้นจะถูก drop ไหม") Elision rule เป็นแค่การเดาที่ compiler ทำไว้ล่วงหน้าสำหรับรูปร่างที่พบบ่อยที่สุดของการเปรียบเทียบนั้น เมื่อรูปร่างของ function ไม่ตรงกับการเดาเหล่านั้น คุณจึงต้องระบุชื่อเองเพื่อให้มีอะไรให้เปรียบเทียบ
+
+## Trade-offs
+
+Lifetime annotation ที่ชัดเจนคือส่วนที่แปลกทาง syntax ที่สุดของ Rust สำหรับมือใหม่ และ elision มีอยู่เพื่อลดความถี่ที่คุณต้องเขียนมันโดยเฉพาะ — function จริงส่วนใหญ่ไม่ต้องการ `'a` ที่ชัดเจนเลย สิ่งที่คุณได้แลกมาคือบั๊ก dangling reference (use-after-free, การ return pointer ไปยัง stack frame ที่ถูก free แล้ว) ย้ายจาก "runtime crash หรือแย่กว่านั้น memory corruption แบบเงียบ ๆ ใน C/C++" มาเป็น "compile error พร้อมเลขบรรทัดที่ชัดเจน" โดยไม่มี runtime cost เลย — lifetime ถูกลบทิ้งทั้งหมดก่อนที่โปรแกรมจะรัน
+
+## Common Misconceptions
+
+- **"Lifetime annotation ทำให้ value มีชีวิตอยู่นานขึ้น"** ตรงข้ามกับการ "ควบคุม" lifetime เลย — มันแค่ *อธิบาย* ความสัมพันธ์ที่มีอยู่แล้วระหว่าง borrow ให้ compiler ตรวจสอบ มันขยายเวลาที่ value ใด ๆ มีชีวิตอยู่จริงไม่ได้เลย
+- **"การเพิ่ม `'static` ให้ field ของ struct หรือ bound เป็นวิธีที่ปลอดภัยในการทำให้ lifetime error หายไป"** อย่างที่ตัวอย่าง `dangle` และ `Cache` แสดง `'static` มักจะ compile ไม่ผ่านด้วยเหตุผลอื่น หรือบังคับให้ผู้เรียกทุกคนต้องส่งเฉพาะข้อมูลที่มีชีวิตอยู่ตลอดโปรแกรมจริง ๆ — มันแทบไม่เคยเป็นสิ่งที่ error เกี่ยวกับ borrow กำลังถามหาจริง ๆ เลย
+- **"`for<'a>` เป็นสิ่งที่ฉันต้องเขียนตลอดเวลาเมื่อใช้ closure"** Compiler infer higher-ranked trait bound ให้อัตโนมัติสำหรับ closure parameter ส่วนใหญ่ท่วมท้น คุณจะเจอ syntax นี้ตอนอ่านเป็นหลัก ไม่ใช่ตอนเขียน function signature
+- **"`&'static str` ต้องการการแปลงอย่างชัดเจนเพื่อใช้แทนที่ `&'a str`"** ไม่ต้องการ conversion หรือ coercion syntax ใด ๆ เลย — นี่คือสิ่งที่ variance รับประกัน: reference ที่มีชีวิตยาวกว่าผ่านเงื่อนไขที่สั้นกว่าได้อยู่แล้ว
+
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อ function ทำให้เกิด lifetime error โค้ดที่ generate มามัก "แก้" ด้วยการเพิ่ม `'static` bound ให้ generic parameter หรือ lifetime ของ struct เอง แทนที่จะปรับโครงสร้างให้ value เป็น owned หรือ borrowed ในช่วงเวลาที่สั้นกว่าและถูกต้อง
+
+<SpotTheBug code={`struct Cache<'a> {
+    data: &'a str,
+}
+
+fn build_cache(input: &str) -> Cache<'static> {
+    Cache { data: input }
+}
+
+fn main() {
+    let text = String::from("local data");
+    let cache = build_cache(&text);
+    println!("{}", cache.data);
+}
+`}>
+โค้ดนี้ compile ไม่ผ่าน — `error: lifetime may not live long enough` ชี้ไปที่ `Cache { data: input }` และอธิบายว่า lifetime ของ `input` "must outlive `'static`" นี่คือรูปร่างการแก้ที่โค้ดที่ AI generate มักหยิบมาใช้พอดีเมื่อ lifetime error ปรากฏขึ้น: ใส่ `'static` ให้ return type เพื่อให้ error ดู "ถูกจัดการแล้ว" แต่ `input: &str` ในที่นี้อาจเป็น reference ไปยังข้อมูล local ที่มีชีวิตสั้นก็ได้ — function ไม่มีทางสัญญากับผู้เรียกได้ว่าข้อมูลของพวกเขามีชีวิตอยู่ตลอดไป และ compiler จับคำโกหกนั้นได้ตั้งแต่จุดที่สัญญา (ที่เป็นไปไม่ได้) นั้นถูกให้ไว้ ก่อนที่บั๊กฝั่งผู้เรียกที่มันจะก่อขึ้นมา ไม่มี annotation ไหนแก้เวอร์ชันนี้ได้เลย: function ควร return `Cache<'a>` ที่ผูกกับ input lifetime จริง (`fn build_cache<'a>(input: &'a str) -> Cache<'a>`) หรือไม่ก็ `Cache` ควรเป็นเจ้าของ `String` แทนที่จะ borrow `&str` เลยตั้งแต่ต้น
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Lifetime คือชื่อของช่วงหนึ่งของโค้ด ไม่ใช่ระยะเวลา — elision ครอบคลุมรูปร่างที่พบบ่อยให้อัตโนมัติ และการหยิบ `'static` มาใช้เพื่อทำให้ error ที่คุณไม่เข้าใจเงียบลง มักจะแลกข้อความ compile-time ที่ชัดเจนกับข้อกำหนดที่คุณไม่ได้ตั้งใจจะสร้างขึ้นมาจริง ๆ
+</Callout>
+
 export const quizLifetimes = [
     {
         q: "Lifetime annotation ใน Rust มีไว้เพื่ออะไร?",
@@ -172,6 +356,7 @@ export const quizLifetimes = [
             "ทำเครื่องหมายว่า variable ไม่เปลี่ยนแปลงตลอด scope",
         ],
         answer: 0,
+        explain: "Lifetime ให้ borrow checker เปรียบเทียบช่วงที่ reference valid กับช่วงที่ข้อมูลที่มันชี้ไป valid ได้ จับ dangling reference ก่อนที่โปรแกรมจะรัน",
     },
     {
         q: "ใน `fn longest<'a>(x: &'a str, y: &'a str) -> &'a str` annotation `'a` รับประกันอะไร?",
@@ -182,26 +367,62 @@ export const quizLifetimes = [
             "ทั้ง `x` และ `y` ต้องมีความยาวเท่ากัน",
         ],
         answer: 2,
+        explain: "การแชร์ lifetime `'a` เดียวข้าม x, y, และ return type บอก compiler ว่า output จะไม่มีชีวิตอยู่นานกว่า input ตัวที่มี valid region สั้นกว่า",
     },
     {
-        q: "Compiler สามารถ infer lifetime โดยอัตโนมัติโดยไม่ต้องเขียน annotation ได้เมื่อใด?",
+        q: "elision rule ข้อไหนใช้ได้กับ `fn get(&self) -> &str` บน struct ใดๆ ทำให้มัน compile ผ่านโดยไม่มี lifetime ที่ชัดเจน?",
         options: [
-            "เสมอ — annotation เป็นแค่ optional สำหรับเอกสาร",
-            "ไม่เลย — ทุก reference ในทุก function ต้องมี annotation",
-            "เมื่อ lifetime elision rules สามระบุ output lifetime ได้ครบถ้วน",
-            "เฉพาะเมื่อ function มี return statement เดียว",
+            "กฎที่ 1 อย่างเดียว -- แต่ละ parameter ได้ lifetime ของตัวเอง",
+            "กฎที่ 2 -- มี input reference แค่ตัวเดียว",
+            "กฎที่ 3 -- lifetime ของ parameter `&self` ถูกกำหนดให้ output reference",
+            "ไม่มีเลย -- signature นี้ต้องการ annotation ที่ชัดเจน",
         ],
         answer: 2,
+        explain: "กฎที่ 3 ครอบคลุม method ที่รับ &self หรือ &mut self โดยเฉพาะ: output reference ถือว่า borrow จาก self ตรงตามที่ body ของ method นี้ทำ",
     },
     {
-        q: "การที่ lifetime annotation เป็น 'compile-time only' หมายความว่าอะไร?",
+        q: "compile ไหม?\n```rust\nfn main() {\n    let r;\n    {\n        let x = 5;\n        r = &x;\n    }\n    println!(\"{}\", r);\n}\n```",
         options: [
-            "Annotation ถูกลบออกจาก binary ดังนั้นไม่มีผลต่อพฤติกรรมของโปรแกรมหรือ runtime performance",
-            "Annotation ทำให้ compiler ใส่ runtime check สำหรับ dangling pointer",
-            "Lifetime มีผลแค่ภายใน `const` function",
-            "Annotation ป้องกัน optimizer จากการ inline function ข้าม lifetime boundary",
+            "ใช่ -- print 5",
+            "ไม่ -- error[E0597] x มีชีวิตไม่นานพอเพราะถูก drop ในขณะที่ r ยัง borrow มันอยู่",
+            "ไม่ -- error[E0106] missing lifetime specifier",
+            "ใช่ แต่เฉพาะ release build",
+        ],
+        answer: 1,
+        explain: "x ถูก drop ตอนจบ inner block แต่ r (ที่ borrow x) ถูกใช้หลังจากนั้นใน println! -- compiler รายงาน error[E0597] และปฏิเสธการ compile",
+    },
+    {
+        q: "โปรแกรมนี้ print อะไร?\n```rust\nfn main() {\n    let s: &'static str = \"hello\";\n    fn takes_short<'a>(x: &'a str) -> &'a str { x }\n    println!(\"{}\", takes_short(s));\n}\n```",
+        options: [
+            "Compile ไม่ผ่าน -- &'static str ส่งไปแทน &'a str ไม่ได้",
+            "hello",
+            "Compile ไม่ผ่าน -- takes_short ต้องมี bound &'static",
+            "Panic ณ runtime เพราะ 'static มีชีวิตนานกว่า 'a",
+        ],
+        answer: 1,
+        explain: "&'static str ผ่านเงื่อนไข lifetime ที่สั้นกว่าโดยอัตโนมัติ (variance) -- ไม่ต้องแปลงเลย function แค่ print hello",
+    },
+    {
+        q: "ทำไมการเพิ่ม `'static` ใน `Cache<'static>` ใน `fn build_cache(input: &str) -> Cache<'static> { Cache { data: input } }` จึง compile ไม่ผ่าน?",
+        options: [
+            "เพราะ Cache มี lifetime parameter ไม่ได้เลย",
+            "เพราะพิสูจน์ไม่ได้ว่า lifetime ของ `input` มีชีวิตนานกว่า `'static` -- function ไม่มีทางรับประกันได้ว่า reference ของผู้เรียกมีชีวิตอยู่ตลอดโปรแกรม",
+            "เพราะ `'static` ใช้ได้แค่กับ string literal เท่านั้น",
+            "Compile ผ่านสบาย ๆ -- นี่คือวิธีแก้ lifetime error ที่ถูกต้อง",
+        ],
+        answer: 1,
+        explain: "input เป็น &str ธรรมดาที่มีชีวิตสั้น การอ้างว่า Cache ที่ return เป็น Cache<'static> ต้องการให้ input เป็น 'static จริง ๆ ซึ่ง compiler ตรวจสอบไม่ได้และปฏิเสธด้วย lifetime error",
+    },
+    {
+        q: "higher-ranked trait bound อย่าง `for<'a> Fn(&'a i32) -> i32` ใช้ทำอะไร?",
+        options: [
+            "ต้องการให้ closure ทำงานได้กับทุก lifetime ที่เป็นไปได้ ไม่ใช่แค่ lifetime เดียวที่เลือกไว้ล่วงหน้า",
+            "ทำให้ lifetime มีชีวิตอยู่ตลอดโปรแกรม เหมือน 'static",
+            "ประกาศ generic type parameter สองตัวที่เป็นอิสระต่อกัน",
+            "ทำให้ return type ไม่ต้อง capture lifetime เลย",
         ],
         answer: 0,
+        explain: "for<'a> หมายความว่า bound ต้องเป็นจริงสำหรับ lifetime 'a ใดก็ได้ ซึ่งจำเป็นเมื่อ function (เช่นตัวที่ borrow local variable เพื่อส่งให้ closure) ไม่สามารถตั้งชื่อ lifetime เดียวคงที่ล่วงหน้าได้",
     },
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 export const genericsCode = `fn largest<T: PartialOrd>(list: &[T]) -> &T {
     let mut biggest = &list[0];
@@ -60,6 +62,7 @@ export const quizGenerics = [
             "`T` จะถูกแปลงเป็น `PartialOrd` โดยอัตโนมัติ ณ runtime",
         ],
         answer: 1,
+        explain: "Trait bound จำกัด T ว่าเป็น type อะไรได้บ้าง โดยไม่เปลี่ยน T เป็นอะไรเลย ณ runtime — มันแค่บอก compiler ว่า operation ไหนรับประกันว่ามีอยู่",
     },
     {
         q: "monomorphization คืออะไร?",
@@ -70,6 +73,7 @@ export const quizGenerics = [
             "การ optimize memory ที่รวม heap allocation ที่ซ้ำกัน",
         ],
         answer: 1,
+        explain: "Monomorphization เกิดขึ้นทั้งหมด ณ compile time: compiler สร้าง copy เฉพาะของ generic code หนึ่งชุดต่อ concrete type ที่ใช้จริง ทำให้ไม่มีค่าใช้จ่ายในการ dispatch เหลืออยู่ ณ runtime",
     },
     {
         q: "จะประกาศ generic struct `Stack` ที่เก็บ element ของ type `T` อย่างไร?",
@@ -80,6 +84,7 @@ export const quizGenerics = [
             "`generic struct Stack(T) { data: Vec<T> }`",
         ],
         answer: 2,
+        explain: "Angle bracket หลังชื่อ struct ประกาศ type parameter ของมัน ซึ่งใช้ที่ไหนก็ได้ภายใน struct body รวมถึงเป็น Vec<T>",
     },
     {
         q: "จุดประสงค์ของ `where` clause ใน generic function คืออะไร?",
@@ -90,6 +95,51 @@ export const quizGenerics = [
             "เพิ่ม lifetime annotation ให้ generic parameter",
         ],
         answer: 1,
+        explain: "`where` clause คือ syntactic sugar ของ bound แบบ inline เดียวกัน — มีไว้เพื่อให้ constraint list ที่ยาวหรือมีหลาย parameter อ่านง่ายขึ้นเท่านั้น",
+    },
+    {
+        q: "compile ไหม?\n```rust\nfn main() {\n    let x = Vec::new();\n    println!(\"{:?}\", x);\n}\n```",
+        options: [
+            "ใช่ — Vec::new() default เป็น Vec<i32>",
+            "ไม่ — error[E0282] เพราะไม่มีอะไรบอก compiler ว่า Vec เก็บ type อะไร",
+            "ใช่ — มันจะ print vector ว่าง []",
+            "ไม่ — Vec::new() ต้องใช้ turbofish ตามกฎ syntax",
+        ],
+        answer: 1,
+        explain: "Vec::new() เดี่ยว ๆ ไม่มีข้อมูล type เลย และการ print vector ว่างด้วย {:?} ก็ไม่ช่วยระบุด้วย rustc จึงรายงาน error[E0282] และขอ type ที่ชัดเจน",
+    },
+    {
+        q: "เกิดอะไรขึ้นเมื่อเรียก `pair(1, \"two\")` ให้ `fn pair<T>(a: T, b: T) -> (T, T)`?",
+        options: [
+            "Compile ผ่าน — T ถูก infer เป็น tuple ของ type ผสม",
+            "Compile ไม่ผ่านด้วย error[E0308] — T ถูกกำหนดเป็น integer type แล้วจาก argument แรก และ \"two\" เป็น &str",
+            "Compile ผ่านและ return (1, \"two\")",
+            "Compile ไม่ผ่านด้วย error[E0282] — T infer ไม่ได้เลย",
+        ],
+        answer: 1,
+        explain: "T เดียวที่ใช้ร่วมกันทั้งสอง parameter ต้องเป็น concrete type เดียว argument แรกกำหนด T เป็น integer type แล้ว argument &str จึงไม่ตรงกัน เกิด error[E0308]",
+    },
+    {
+        q: "ทำไมการเรียก generic function เดียวกันด้วย i32 และ f64 จึงได้ machine address ของ compiled function ต่างกัน?",
+        options: [
+            "ไม่จริง — generic function compile เป็น address เดียวที่ใช้ร่วมกันเสมอ",
+            "เพราะ monomorphization สร้าง copy เฉพาะที่แยกกันโดยสมบูรณ์ของ function ต่อ concrete type ที่ใช้",
+            "เพราะ Rust ใช้ dispatch table ณ runtime สำหรับ generic call ทั้งหมด",
+            "เพราะ i32 กับ f64 บังเอิญใช้ memory address เดียวกัน",
+        ],
+        answer: 1,
+        explain: "Monomorphization หมายความว่า identity::<i32> และ identity::<f64> เป็น compiled function สองตัวที่แยกกันจริง ๆ เหมือน function ที่เขียนมือแยกกันสองตัว ไม่มี implementation ที่ dispatch ณ runtime ร่วมกันเลย",
+    },
+    {
+        q: "เมื่อไหร่ควรใช้ enum แทน `Box<dyn Trait>` สำหรับค่าที่เป็นได้หลาย type?",
+        options: [
+            "เสมอ — enum เร็วกว่าในทุกกรณี",
+            "เมื่อชุด type ทั้งหมดปิดและรู้ล่วงหน้าแล้ว เพราะ match จะได้ exhaustiveness checking โดยไม่มี heap allocation หรือ vtable",
+            "เฉพาะเมื่อมี variant เดียว",
+            "ไม่ควรเลย — dyn Trait เป็นตัวเลือกที่ idiomatic กว่าเสมอ",
+        ],
+        answer: 1,
+        explain: "Enum เหมาะกว่าเมื่อคุณรู้ทุก variant ที่จะเกิดขึ้นอยู่แล้ว — มันเร็วกว่า (ไม่มี vtable ไม่มี heap allocation) และ compiler บังคับให้ทุก variant ถูกจัดการ",
     },
 ];
 
@@ -109,11 +159,55 @@ fn largest<T: PartialOrd>(list: &[T]) -> &T {
 }
 ```
 
-ส่วน `<T: PartialOrd>` ประกาศ **type parameter** ชื่อ `T` พร้อม **trait bound** trait bound `PartialOrd` หมายความว่า "ฟังก์ชันนี้รับ type ใดก็ได้ที่รองรับ operator `>` และ `<`" ถ้าไม่มี bound นี้ compiler จะปฏิเสธการเปรียบเทียบ `item > biggest` เพราะไม่ใช่ทุก type ที่เปรียบเทียบกันได้
+ส่วน `<T: PartialOrd>` ประกาศ **type parameter** ชื่อ `T` พร้อม **trait bound** trait bound `PartialOrd` หมายความว่า "ฟังก์ชันนี้รับ type ใดก็ได้ที่รองรับ operator `>` และ `<`" ถ้าไม่มี bound นี้ compiler จะปฏิเสธการเปรียบเทียบ `item > biggest` เพราะไม่ใช่ทุก type ที่เปรียบเทียบกันได้ — บทเรียนภาพรวม Traits & Generics แสดง error นี้ไว้แล้วในชื่อ `error[E0369]`
+
+## Monomorphization ที่วัดได้จริง
 
 <Callout title="Generics ถูก monomorphize — zero runtime cost">
 Compiler จะสร้าง copy เฉพาะของฟังก์ชันสำหรับแต่ละ concrete type ที่คุณใช้ — หนึ่งชุดสำหรับ `i32` หนึ่งชุดสำหรับ `char` และอื่นๆ กระบวนการนี้เรียกว่า monomorphization machine code ที่ได้เหมือนกับที่คุณเขียนมือแยกสำหรับแต่ละ type ทุกประการ ดังนั้น generics จึงไม่มี overhead ณ runtime
 </Callout>
+
+"Zero runtime cost" คือข้อกล่าวอ้างที่คุณตรวจสอบได้จริง การเรียก generic function เดียวกันด้วย concrete type สองตัวต่างกันจะได้ compiled function ที่แยกกันจริง ๆ สอง address ต่างกัน ไม่มีอะไรถูก resolve ณ runtime แบบที่การเรียก `dyn Trait` ต้องทำ:
+
+```rust
+fn identity<T>(x: T) -> T {
+    x
+}
+
+fn main() {
+    let int_fn: fn(i32) -> i32 = identity;
+    let float_fn: fn(f64) -> f64 = identity;
+    println!("same machine address? {}", int_fn as usize == float_fn as usize);
+}
+```
+
+```text
+same machine address? false
+```
+
+`identity::<i32>` และ `identity::<f64>` เป็น function สองตัวที่แยกกันใน compiled binary แต่ละตัวทำสิ่งเดียวกับที่ `fn identity_i32(x: i32) -> i32` และ `fn identity_f64(x: f64) -> f64` ที่เขียนมือจะทำ — "generic function เดียว" มีอยู่แค่ใน source code เท่านั้น คุณเห็นแนวคิดเดียวกันจากมุมอื่นได้ด้วย closure เพราะแต่ละตัวคือ struct ที่ compiler สร้างขึ้นซึ่งมีขนาดตามสิ่งที่มัน capture — ไม่ใช่ตาม "การเป็น closure" แบบนามธรรม:
+
+```rust
+fn main() {
+    let flag = true;
+    let count = 0i64;
+    let name = String::from("closure");
+
+    let c1 = || flag;
+    let c2 = move || (count, name.clone());
+    println!("size of c1: {} bytes", std::mem::size_of_val(&c1));
+    println!("size of c2: {} bytes", std::mem::size_of_val(&c2));
+}
+```
+
+```text
+size of c1: 8 bytes
+size of c2: 32 bytes
+```
+
+`c1` แค่ borrow `bool` ตัวเดียว จึงเล็กเท่ากับ reference `c2` ถูก `move` และเป็นเจ้าของ `i64` บวก `String` (24 byte: pointer, length, capacity) struct ที่ compiler สร้างขึ้นจึงใหญ่กว่าตามสัดส่วน ทุก instantiation ของ generic — เหมือนทุก closure — เป็นชิ้นโค้ด concrete ที่มีขนาดของตัวเอง "generic" อธิบายแค่ source code ไม่เคยอธิบาย compiled output
+
+ราคาที่ต้องจ่ายคือ compile time และขนาด binary ไม่ใช่ความเร็ว runtime: generic function ที่ใช้กับ concrete type สิบตัวจะได้ copy ของ machine code สิบชุด นี่คือเหตุผลที่ generic code ที่ซับซ้อนมากและซ้อนลึกอาจทำให้ compile ช้าลงและ binary ใหญ่ขึ้นอย่างเห็นได้ชัด — ค่าใช้จ่ายที่จ่ายครั้งเดียวตอน build ไม่เคยจ่ายต่อการเรียกเลย
 
 ## Generic Structs
 
@@ -135,6 +229,47 @@ struct Pair<T> {
 }
 
 let p = Pair { first: 5, second: 10 }; // T inferred as i32
+```
+
+## Compiler พูดว่าอย่างไร: Type Parameter ที่กำกวม
+
+Inference ทำงานจากค่าที่คุณให้มา — เมื่อไม่มีอะไรให้ infer ได้เลย compiler จะหยุดและถามกลับ:
+
+```rust
+// @expect-error E0282
+fn main() {
+    let x = Vec::new();
+    println!("{:?}", x);
+}
+```
+
+```text
+error[E0282]: type annotations needed for `Vec<_>`
+ --> src/main.rs:2:9
+  |
+2 |     let x = Vec::new();
+  |         ^   ---------- type must be known at this point
+  |
+help: consider giving `x` an explicit type, where the type for type parameter `T` is specified
+  |
+2 |     let x: Vec<T> = Vec::new();
+  |          ++++++++
+```
+
+`Vec::new()` เดี่ยว ๆ ไม่มีข้อมูลใด ๆ ว่าจะเก็บอะไร และ `{:?}` บน vector ว่างก็ไม่ช่วยระบุด้วย — ไม่มีอะไรในโปรแกรมเลือก `T` ให้ วิธีแก้คือใช้อย่างใดอย่างหนึ่ง: annotation ที่ชัดเจน (`let x: Vec<i32> = Vec::new();`), turbofish ที่ call (`Vec::<i32>::new()`), หรือการใช้งานภายหลังที่ constrain มัน (`x.push(1);`)
+
+### Turbofish
+
+Syntax `::<T>` ที่ใช้ข้างบนเรียกว่า **turbofish** — มันระบุ generic type อย่างชัดเจนที่ call site สำหรับสถานการณ์ที่ `E0282` แจ้งเตือนพอดี:
+
+```rust
+fn main() {
+    let parsed = "42".parse::<i32>().unwrap();
+    println!("{}", parsed);
+
+    let collected = (1..5).collect::<Vec<i32>>();
+    println!("{:?}", collected);
+}
 ```
 
 ## `impl` Blocks สำหรับ Generic Structs
@@ -182,9 +317,150 @@ fn main() {
 
 ทั้งสองรูปแบบเหมือนกันทุกประการสำหรับ compiler เลือกแบบที่ชัดเจนกว่า
 
+## Compiler พูดว่าอย่างไร: Generic Parameter หนึ่งตัว สอง Type
+
+Type parameter `T` ตัวเดียวที่ใช้กับค่ามากกว่าหนึ่งค่า หมายความว่าค่าทั้งหมดนั้น *ต้อง* ลงเอยเป็น concrete type เดียวกัน — นั่นคือความหมายของ "generic" ในที่นี้ และ compiler บังคับใช้มันเหมือน type mismatch ทั่วไป:
+
+```rust
+// @expect-error E0308
+fn pair<T>(a: T, b: T) -> (T, T) {
+    (a, b)
+}
+
+fn main() {
+    let p = pair(1, "two");
+    println!("{:?}", p);
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> src/main.rs:6:21
+  |
+6 |     let p = pair(1, "two");
+  |             ---- -  ^^^^^ expected integer, found `&str`
+  |             |    |
+  |             |    expected all arguments to be this integer type because they need to match the type of this parameter
+  |             arguments to this function are incorrect
+  |
+help: the return type of this call is `&'static str` due to the type of the argument passed
+ --> src/main.rs:6:13
+  |
+6 |     let p = pair(1, "two");
+  |             ^^^^^^^^-----^
+  |                     |
+  |                     this argument influences the return type of `pair`
+note: function defined here
+ --> src/main.rs:1:4
+  |
+1 | fn pair<T>(a: T, b: T) -> (T, T) {
+  |    ^^^^ -  ----  ---- this parameter needs to match the integer type of `a`
+  |         |  |
+  |         |  `b` needs to match the integer type of this parameter
+  |         `a` and `b` both reference this parameter `T`
+```
+
+การเรียก `pair` ครั้งแรกกำหนด `T = i32` จาก argument `1`; `"two"` เป็น `&str` และ `T` ไม่สามารถเป็นสอง type พร้อมกันในการเรียกเดียวได้ นี่คือกฎเดียวกับที่ทำให้ `Pair<T>` ก่อนหน้านี้เก็บสองค่าของ type *เดียว* — `first: T, second: T` ไม่ได้เป็น generic อิสระต่อกัน มันแชร์ `T` เดียวกัน
+
+### ความละเอียดอ่อนเรื่อง "ใช้ครั้งเดียว": `impl Trait` vs Named Generic
+
+เมื่อ bound ใช้กับ parameter เดียว `impl Trait` กับ named generic parameter ดูเหมือนใช้แทนกันได้ — แต่ไม่ใช่ ทันทีที่มีมากกว่าหนึ่ง parameter เข้ามาเกี่ยวข้อง แต่ละ `impl Trait` ใน signature เป็น anonymous type parameter อิสระของตัวเอง ในขณะที่ `T` ที่ตั้งชื่อและใช้สองครั้งบังคับให้ทั้งสอง occurrence ต้องตรงกัน:
+
+```rust
+fn takes_two_impl(a: impl std::fmt::Display, b: impl std::fmt::Display) {
+    println!("{a} {b}");
+}
+
+fn takes_two_generic<T: std::fmt::Display>(a: T, b: T) {
+    println!("{a} {b}");
+}
+
+fn main() {
+    takes_two_impl(1, "two"); // fine -- each impl Trait is independently generic
+    takes_two_generic(1, 2);  // fine -- both arguments share one concrete T
+    // takes_two_generic(1, "two"); // would NOT compile -- see the E0308 above
+}
+```
+
+ใช้ `impl Trait` เมื่อ type ของ parameter หนึ่งไม่จำเป็นต้องสัมพันธ์กับ type ของ parameter อื่นเลย หันไปใช้ named `T` ทันทีที่คุณต้องการให้สองที่ขึ้นไปเป็น type *เดียวกัน* หรือต้องตั้งชื่อ `T` ซ้ำใน return type หรือ `where` clause
+
+## `PhantomData`
+
+บางครั้ง generic parameter มีไว้เพื่อให้ type system แยกความแตกต่างระหว่าง type ที่เหมือนกันทุกอย่างล้วน ๆ โดยไม่มี field จริงของ type นั้นเก็บอยู่ที่ไหนเลย `PhantomData<T>` คือ marker ที่มีขนาดศูนย์ ซึ่งบอก compiler ว่า "แกล้งทำเป็นว่า struct นี้เป็นเจ้าของ `T`" โดยไม่ได้เก็บมันจริง ๆ:
+
+```rust
+use std::marker::PhantomData;
+
+struct Typed<T> {
+    raw: u32,
+    _marker: PhantomData<T>,
+}
+
+struct Meters;
+struct Feet;
+
+impl<T> Typed<T> {
+    fn new(raw: u32) -> Self {
+        Typed { raw, _marker: PhantomData }
+    }
+}
+
+fn main() {
+    let m: Typed<Meters> = Typed::new(5);
+    let f: Typed<Feet> = Typed::new(5);
+    println!("{} {}", m.raw, f.raw);
+}
+```
+
+```text
+5 5
+```
+
+`Typed<Meters>` และ `Typed<Feet>` เป็น type ที่ต่างกันสำหรับ compiler — คุณไม่สามารถส่งตัวหนึ่งไปแทนอีกตัวโดยไม่ตั้งใจ — แม้ทั้งสอง struct จะไม่ได้เก็บอะไรนอกจาก `u32` เลยก็ตาม `PhantomData` คือสิ่งที่ทำให้เป็นไปได้โดยไม่เกิด unused-type-parameter error และไม่ต้องจ่ายค่าใช้จ่ายของ field ที่ไม่มีใครอ่านเลย
+
+## Generic vs `dyn` vs Enum: ตารางการตัดสินใจ
+
+สามเครื่องมือล้วนให้โค้ดชิ้นเดียวทำงานกับมากกว่าหนึ่ง type ได้ พวกมันไม่ได้ใช้แทนกันได้ — แต่ละตัวเหมาะกับปัญหาคนละรูปแบบ:
+
+| สถานการณ์ | ใช้ |
+|---|---|
+| ชุด type ปิดและรู้อยู่แล้ว (จำนวน variant คงที่) | **Enum** — `match` แบบ exhaustive ไม่มี heap allocation ไม่มี vtable |
+| ชุด type เปิด — ผู้เรียกหรือ crate อื่นเพิ่มผู้ implement ใหม่ | **`dyn Trait`** — รับอะไรก็ได้ที่ผ่าน trait โดยแลกกับ vtable indirection |
+| รู้ concrete type ที่แต่ละ call site และต้องการความเร็วสูงสุด | **Generic (`T: Trait`)** — monomorphized, zero runtime cost แต่ compiled copy หนึ่งชุดต่อ type |
+
+```rust
+enum Shape {
+    Circle { radius: f64 },
+    Square { side: f64 },
+}
+
+impl Shape {
+    fn area(&self) -> f64 {
+        match self {
+            Shape::Circle { radius } => std::f64::consts::PI * radius * radius,
+            Shape::Square { side } => side * side,
+        }
+    }
+}
+
+fn main() {
+    let shapes = vec![Shape::Circle { radius: 2.0 }, Shape::Square { side: 3.0 }];
+    for s in &shapes {
+        println!("{:.2}", s.area());
+    }
+}
+```
+
+```text
+12.57
+9.00
+```
+
+โค้ดนี้เก็บ "shape" สองแบบต่างกันโดยไม่มี heap allocation และไม่มี vtable เลย เพราะ enum รู้ทุก variant ที่จะเกิดขึ้นอยู่แล้ว หันไปใช้ `Box<dyn Shape>` เฉพาะเมื่อ shape สามารถมาจากภายนอกโค้ดนี้ได้จริง — plugin, crate อื่น, type ที่ผู้ใช้กำหนดเองที่คุณ enumerate ล่วงหน้าไม่ได้
+
 ## Multiple Type Parameters
 
-คุณไม่ได้ถูกจำกัดให้มี type parameter เดียว ฟังก์ชันหนึ่งรับได้สองตัวหรือมากกว่า:
+คุณไม่ได้ถูกจำกัดให้มี type parameter เดียว ฟังก์ชันหนึ่งรับได้สองตัวหรือมากกว่า แต่ละตัวมี bound ของตัวเองที่เป็นอิสระต่อกัน:
 
 ```rust
 fn zip_display<A: std::fmt::Display, B: std::fmt::Display>(a: A, b: B) {
@@ -197,6 +473,61 @@ fn zip_display<A: std::fmt::Display, B: std::fmt::Display>(a: A, b: B) {
 Playground แสดงฟังก์ชัน `largest` แบบ generic ที่ทำงานได้ทั้งกับ integer และ character บวกกับ struct `Pair<T>` แบบ generic ที่มี method ถูกจำกัดด้วย trait bound ให้เปรียบเทียบและแสดงผลได้
 
 <Playground code={genericsCode} />
+
+<Mermaid code={`flowchart TD
+    Q{How many concrete types will ever exist?}
+    Q -->|A small, fixed set you control| ENUM["Enum + match"]
+    Q -->|Open-ended, added by other code| DYN["dyn Trait"]
+    Q -->|Known per call site, want zero cost| GEN["Generic T: Trait"]`} title="Generic vs dyn vs enum" />
+
+## Mental Model
+
+Generic parameter คือตัวแทนที่ compiler เติมให้ครั้งเดียวต่อ call site ไม่ใช่ type จริงที่มีอยู่ ณ runtime — ตอนที่โปรแกรมของคุณรันจริง ทุก `T` ถูกแทนที่ด้วยอะไรบางอย่างที่ concrete ไปแล้ว และ "ความเป็น generic" หายไปหมดแล้ว Trait bound คือสิ่งเดียวที่ generic body ได้รับอนุญาตให้สมมติเกี่ยวกับ `T` — ทุกอย่างอื่นเกี่ยวกับ `T` มองไม่เห็นจาก function โดยตั้งใจ เพื่อให้ body เดียวกันทำงานได้จริงกับทุก type ที่ผ่าน bound เหล่านั้น
+
+## Trade-offs
+
+Monomorphization ให้ machine code เหมือนที่คุณเขียนมือแยกต่อ type ด้วย zero runtime cost — แต่ไม่ได้ฟรีในความหมายที่แท้จริง: ทุก concrete type ที่ instantiate เพิ่ม copy ของ function เข้าไปใน binary และเพิ่ม compile time `dyn Trait` (บทถัดไป) กลับด้าน trade-off นี้: compiled copy เดียว, indirection เล็กน้อยต่อการเรียก แต่ไม่มีค่าใช้จ่ายด้านขนาด code หรือ compile time จากการเพิ่ม type มากขึ้น ทั้ง generics และ `dyn Trait` ไม่ใช่ upgrade ที่ดีกว่า enum เสมอไปเมื่อชุด type ปิดจริง ๆ — enum ทั้งเร็วกว่าและปลอดภัยกว่า (exhaustive `match` จับ variant ที่ไม่ได้จัดการ ณ compile time) กว่าทั้งสองแบบ
+
+## Common Misconceptions
+
+- **"Generic function compile ครั้งเดียวแล้ว dispatch ตาม type ณ runtime"** ตรงข้ามเลย: monomorphization หมายความว่า compiler compile มัน *ต่อ concrete type ที่ใช้แต่ละตัว* และไม่มี dispatch ณ runtime เลย — ตอนที่โปรแกรมรัน `largest::<i32>` และ `largest::<char>` เป็น function สองตัวที่แยกกันและ resolve เสร็จแล้ว
+- **"`impl Trait` เป็นสอง parameter กับ named generic `T` ที่ใช้สองครั้ง หมายความเหมือนกัน"** พวกมันต่างกันทันทีที่มีมากกว่าหนึ่ง parameter เข้ามา: `impl Trait` บนแต่ละ parameter อนุญาตให้ concrete type ต่างกันได้ต่อ parameter ในขณะที่ `T` ที่แชร์บังคับให้ต้องตรงกัน — ตัวอย่าง `E0308` ข้างบนคือสิ่งที่เกิดขึ้นพอดีเมื่อโค้ดเขียนโดยสมมติว่าเป็นอย่างอื่น
+- **"`dyn Trait` เป็นวิธีที่ 'ถูกต้อง' ในการจัดการหลาย type และ enum เป็นทางลัดของมือใหม่"** เมื่อชุด type ปิด enum เป็นเครื่องมือที่ถูกต้องกว่า ไม่ใช่เครื่องมือที่ด้อยกว่า — มันเร็วกว่า (ไม่มี vtable) และ compiler บังคับ exhaustiveness ที่ทั้ง generics และ `dyn Trait` ให้ไม่ได้
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ generate มามักหยิบ `Box<dyn Trait>` มาใช้เป็นค่าเริ่มต้นทุกครั้งที่เกี่ยวข้องกับ "มากกว่าหนึ่ง type" แม้ว่าผู้ implement ทุกตัวจะรู้อยู่แล้วและอยู่ในไฟล์เดียวกันนี้เอง — enum จะทำงานเดียวกันได้โดยมี indirection น้อยกว่าและมี compile-time exhaustiveness check
+
+<SpotTheBug code={`trait Command {
+    fn run(&self) -> String;
+}
+
+struct Start;
+impl Command for Start {
+    fn run(&self) -> String { String::from("starting") }
+}
+
+struct Stop;
+impl Command for Stop {
+    fn run(&self) -> String { String::from("stopping") }
+}
+
+fn build_commands() -> Vec<Box<dyn Command>> {
+    vec![Box::new(Start), Box::new(Stop)]
+}
+
+fn main() {
+    for cmd in build_commands() {
+        println!("{}", cmd.run());
+    }
+}
+`}>
+โค้ดนี้ compile ผ่านและ print `starting` แล้ว `stopping` — ไม่มีอะไรผิดในเชิงฟังก์ชัน กลิ่นของปัญหาเชิงออกแบบคือ `Start` และ `Stop` คือชุด command *ทั้งหมด* ที่นิยามในไฟล์เดียวกันนี้ ไม่มี plugin system หรือ crate ภายนอกใดเพิ่มตัวที่สามเลย `Box<dyn Command>` จ่าย heap allocation และ vtable indirection ต่อ command เพื่อความยืดหยุ่นที่โค้ดนี้ไม่เคยใช้ และมันเปิดให้โค้ดที่ไหนก็ได้ implement `Command` ให้ type ที่ function นี้ไม่เคยถูกออกแบบมาให้คาดหวังอย่างเงียบ ๆ `enum Command { Start, Stop }` พร้อม `match` ใน method `run` ให้พฤติกรรมเดียวกันบน stack โดยไม่มี allocation และเปลี่ยน variant ใหม่ที่ลืมจัดการให้กลายเป็น compile error ทุกที่ที่ match ยังไม่อัปเดต — ตรงข้ามกับความเปิดเงียบ ๆ ของ `dyn Command` หันไปใช้ `dyn Trait` เฉพาะเมื่อผู้ implement ใหม่ต้องมาจากโค้ดภายนอกที่คุณควบคุมไม่ได้จริง ๆ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Generic parameter ถูกลบล้างกลายเป็น code ที่ concrete และเฉพาะเจาะจงก่อนที่โปรแกรมของคุณจะรันเลย — ค่าใช้จ่ายที่คุณจ่ายอยู่ที่ compile time (ขนาด binary, ความเร็ว build) ไม่เคยอยู่ที่ runtime เลย ซึ่งเป็น trade-off ที่ `dyn Trait` และ enum ต่างเลือกคนละแบบ
+</Callout>
 
 <Quiz client:visible id="traits-generics/generics" questions={quizGenerics} />
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Welcome to Traits & Generics
 
@@ -37,14 +39,53 @@ Without generics you would need a separate `largest_i32`, `largest_f64`, and `la
 
 The `T: PartialOrd` part is a **trait bound** — it tells the compiler "this function works for any type `T` that supports comparison." The compiler then generates a specialized copy for each concrete type you actually use (a process called *monomorphization*).
 
+## What the Compiler Says: A Generic Function With No Bound
+
+Traits and generics are not two separate features you learn in sequence — a trait bound is the thing that makes a generic function's body legal in the first place. Drop the bound and the compiler tells you exactly what capability is missing:
+
+```rust
+// @expect-error E0369
+fn largest<T>(a: T, b: T) -> T {
+    if a > b { a } else { b }
+}
+
+fn main() {
+    println!("{}", largest(3, 7));
+}
+```
+
+```text
+error[E0369]: binary operation `>` cannot be applied to type `T`
+ --> src/main.rs:2:10
+  |
+2 |     if a > b { a } else { b }
+  |        - ^ - T
+  |        |
+  |        T
+  |
+help: consider restricting type parameter `T` with trait `PartialOrd`
+  |
+1 | fn largest<T: std::cmp::PartialOrd>(a: T, b: T) -> T {
+  |             ++++++++++++++++++++++
+```
+
+`T` on its own means "any type at all," and most types do not support `>`. The compiler's own suggested fix is the trait bound: `T: PartialOrd` narrows `T` down to exactly the set of types where `>` is a legal operation. This is the recurring pattern across the whole module: a generic parameter starts out able to do almost nothing, and every trait bound you add is a deliberate trade of flexibility for capability.
+
 ## Module Roadmap
 
 | Lesson | What you will learn |
 |---|---|
-| **Traits** | Define shared behavior, default methods, calling trait methods |
-| **Generics** | Generic functions, generic structs, trait bounds, `where` clauses |
-| **Trait Objects** | `dyn Trait`, `Box<dyn Trait>`, static vs dynamic dispatch |
-| **Lifetimes** | Lifetime annotations, dangling references, elision rules |
+| **Traits** | Default methods, supertraits, blanket impls, `From`/`Into`/`TryFrom`, operator overloading, `Deref`, associated types and consts |
+| **Generics** | Generic functions, generic structs, monomorphization, `where` clauses, `PhantomData`, generic vs `dyn` vs enum |
+| **Trait Objects** | `dyn Trait`, `Box<dyn Trait>`, fat pointers, vtables, `dyn Any`, static vs dynamic dispatch |
+| **Lifetimes** | Lifetime annotations, elision rules, `'static`, struct lifetimes, higher-ranked trait bounds |
+
+<Mermaid code={`flowchart TD
+    Q{What are you trying to express?}
+    Q -->|One shared capability many types can provide| TR[Traits lesson]
+    Q -->|One function or struct body for many concrete types| GEN[Generics lesson]
+    Q -->|A collection of mixed concrete types, chosen at runtime| TO[Trait Objects lesson]
+    Q -->|How long a reference stays valid| LT[Lifetimes lesson]`} title="Which lesson answers your question" />
 
 ## Try It Now
 
@@ -81,6 +122,49 @@ export const traitsGenericsIndexCode = `fn main() {
 
 <Playground code={traitsGenericsIndexCode} />
 
+<Callout title="Zero-cost by default, opt-in dynamic when you need it">
+Generics and static-dispatch trait bounds compile away entirely — the machine code is as if you had hand-written a version per type. Dynamic dispatch (`dyn Trait`, the Trait Objects lesson) is the one place in this module where you deliberately pay a small, explicit runtime cost in exchange for flexibility generics cannot give you: storing genuinely different types in one collection.
+</Callout>
+
+## Mental Model
+
+Think of a trait as answering "what can this type *do*," and a generic parameter as answering "what type am I working with *right now*." A trait bound (`T: Trait`) is the point where the two connect: it lets a generic function or struct say "I don't care what concrete type this is, as long as it can do X." Everything in this module — default methods, blanket impls, `dyn Trait`, lifetimes on generic references — is a variation on that one connection.
+
+## Trade-offs
+
+Static dispatch (generics, trait bounds, `impl Trait`) costs nothing at runtime but costs compile time and binary size: every concrete type you instantiate a generic with gets its own copy of the machine code, and every constraint you add narrows what can call your function. Dynamic dispatch (`dyn Trait`) inverts that trade: one copy of the code, a small vtable indirection per call, and the ability to mix concrete types that were never known to each other at compile time. Neither is strictly better — the rest of this module is largely about recognizing which trade-off a given problem actually needs.
+
+## Common Misconceptions
+
+- **"Traits are just Rust's version of inheritance."** They are closer to interfaces: a trait grants no data fields, no automatic field access, and no hierarchy between types. Two types that implement the same trait are not related to each other in any way beyond that shared contract — composition, not inheritance.
+- **"Generics and trait bounds are two different topics."** A bare generic parameter `T` can do almost nothing — no comparison, no printing, no arithmetic — until a trait bound grants it a specific capability. Learning generics *is* learning which trait bounds unlock which operations.
+- **"`dyn Trait` is the 'advanced' or 'better' way to use traits, and generics are the beginner version."** Neither is more advanced — they solve different problems. Reaching for `dyn Trait` by default costs a vtable indirection and heap allocation you don't need when the type is actually known at compile time.
+
+## Reading AI-generated code
+
+Generated code frequently adds a `Clone` bound to a generic function "just in case," then calls `.clone()` inside a loop on a value that only ever needed to be read by reference — the bound compiles, the clone runs, and nothing looks obviously wrong at a glance.
+
+<SpotTheBug code={`fn sum_lengths<T: Clone + AsRef<str>>(items: &[T]) -> usize {
+    let mut total = 0;
+    for item in items {
+        let owned = item.clone(); // cloned every iteration for no reason
+        total += owned.as_ref().len();
+    }
+    total
+}
+
+fn main() {
+    let words = vec![String::from("hello"), String::from("world")];
+    println!("{}", sum_lengths(&words));
+}
+`}>
+This compiles and prints the correct answer (`10`), which is exactly why it survives review — the bug is a wasted allocation, not a wrong result. `.clone()` inside the loop duplicates every `String` just to call `.as_ref().len()`, a method that only ever needed a borrow. The `Clone` bound is not doing any useful work here either: dropping it down to `fn sum_lengths<T: AsRef<str>>(items: &[T]) -> usize` and calling `item.as_ref().len()` directly removes the allocation and the unnecessary bound in one edit — the smallest bound that grants the capability you actually use is the correct one, not the broadest one that happens to compile.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A trait says what a type can do, a generic parameter says which type you're doing it with, and a trait bound is the one line of syntax that connects them — everything else in this module is a consequence of that connection.
+</Callout>
+
 export const quizTraitsGenericsIndex = [
     {
         q: "What is the primary purpose of a trait in Rust?",
@@ -91,6 +175,7 @@ export const quizTraitsGenericsIndex = [
             "To manage thread safety automatically",
         ],
         answer: 1,
+        explain: "A trait is a named set of method signatures that any type can implement independently — it defines a capability, not memory layout or thread behavior.",
     },
     {
         q: "What does a generic type parameter allow you to do?",
@@ -101,6 +186,7 @@ export const quizTraitsGenericsIndex = [
             "Skip the borrow checker for that parameter",
         ],
         answer: 2,
+        explain: "A generic parameter like `T` lets you write one function body that the compiler specializes for each concrete type actually used at a call site.",
     },
     {
         q: "Which keyword is used to implement a trait for a struct in Rust?",
@@ -111,6 +197,29 @@ export const quizTraitsGenericsIndex = [
             "derive",
         ],
         answer: 2,
+        explain: "`impl TraitName for TypeName { ... }` is the syntax for fulfilling a trait's contract for a specific type.",
+    },
+    {
+        q: "Does this compile?\n```rust\nfn largest<T>(a: T, b: T) -> T {\n    if a > b { a } else { b }\n}\nfn main() {\n    println!(\"{}\", largest(3, 7));\n}\n```",
+        options: [
+            "Yes — integers always support comparison",
+            "No — error[E0369], because a bare `T` has no guarantee it supports `>`",
+            "Yes, but only in debug builds",
+            "No — generic functions cannot return `T`",
+        ],
+        answer: 1,
+        explain: "Without a `PartialOrd` bound, the compiler has no reason to believe an arbitrary `T` supports the `>` operator, so it refuses to compile with error[E0369], suggesting the exact bound to add.",
+    },
+    {
+        q: "Which error code does rustc report for the `largest<T>` function above, and what fixes it?",
+        options: [
+            "E0308 mismatched types; fix by changing the return type",
+            "E0369 binary operation cannot be applied; fix by adding `T: PartialOrd`",
+            "E0502 cannot borrow as mutable; fix by adding `mut`",
+            "E0038 not dyn compatible; fix by using `Box<dyn T>`",
+        ],
+        answer: 1,
+        explain: "rustc's own suggestion for this exact error is `fn largest<T: std::cmp::PartialOrd>(a: T, b: T) -> T` — the trait bound is what grants `T` the `>` operator.",
     },
 ];
 

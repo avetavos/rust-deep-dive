@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 export const genericsCode = `fn largest<T: PartialOrd>(list: &[T]) -> &T {
     let mut biggest = &list[0];
@@ -60,6 +62,7 @@ export const quizGenerics = [
             '`T` will be automatically converted to `PartialOrd` at runtime',
         ],
         answer: 1,
+        explain: 'A trait bound restricts which types T may be, without changing T into anything at runtime — it just tells the compiler which operations are guaranteed to exist.',
     },
     {
         q: 'What is monomorphization?',
@@ -70,6 +73,7 @@ export const quizGenerics = [
             'A memory optimization that merges duplicate heap allocations',
         ],
         answer: 1,
+        explain: 'Monomorphization happens entirely at compile time: the compiler emits one specialized copy of the generic code per concrete type actually used, so there is no dispatch cost left at runtime.',
     },
     {
         q: 'How would you declare a generic struct `Stack` that holds elements of type `T`?',
@@ -80,6 +84,7 @@ export const quizGenerics = [
             '`generic struct Stack(T) { data: Vec<T> }`',
         ],
         answer: 2,
+        explain: 'Angle brackets after the struct name declare its type parameters, which can then be used anywhere inside the struct body, including as `Vec<T>`.',
     },
     {
         q: 'What is the purpose of a `where` clause in a generic function?',
@@ -90,6 +95,51 @@ export const quizGenerics = [
             'To add lifetime annotations to generic parameters',
         ],
         answer: 1,
+        explain: 'A `where` clause is syntactic sugar for the same inline bounds — it exists purely to keep long or multi-parameter constraint lists readable.',
+    },
+    {
+        q: 'Does this compile?\n```rust\nfn main() {\n    let x = Vec::new();\n    println!("{:?}", x);\n}\n```',
+        options: [
+            'Yes — Vec::new() defaults to Vec<i32>',
+            'No — error[E0282], because nothing tells the compiler what type the Vec holds',
+            'Yes — it prints an empty vector, []',
+            'No — Vec::new() requires a turbofish by syntax rules',
+        ],
+        answer: 1,
+        explain: 'Vec::new() alone carries no type information, and printing an empty vector with {:?} does not narrow it down either, so rustc reports error[E0282] and asks for an explicit type.',
+    },
+    {
+        q: 'What happens when you call `pair(1, "two")` given `fn pair<T>(a: T, b: T) -> (T, T)`?',
+        options: [
+            'It compiles — T is inferred as a tuple of mixed types',
+            'It fails with error[E0308] — T was fixed to an integer type by the first argument, and "two" is a &str',
+            'It compiles and returns (1, "two")',
+            'It fails with error[E0282] — T cannot be inferred at all',
+        ],
+        answer: 1,
+        explain: 'A single T shared by both parameters must be one concrete type. The first argument fixes T to an integer type; the &str argument then mismatches it, producing error[E0308].',
+    },
+    {
+        q: 'Why does calling the same generic function with i32 and f64 produce two different machine addresses for the compiled function?',
+        options: [
+            'It does not — generic functions always compile to one shared address',
+            'Because monomorphization generates a separate, fully-specialized copy of the function per concrete type used',
+            'Because Rust uses a runtime dispatch table for all generic calls',
+            'Because i32 and f64 always occupy the same memory address by coincidence',
+        ],
+        answer: 1,
+        explain: 'Monomorphization means identity::<i32> and identity::<f64> are two distinct compiled functions, exactly like two hand-written functions would be — there is no shared, runtime-dispatched implementation.',
+    },
+    {
+        q: 'When should you prefer an enum over `Box<dyn Trait>` for a value that can be one of several types?',
+        options: [
+            'Always — enums are strictly faster in every case',
+            'When the full set of types is closed and known to you, since a match gets exhaustiveness checking with no heap allocation or vtable',
+            'Only when there is exactly one variant',
+            'Never — dyn Trait is always the more idiomatic choice',
+        ],
+        answer: 1,
+        explain: 'An enum is the better fit whenever you already know every variant that will ever exist — it is faster (no vtable, no heap allocation) and the compiler enforces that every variant is handled.',
     },
 ];
 
@@ -109,11 +159,55 @@ fn largest<T: PartialOrd>(list: &[T]) -> &T {
 }
 ```
 
-The `<T: PartialOrd>` part declares a **type parameter** `T` with a **trait bound**. The bound `PartialOrd` means "this function accepts any type that supports the `>` and `<` operators." Without the bound, the compiler would refuse the comparison `item > biggest` because not every type is comparable.
+The `<T: PartialOrd>` part declares a **type parameter** `T` with a **trait bound**. The bound `PartialOrd` means "this function accepts any type that supports the `>` and `<` operators." Without the bound, the compiler would refuse the comparison `item > biggest` because not every type is comparable — the Traits & Generics overview lesson showed exactly this failure as `error[E0369]`.
+
+## Monomorphization, Measured
 
 <Callout title="Generics are monomorphized — zero runtime cost">
 The compiler generates a specialized copy of the function for each concrete type you use — one for `i32`, one for `char`, and so on. This process is called monomorphization. The resulting machine code is identical to what you would have written by hand for each type, so generics have no runtime overhead.
 </Callout>
+
+"Zero runtime cost" is a claim you can actually check. Calling the same generic function with two different concrete types produces two genuinely separate compiled functions, at two different addresses — nothing is resolved at runtime the way a `dyn Trait` call would be:
+
+```rust
+fn identity<T>(x: T) -> T {
+    x
+}
+
+fn main() {
+    let int_fn: fn(i32) -> i32 = identity;
+    let float_fn: fn(f64) -> f64 = identity;
+    println!("same machine address? {}", int_fn as usize == float_fn as usize);
+}
+```
+
+```text
+same machine address? false
+```
+
+`identity::<i32>` and `identity::<f64>` are two distinct functions in the compiled binary, each doing exactly what a hand-written `fn identity_i32(x: i32) -> i32` and `fn identity_f64(x: f64) -> f64` would do — the "one generic function" only exists in the source code. You can see the same idea from a different angle with closures, since each one is really a compiler-generated struct sized by what it captures — not by "being a closure" in the abstract:
+
+```rust
+fn main() {
+    let flag = true;
+    let count = 0i64;
+    let name = String::from("closure");
+
+    let c1 = || flag;
+    let c2 = move || (count, name.clone());
+    println!("size of c1: {} bytes", std::mem::size_of_val(&c1));
+    println!("size of c2: {} bytes", std::mem::size_of_val(&c2));
+}
+```
+
+```text
+size of c1: 8 bytes
+size of c2: 32 bytes
+```
+
+`c1` only borrows one `bool`, so it is as small as a reference; `c2` is `move`d and owns an `i64` plus a `String` (24 bytes: pointer, length, capacity), so its compiler-generated struct is correspondingly larger. Every instantiation of a generic — like every closure — is its own concrete, sized piece of code; "generic" only describes the source, never the compiled output.
+
+The price for this is compile time and binary size, not runtime speed: a generic function used with ten different concrete types produces ten copies of its machine code, which is why very generic, deeply nested code can noticeably slow down compilation and grow the binary — a cost paid once, at build time, never per call.
 
 ## Generic Structs
 
@@ -135,6 +229,47 @@ struct Pair<T> {
 }
 
 let p = Pair { first: 5, second: 10 }; // T inferred as i32
+```
+
+## What the Compiler Says: Ambiguous Type Parameters
+
+Inference works from the values you provide — when there is nothing to infer from, the compiler stops and asks:
+
+```rust
+// @expect-error E0282
+fn main() {
+    let x = Vec::new();
+    println!("{:?}", x);
+}
+```
+
+```text
+error[E0282]: type annotations needed for `Vec<_>`
+ --> src/main.rs:2:9
+  |
+2 |     let x = Vec::new();
+  |         ^   ---------- type must be known at this point
+  |
+help: consider giving `x` an explicit type, where the type for type parameter `T` is specified
+  |
+2 |     let x: Vec<T> = Vec::new();
+  |          ++++++++
+```
+
+`Vec::new()` alone carries no information about what it will hold, and `{:?}` on an empty vector doesn't narrow it down either — nothing in the program picks `T`. The fix is any of: an explicit annotation (`let x: Vec<i32> = Vec::new();`), turbofish on the call (`Vec::<i32>::new()`), or a later use that constrains it (`x.push(1);`).
+
+### Turbofish
+
+The `::<T>` syntax used above is called **turbofish** — it spells out a generic type explicitly at the call site, for exactly the situations `E0282` flags:
+
+```rust
+fn main() {
+    let parsed = "42".parse::<i32>().unwrap();
+    println!("{}", parsed);
+
+    let collected = (1..5).collect::<Vec<i32>>();
+    println!("{:?}", collected);
+}
 ```
 
 ## `impl` Blocks for Generic Structs
@@ -182,9 +317,150 @@ fn main() {
 
 Both forms are identical to the compiler; choose whichever is clearer.
 
+## What the Compiler Says: One Generic Parameter, Two Types
+
+A single type parameter `T` used for more than one value means *all* of those values must end up the same concrete type — that is what "generic" means here, and the compiler enforces it exactly like any other type mismatch:
+
+```rust
+// @expect-error E0308
+fn pair<T>(a: T, b: T) -> (T, T) {
+    (a, b)
+}
+
+fn main() {
+    let p = pair(1, "two");
+    println!("{:?}", p);
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> src/main.rs:6:21
+  |
+6 |     let p = pair(1, "two");
+  |             ---- -  ^^^^^ expected integer, found `&str`
+  |             |    |
+  |             |    expected all arguments to be this integer type because they need to match the type of this parameter
+  |             arguments to this function are incorrect
+  |
+help: the return type of this call is `&'static str` due to the type of the argument passed
+ --> src/main.rs:6:13
+  |
+6 |     let p = pair(1, "two");
+  |             ^^^^^^^^-----^
+  |                     |
+  |                     this argument influences the return type of `pair`
+note: function defined here
+ --> src/main.rs:1:4
+  |
+1 | fn pair<T>(a: T, b: T) -> (T, T) {
+  |    ^^^^ -  ----  ---- this parameter needs to match the integer type of `a`
+  |         |  |
+  |         |  `b` needs to match the integer type of this parameter
+  |         `a` and `b` both reference this parameter `T`
+```
+
+The first call to `pair` fixes `T = i32` from the `1` argument; `"two"` is a `&str`, and `T` cannot be two types at once in a single call. This is the same rule that made the earlier `Pair<T>` hold two values of *one* type — `first: T, second: T` are not independently generic, they share one `T`.
+
+### The "Used Once" Nuance: `impl Trait` vs a Named Generic
+
+When a bound applies to only one parameter, `impl Trait` and a named generic parameter look interchangeable — but they are not, the moment more than one parameter is involved. Each `impl Trait` in a signature is its own, independent anonymous type parameter, while a named `T` used twice forces both occurrences to agree:
+
+```rust
+fn takes_two_impl(a: impl std::fmt::Display, b: impl std::fmt::Display) {
+    println!("{a} {b}");
+}
+
+fn takes_two_generic<T: std::fmt::Display>(a: T, b: T) {
+    println!("{a} {b}");
+}
+
+fn main() {
+    takes_two_impl(1, "two"); // fine -- each impl Trait is independently generic
+    takes_two_generic(1, 2);  // fine -- both arguments share one concrete T
+    // takes_two_generic(1, "two"); // would NOT compile -- see the E0308 above
+}
+```
+
+Use `impl Trait` when a parameter's type genuinely does not need to relate to any other parameter's type; reach for a named `T` the moment you need two or more places to be *the same* type, or need to name `T` again in the return type or a `where` clause.
+
+## `PhantomData`
+
+Sometimes a generic parameter exists purely to make the type system distinguish between otherwise-identical types, with no actual field of that type stored anywhere. `PhantomData<T>` is a zero-sized marker that tells the compiler "pretend this struct owns a `T`," without actually storing one:
+
+```rust
+use std::marker::PhantomData;
+
+struct Typed<T> {
+    raw: u32,
+    _marker: PhantomData<T>,
+}
+
+struct Meters;
+struct Feet;
+
+impl<T> Typed<T> {
+    fn new(raw: u32) -> Self {
+        Typed { raw, _marker: PhantomData }
+    }
+}
+
+fn main() {
+    let m: Typed<Meters> = Typed::new(5);
+    let f: Typed<Feet> = Typed::new(5);
+    println!("{} {}", m.raw, f.raw);
+}
+```
+
+```text
+5 5
+```
+
+`Typed<Meters>` and `Typed<Feet>` are different types to the compiler — you cannot accidentally pass one where the other is expected — even though neither struct stores anything beyond a `u32`. `PhantomData` is what makes this possible without an unused-type-parameter error, and without paying for a field that would never be read.
+
+## Generic vs `dyn` vs Enum: A Decision Table
+
+Three tools all let one piece of code work with more than one type. They are not interchangeable — each fits a different shape of problem:
+
+| Situation | Use |
+|---|---|
+| The set of types is closed and known to you (a fixed handful of variants) | **Enum** — exhaustive `match`, no heap allocation, no vtable |
+| The set of types is open — callers or other crates add new implementors | **`dyn Trait`** — accepts anything satisfying the trait, at the cost of a vtable indirection |
+| You know the concrete type at each call site and want maximum speed | **Generic (`T: Trait`)** — monomorphized, zero runtime cost, but one compiled copy per type |
+
+```rust
+enum Shape {
+    Circle { radius: f64 },
+    Square { side: f64 },
+}
+
+impl Shape {
+    fn area(&self) -> f64 {
+        match self {
+            Shape::Circle { radius } => std::f64::consts::PI * radius * radius,
+            Shape::Square { side } => side * side,
+        }
+    }
+}
+
+fn main() {
+    let shapes = vec![Shape::Circle { radius: 2.0 }, Shape::Square { side: 3.0 }];
+    for s in &shapes {
+        println!("{:.2}", s.area());
+    }
+}
+```
+
+```text
+12.57
+9.00
+```
+
+This holds two different "shapes" with no heap allocation and no vtable at all, because the enum already knows every variant that will ever exist. Reach for `Box<dyn Shape>` only once a shape can come from outside this code — a plugin, a different crate, user-defined types you cannot enumerate in advance.
+
 ## Multiple Type Parameters
 
-You are not limited to one parameter. A function can accept two or more:
+You are not limited to one parameter. A function can accept two or more, each with its own, independent bound:
 
 ```rust
 fn zip_display<A: std::fmt::Display, B: std::fmt::Display>(a: A, b: B) {
@@ -197,6 +473,61 @@ fn zip_display<A: std::fmt::Display, B: std::fmt::Display>(a: A, b: B) {
 The playground demonstrates a generic `largest` function working on both integers and characters, plus a generic `Pair<T>` struct with a method constrained to comparable, displayable types.
 
 <Playground code={genericsCode} />
+
+<Mermaid code={`flowchart TD
+    Q{How many concrete types will ever exist?}
+    Q -->|A small, fixed set you control| ENUM["Enum + match"]
+    Q -->|Open-ended, added by other code| DYN["dyn Trait"]
+    Q -->|Known per call site, want zero cost| GEN["Generic T: Trait"]`} title="Generic vs dyn vs enum" />
+
+## Mental Model
+
+A generic parameter is a placeholder the compiler fills in once per call site, not a real type that exists at runtime — by the time your program runs, every `T` has already been replaced with something concrete, and the "generic-ness" is gone entirely. Trait bounds are the only thing a generic body is allowed to assume about `T`; everything else about `T` is invisible to the function, on purpose, so the same body really can work for any type satisfying those bounds.
+
+## Trade-offs
+
+Monomorphization buys you the same machine code you would have hand-written per type, at zero runtime cost — but it is not free in an absolute sense: every concrete type instantiated adds a copy of the function to the binary and adds to compile time. A `dyn Trait` (next lesson) inverts that trade: one compiled copy, a small per-call indirection, but no code-size or compile-time cost from adding more types. Neither generics nor `dyn Trait` is a strict upgrade over an enum when the set of types is genuinely closed — the enum is both faster and safer (an exhaustive `match` catches an unhandled variant at compile time) than either.
+
+## Common Misconceptions
+
+- **"A generic function is compiled once and dispatches based on type at runtime."** The opposite: monomorphization means the compiler compiles it once *per concrete type used*, and there is no dispatch at runtime at all — by the time the program runs, `largest::<i32>` and `largest::<char>` are simply two different, already-resolved functions.
+- **"`impl Trait` as two parameters and a named generic `T` used twice mean the same thing."** They diverge the instant more than one parameter is involved: `impl Trait` on each parameter allows different concrete types per parameter, while a shared `T` forces them to match — the `E0308` example above is exactly what happens when code was written assuming otherwise.
+- **"`dyn Trait` is the 'proper' way to handle multiple types, and enums are a beginner shortcut."** When the type set is closed, an enum is the more correct tool, not a lesser one — it is faster (no vtable), and the compiler enforces exhaustiveness that neither generics nor `dyn Trait` can give you.
+
+## Reading AI-generated code
+
+Generated code reaches for `Box<dyn Trait>` by default whenever "more than one type" is involved, even when every implementor is already known and lives right there in the same file — an enum would do the same job with less indirection and a compile-time exhaustiveness check.
+
+<SpotTheBug code={`trait Command {
+    fn run(&self) -> String;
+}
+
+struct Start;
+impl Command for Start {
+    fn run(&self) -> String { String::from("starting") }
+}
+
+struct Stop;
+impl Command for Stop {
+    fn run(&self) -> String { String::from("stopping") }
+}
+
+fn build_commands() -> Vec<Box<dyn Command>> {
+    vec![Box::new(Start), Box::new(Stop)]
+}
+
+fn main() {
+    for cmd in build_commands() {
+        println!("{}", cmd.run());
+    }
+}
+`}>
+This compiles and prints `starting` then `stopping` — nothing is functionally wrong. The design smell is that `Start` and `Stop` are the *entire* set of commands, defined in this same file, with no plugin system or external crate ever adding a third one. `Box<dyn Command>` pays a heap allocation and a vtable indirection per command for flexibility this code never uses, and it lets any code anywhere silently implement `Command` for a type this function was never designed to expect. An `enum Command { Start, Stop }` with a `match` in a `run` method gives identical behavior on the stack, with no allocation, and turns a forgotten new variant into a compile error everywhere the match isn't updated — the opposite of `dyn Command`'s silent openness. Reach for `dyn Trait` only once new implementors genuinely need to come from outside code you control.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A generic parameter is erased to concrete, specialized code before your program ever runs — the cost you pay is at compile time (binary size, build speed), never at runtime, which is exactly the trade `dyn Trait` and enums each make differently.
+</Callout>
 
 <Quiz client:visible id="traits-generics/generics" questions={quizGenerics} />
 
