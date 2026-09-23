@@ -1,6 +1,6 @@
 ---
 title: 'Closures'
-description: 'Closures are anonymous functions that capture their environment. Learn Fn, FnMut, FnOnce, the move keyword, and how closures power iterator adaptors.'
+description: 'Closures are anonymous functions that capture their environment. Master Fn/FnMut/FnOnce inference, the E0525/E0502 errors that reveal it, move, returning closures, and how closures power iterator adaptors.'
 sidebar:
   order: 5
 ---
@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## What Is a Closure?
 
@@ -30,7 +32,14 @@ Rust has three closure traits that describe how a closure uses its captured valu
 | `FnMut` | Borrows mutably (`&mut T`) | Any number of times |
 | `FnOnce` | Takes ownership (`T`) | Exactly once |
 
-Every closure implements at least `FnOnce`. If it only borrows, it also implements `Fn`.
+Every closure implements at least `FnOnce`. If it only borrows, it also implements `Fn`. The compiler infers which trait(s) a closure implements by looking at what its body actually does with each captured variable — never by looking at how you *intend* to use it. That inference is not a detail you can ignore, because the moment you use the closure somewhere that requires a stronger guarantee than the body earns, the compiler will say so.
+
+<Mermaid code={`flowchart TD
+    A[What does the closure body do with a captured variable?] --> B{Only reads it?}
+    B -->|Yes| C[Fn: borrows &T]
+    B -->|No, mutates it| D{Only mutates, never consumes?}
+    D -->|Yes| E[FnMut: borrows &mut T]
+    D -->|No, moves or drops it| F[FnOnce: takes ownership T]`} title="How the compiler infers Fn / FnMut / FnOnce" />
 
 ### `Fn` — Immutable Borrow
 
@@ -64,6 +73,56 @@ greet();    // name is consumed here
 // greet(); // would compile-error — FnOnce can only be called once
 ```
 
+## What the Compiler Says: A Closure That Consumes Can't Be Called Twice
+
+`Fn` is a *supertrait* requirement: anything that requires `Fn` needs to call the closure as many times as it wants, so a closure whose body actually consumes a captured value — even just by calling `drop()` on it — can only ever be `FnOnce`, and using it where `Fn` is required is a type error, not a runtime surprise:
+
+```rust
+// @expect-error E0525
+fn call_twice<F: Fn()>(f: F) {
+    f();
+    f();
+}
+
+fn main() {
+    let name = String::from("Rust");
+    // this closure takes ownership of `name` and consumes it inside — FnOnce only
+    let greet = move || {
+        println!("bye, {}", name);
+        drop(name);
+    };
+    call_twice(greet); // ERROR: call_twice requires Fn, greet is only FnOnce
+}
+```
+
+```text
+error[E0525]: expected a closure that implements the `Fn` trait, but this closure only implements `FnOnce`
+  --> src/main.rs:9:17
+   |
+ 9 |     let greet = move || {
+   |                 ^^^^^^^ this closure implements `FnOnce`, not `Fn`
+10 |         println!("bye, {}", name);
+11 |         drop(name);
+   |              ---- closure is `FnOnce` because it moves the variable `name` out of its environment
+12 |     };
+13 |     call_twice(greet); // ERROR: call_twice requires Fn, greet is only FnOnce
+   |     ---------- ----- the requirement to implement `Fn` derives from here
+   |     |
+   |     required by a bound introduced by this call
+   |
+note: required by a bound in `call_twice`
+  --> src/main.rs:1:18
+   |
+ 1 | fn call_twice<F: Fn()>(f: F) {
+   |                  ^^^^ required by this bound in `call_twice`
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0525`.
+```
+
+Notice the diagnostic points at the exact line (`drop(name)`) that downgrades the closure to `FnOnce` — the compiler is not guessing, it derived this from the closure body. Removing the `drop(name)` call (just printing `name` without consuming it) would make the closure `Fn` and let it compile.
+
 ## The `move` Keyword
 
 `move` forces the closure to take ownership of all captured variables, regardless of whether it would otherwise only borrow:
@@ -75,7 +134,103 @@ let say = move || println!("{}", message);  // message moved into say
 say();
 ```
 
-`move` is essential when the closure outlives its defining scope (e.g., passing it to a thread).
+`move` is essential when the closure outlives its defining scope (e.g., passing it to a thread). Note that `move` alone does not force `FnOnce` — the `greet` closure above needed `move` *and* an internal `drop(name)` to become `FnOnce`; a `move` closure that only reads its captured `String` is still `Fn`, because `Fn`/`FnMut`/`FnOnce` describe how the closure *uses* what it captured, not how it captured it.
+
+## What the Compiler Says: A Live Closure Still Holds Its Borrow
+
+A `FnMut` closure holds `&mut captured_var` for as long as the closure itself is going to be used again — not just for the duration of one call. Reading the variable directly in between two calls is a borrow conflict, the same `E0502` seen in the `iterators` lesson, just triggered by a closure's capture instead of an explicit `&mut`:
+
+```rust
+// @expect-error E0502
+fn main() {
+    let mut count = 0;
+    let mut incrementer = || { count += 1; count };
+    println!("first: {}", incrementer());
+    println!("count directly: {}", count); // ERROR: incrementer is used again below, so its &mut count borrow is still live
+    println!("second: {}", incrementer());
+}
+```
+
+```text
+error[E0502]: cannot borrow `count` as immutable because it is also borrowed as mutable
+ --> src/main.rs:5:36
+  |
+3 |     let mut incrementer = || { count += 1; count };
+  |                           --   ----- first borrow occurs due to use of `count` in closure
+  |                           |
+  |                           mutable borrow occurs here
+4 |     println!("first: {}", incrementer());
+5 |     println!("count directly: {}", count); // ERROR: incrementer is used again below, so its &mut count borrow is still live
+  |                                    ^^^^^ immutable borrow occurs here
+6 |     println!("second: {}", incrementer());
+  |                            ----------- mutable borrow later used here
+```
+
+The same shape also happens between two separate closures capturing the same variable mutably — two live `&mut count` borrows at once is `E0499`, not `E0502`, but the underlying rule (exclusive access) is identical:
+
+```rust
+// @expect-error E0499
+fn main() {
+    let mut count = 0;
+    let mut add_one = || count += 1;
+    let mut add_two = || count += 2; // ERROR: two live mutable borrows of count
+    add_one();
+    add_two();
+}
+```
+
+```text
+error[E0499]: cannot borrow `count` as mutable more than once at a time
+ --> src/main.rs:4:23
+  |
+3 |     let mut add_one = || count += 1;
+  |                       -- ----- first borrow occurs due to use of `count` in closure
+  |                       |
+  |                       first mutable borrow occurs here
+4 |     let mut add_two = || count += 2; // ERROR: two live mutable borrows of count
+  |                       ^^ ----- second borrow occurs due to use of `count` in closure
+  |                       |
+  |                       second mutable borrow occurs here
+5 |     add_one();
+  |     ------- first borrow later used here
+```
+
+## Returning Closures
+
+A function that returns a closure cannot name the closure's concrete type (every closure gets a unique, compiler-generated type) — it has to return `impl Fn(...) -> ...` (one concrete-but-unnamed type, decided at compile time) or `Box<dyn Fn(...) -> ...>` (a trait object, when the concrete type genuinely varies, such as different branches returning different closures):
+
+```rust
+fn make_adder(base: i32) -> impl Fn(i32) -> i32 {
+    move |x| x + base
+}
+
+fn make_multiplier(factor: i32) -> Box<dyn Fn(i32) -> i32> {
+    Box::new(move |x| x * factor)
+}
+
+fn main() {
+    let add5 = make_adder(5);
+    println!("add5(10) = {}", add5(10));
+
+    let ops: Vec<Box<dyn Fn(i32) -> i32>> = vec![
+        make_multiplier(2),
+        make_multiplier(3),
+        Box::new(|x| x - 1),
+    ];
+    for op in &ops {
+        println!("op(10) = {}", op(10));
+    }
+}
+```
+
+```text
+add5(10) = 15
+op(10) = 20
+op(10) = 30
+op(10) = 9
+```
+
+`make_adder` always returns the *same* closure shape (one `move |x| x + base`), so `impl Fn(i32) -> i32` — zero-cost, no heap allocation, no vtable — is enough. The `Vec<Box<dyn Fn(i32) -> i32>>` in `main` needs `Box<dyn Fn>` because it stores *different* concrete closure types side by side in one collection — `impl Trait` cannot do that, since it names exactly one concrete type per function signature.
 
 ## Closures as Iterator Adaptors
 
@@ -138,6 +293,38 @@ fn main() {
 By default, closures borrow captured variables at the minimum level needed (`Fn` or `FnMut`). The `move` keyword forces ownership transfer — essential when the closure must outlive its defining scope, such as when passing it to a new thread or returning it from a function.
 </Callout>
 
+## Mental Model
+
+A closure is sugar for an anonymous `struct` plus a trait impl: the compiler generates a struct holding exactly the captured variables (by `&`, `&mut`, or value — whichever the body needs), and implements `Fn`/`FnMut`/`FnOnce` for it based on what the `call` operation does with those fields. `Fn`/`FnMut`/`FnOnce` form a hierarchy, not three unrelated options: every `Fn` closure is also `FnMut` and `FnOnce` (you can always call something fewer times or through a weaker borrow than it needs), but not the reverse. When you see `E0525`, read it as "this closure's generated struct only implements the weaker trait, but the call site demanded the stronger one."
+
+## Trade-offs
+
+`impl Fn(...) -> ...` as a return type costs nothing at runtime (the compiler monomorphizes the concrete closure type into the caller) but requires every code path in the function to return the *same* concrete closure type. `Box<dyn Fn(...) -> ...>` costs one heap allocation and one vtable indirection per call, but lets you return (or store in one `Vec`) genuinely different closures. Borrowing by default (`Fn`/`FnMut`) keeps captured data usable outside the closure; `move` gives up that flexibility in exchange for a closure that can outlive its defining scope.
+
+## Common Misconceptions
+
+- **"`move` makes a closure `FnOnce`."** `move` only changes *how* variables are captured (by value instead of by reference); it says nothing about how the closure's body then *uses* them. A `move` closure that only reads its captured data is still `Fn` — the `E0525` example above needed an explicit `drop(name)` inside the body to become `FnOnce`, not just `move`.
+- **"`Fn`, `FnMut`, and `FnOnce` are three separate, mutually exclusive categories a closure belongs to."** They form a hierarchy: every closure implements `FnOnce`; a closure that doesn't consume its captures also implements `FnMut`; one that doesn't even mutate them also implements `Fn`. A closure that "is `Fn`" implements all three at once.
+- **"Since `increment()` was already called once, its borrow of `count` should be over by the time I read `count` directly."** Non-lexical lifetimes end a borrow at its last actual *use*, not at its first — if the closure is called again later in the same function, the borrow spans the whole range, including any attempt to read `count` directly in between (that's exactly the `E0502` example above).
+
+## Reading AI-generated Code
+
+AI-generated code sometimes reaches for `.clone()` on data captured by a closure passed to `map`/`filter`, purely to sidestep a borrow-checker complaint it didn't fully diagnose — even when the closure only needs to read the data by reference.
+
+<SpotTheBug code={`fn tag_all(prefix: String, items: &[String]) -> Vec<String> {
+    items
+        .iter()
+        .map(|item| format!("{}{}", prefix.clone(), item))
+        .collect()
+}
+`}>
+`prefix.clone()` runs once per element of `items`, cloning the same `String` over and over inside the closure, even though the closure only ever *reads* `prefix` — it never needs to own a fresh copy. `format!("{}{}", prefix, item)` borrows `prefix` immutably instead (closures capture by shared reference by default when the body only reads), and the closure can be called any number of times without ever cloning. The `.clone()` here isn't fixing a real borrow-checker error — it is a reflex applied without checking whether ownership was actually required.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`Fn`/`FnMut`/`FnOnce` are inferred from what the closure body actually does with each captured variable, not from `move` or your intent — read an `E0525`/`E0502`/`E0499` as the compiler pointing at the exact line that earned the closure a weaker trait than the call site demanded, and reach for `impl Fn` (same concrete type everywhere) before `Box<dyn Fn>` (genuinely different closures, one extra allocation).
+</Callout>
+
 export const quizClosures = [
     {
         q: "What closure trait describes a closure that mutably borrows a captured variable?",
@@ -147,7 +334,8 @@ export const quizClosures = [
             "FnOnce",
             "FnCapture"
         ],
-        answer: 1
+        answer: 1,
+        explain: "FnMut describes a closure that borrows at least one captured variable mutably (&mut T) but never consumes it, so it can still be called repeatedly."
     },
     {
         q: "Why must drop(increment) be called before println!(\"{}\", count) in an FnMut example?",
@@ -157,7 +345,8 @@ export const quizClosures = [
             "println! requires exclusive ownership of its arguments",
             "FnMut closures cannot be used after being called"
         ],
-        answer: 1
+        answer: 1,
+        explain: "The closure's &mut count borrow stays live as long as the closure might be called again; drop(increment) ends the closure's lifetime early, releasing that borrow so count can be read directly."
     },
     {
         q: "What does the move keyword do to a closure?",
@@ -167,7 +356,8 @@ export const quizClosures = [
             "It forces the closure to take ownership of all captured variables",
             "It copies all captured variables by value"
         ],
-        answer: 2
+        answer: 2,
+        explain: "move changes only how variables are captured (by value instead of by reference) — it does not by itself determine whether the closure ends up Fn, FnMut, or FnOnce."
     },
     {
         q: "A closure that only reads a captured variable without modifying it implements which trait(s)?",
@@ -177,7 +367,41 @@ export const quizClosures = [
             "Fn, FnMut, and FnOnce — all three",
             "Only Fn"
         ],
-        answer: 2
+        answer: 2,
+        explain: "Fn/FnMut/FnOnce form a hierarchy: a closure that only reads its captures satisfies the strongest guarantee (Fn), and Fn implies FnMut and FnOnce as well."
+    },
+    {
+        q: "What does this fail to compile with?\n```rust\nfn call_twice<F: Fn()>(f: F) {\n    f();\n    f();\n}\nfn main() {\n    let s = String::from(\"hi\");\n    let c = move || { println!(\"{}\", s); drop(s); };\n    call_twice(c);\n}\n```",
+        options: [
+            "error[E0382]: use of moved value: `s`",
+            "error[E0525]: expected a closure that implements the `Fn` trait, but this closure only implements `FnOnce`",
+            "It compiles and prints \"hi\" twice",
+            "error[E0499]: cannot borrow as mutable more than once"
+        ],
+        answer: 1,
+        explain: "The closure calls drop(s), consuming its captured String — that makes it FnOnce, not Fn. call_twice requires F: Fn(), so passing an FnOnce-only closure is E0525."
+    },
+    {
+        q: "Why does a function returning different concrete closures on different branches need Box<dyn Fn(...)> instead of impl Fn(...)?",
+        options: [
+            "impl Fn cannot capture any variables from the environment",
+            "impl Fn names exactly one concrete type per function signature, but different branches produce different concrete closure types; Box<dyn Fn> erases that difference behind one trait object type",
+            "Box<dyn Fn> is required whenever a closure uses move",
+            "impl Fn only works for closures with zero parameters"
+        ],
+        answer: 1,
+        explain: "impl Trait return position commits to a single concrete type decided at compile time. When branches would return genuinely different closure types, only a trait object (Box<dyn Fn>) can unify them into one return type."
+    },
+    {
+        q: "In `items.iter().map(|item| format!(\"{}{}\", prefix.clone(), item))`, why is `prefix.clone()` usually unnecessary?",
+        options: [
+            "String does not implement Clone, so this would fail to compile",
+            "The closure only reads prefix to format it — borrowing prefix by reference works just as well and avoids cloning it once per element",
+            "map() requires all captured values to be cloned before use",
+            "clone() is required whenever a String crosses a closure boundary"
+        ],
+        answer: 1,
+        explain: "The closure never needs to own a fresh prefix — it only reads it to build a String. Capturing prefix by shared reference (the default when the body only reads) avoids a clone on every single element."
     }
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## What This Module Covers
 
@@ -84,6 +86,79 @@ fn main() {
 All standard collections allocate on the heap and manage their own memory. Iterator adaptors like `map` and `filter` compile down to the same machine code as hand-written loops — there is no runtime overhead for chaining them.
 </Callout>
 
+## What the Compiler Says: Collections Don't Coerce Between Number Types
+
+A collection is generic over exactly one element type — `Vec<i32>` holds `i32` and nothing else, not even a type that "should" convert. Rust never inserts an implicit numeric conversion for you, in a collection or anywhere else:
+
+```rust
+// @expect-error E0308
+fn main() {
+    let mut v: Vec<i32> = vec![1, 2, 3];
+    v.push(3.0);
+    println!("{:?}", v);
+}
+```
+
+```text
+error[E0308]: mismatched types
+    --> src/main.rs:3:12
+     |
+   3 |     v.push(3.0);
+     |       ---- ^^^ expected `i32`, found floating-point number
+     |       |
+     |       arguments to this method are incorrect
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0308`.
+```
+
+The fix is always explicit: pick the type you meant (`v.push(3)` for an `i32`, or declare `Vec<f64>` if the whole collection should hold floats) and convert at the boundary with `as` or `From`/`Into`, never by hoping the compiler will guess. The four lessons that follow show far more specific versions of this idea — a `HashMap` key that can't be a `float`, a `sum()` call the compiler can't type on its own — this is the general shape all of them share: Rust asks *you* to make the type explicit rather than silently picking one.
+
+## Choosing a Collection
+
+<Mermaid code={`flowchart TD
+    A[Need to store values?] --> B{Look up by key?}
+    B -->|Yes| C{Need sorted iteration order?}
+    C -->|Yes| D[BTreeMap / BTreeSet]
+    C -->|No, speed matters more| E[HashMap / HashSet]
+    B -->|No, just a sequence| F{Growable, indexed list?}
+    F -->|Yes| G[Vec]
+    F -->|Owned, mutable text| H[String]`} title="Choosing a standard collection" />
+
+This decision tree is a starting point, not a law: `BTreeMap` is also the right call whenever you need a `Vec`-like "give me a range of keys" query that `HashMap` cannot do at all, regardless of speed.
+
+## Mental Model
+
+Think of every collection as **ownership plus a shape**: `Vec<T>` owns a contiguous run of `T`, `String` owns a contiguous run of UTF-8 bytes, `HashMap<K, V>` owns a hash table of `K`-to-`V` pairs. The iterator system is a *second*, orthogonal idea layered on top: it is a uniform way to walk any of those shapes one element at a time, lazily, without the walking code needing to know which shape it is walking. Once you see collections and iterators as two separate concerns — "how is the data stored" and "how do I process it" — the rest of this module is mostly variations on those two questions.
+
+## Trade-offs
+
+`Vec<T>` gives you cache-friendly contiguous storage and O(1) indexed access, at the cost of O(n) insertion/removal in the middle. `HashMap<K, V>` gives O(1) average lookup by key, at the cost of no ordering guarantee and a randomized-seed overhead per map. `BTreeMap<K, V>` gives you sorted iteration and range queries, at the cost of O(log n) operations instead of `HashMap`'s O(1) average. None of these is strictly better — the right choice depends on which operation ("iterate in order", "look up by key", "index by position") your code actually performs most often.
+
+## Common Misconceptions
+
+- **"Rust collections auto-convert element types for convenience, like some dynamically-typed languages do."** They never do — a `Vec<i32>` accepts only `i32`, full stop; every conversion is a call you write yourself.
+- **"Iterators are just a nicer syntax for `for` loops, with no functional difference."** They compile to the same code as a hand-written loop, but they are also *values* — you can build a chain, pass it around, and only decide later (with `collect`, `sum`, or a `for` loop) how to consume it. A `for` loop is one specific consumer among several.
+- **"`HashSet<T>` is just a `HashMap<T, ()>` you don't need to think about further."** True as an implementation detail, but it still requires `T: Eq + Hash`, the exact same requirement that trips people up on `HashMap` keys — the `hashmap` lesson covers this in depth.
+
+## Reading AI-generated Code
+
+AI assistants frequently reach for the "widest" ownership a function could accept — `Vec<String>` — even when the function only ever reads the data, never grows or mutates it. That forces every caller to either move an owned `Vec<String>` in or pay for a full clone just to satisfy the signature.
+
+<SpotTheBug code={`fn print_report(lines: Vec<String>) {
+    for line in &lines {
+        println!("{}", line);
+    }
+}
+`}>
+`print_report` never pushes to `lines`, never removes from it, never needs to own it — it only iterates by reference. Taking `Vec<String>` by value forces every caller to give up ownership (or `.clone()` an entire `Vec<String>` just to keep their own copy). The fix borrows instead: `fn print_report(lines: &[String])` (or `&[&str]` if callers already have string slices) accepts a borrowed view without requiring ownership at all, and still works with `&some_vec` at every call site.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A collection is "ownership plus a shape" and an iterator is a lazy, uniform way to walk any of those shapes — pick the shape by which operation (index, key lookup, sorted range) your code does most, and never assume the compiler will convert an element type for you.
+</Callout>
+
 export const quizCollectionsIndex = [
     {
         q: "Which collection would you choose for fast lookup by a String key?",
@@ -93,7 +168,8 @@ export const quizCollectionsIndex = [
             "HashSet<T>",
             "String"
         ],
-        answer: 1
+        answer: 1,
+        explain: "HashMap<K, V> is built specifically for O(1) average-case lookup by key; Vec requires a linear scan and HashSet has no associated value."
     },
     {
         q: "When does an iterator adaptor (like map or filter) actually execute its work?",
@@ -103,7 +179,8 @@ export const quizCollectionsIndex = [
             "When the iterator goes out of scope",
             "When the program exits"
         ],
-        answer: 1
+        answer: 1,
+        explain: "Adaptors only build a description of the transformation. No element is actually processed until a consumer (collect, sum, fold, a for loop, ...) pulls values through the whole chain."
     },
     {
         q: "What is the idiomatic way to iterate a HashMap and get deterministic output order?",
@@ -113,7 +190,41 @@ export const quizCollectionsIndex = [
             "Use iter_mut() instead of iter()",
             "Pass a comparator to HashMap::new()"
         ],
-        answer: 1
+        answer: 1,
+        explain: "HashMap has no ordering guarantee at all — sorting the keys explicitly (or switching to BTreeMap) is the only way to get a stable order."
+    },
+    {
+        q: "What does this program do?\n```rust\nfn main() {\n    let mut v: Vec<i32> = vec![1, 2, 3];\n    v.push(3.0);\n}\n```",
+        options: [
+            "It compiles and prints [1, 2, 3, 3]",
+            "It fails to compile with error[E0308]: mismatched types",
+            "It compiles and silently truncates 3.0 to 3",
+            "It panics at runtime with a type mismatch panic"
+        ],
+        answer: 1,
+        explain: "Vec<i32> only accepts i32 values. Rust performs no implicit numeric conversion, so pushing a floating-point literal is a compile-time type error (E0308), not a runtime issue."
+    },
+    {
+        q: "Which requirement does BTreeMap add over HashMap in exchange for sorted iteration?",
+        options: [
+            "Keys must implement Eq + Hash, exactly like HashMap",
+            "Keys must implement Ord, and operations become O(log n) instead of O(1) average",
+            "Values must implement Clone",
+            "BTreeMap has no extra requirement — it is a strict upgrade over HashMap"
+        ],
+        answer: 1,
+        explain: "BTreeMap needs Ord on the key to maintain sorted order, and its operations cost O(log n) rather than HashMap's O(1) average — a real trade-off, not a free upgrade."
+    },
+    {
+        q: "Why is `fn print_report(lines: Vec<String>)` usually a smell when the function only reads `lines`?",
+        options: [
+            "Vec<String> cannot be iterated by reference",
+            "It forces every caller to give up ownership or clone the whole Vec just to call a read-only function",
+            "String does not implement Display so println! would fail",
+            "Rust requires all function parameters to be borrowed"
+        ],
+        answer: 1,
+        explain: "Taking ownership (Vec<String>) for a function that never mutates or stores the data needlessly restricts callers. Borrowing (&[String] or &[&str]) reads the same data without demanding ownership."
     }
 ];
 

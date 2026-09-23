@@ -1,6 +1,6 @@
 ---
 title: 'Vec และ String'
-description: 'Vec<T> คือ Array บน Heap ที่ขยายได้; String คือข้อความ UTF-8 ที่เป็นเจ้าของและขยายได้ เรียนรู้ push, pop, การ Index, การ Iterate และความสัมพันธ์ระหว่าง String กับ &str'
+description: 'Vec<T> คือ array บน heap ที่ขยายได้; String คือข้อความ UTF-8 ที่เป็นเจ้าของและขยายได้ เรียนรู้ capacity, การขยายขนาด, push/pop, การวนซ้ำแบบ value/ref/mut และความสัมพันธ์ระหว่าง String กับ &str'
 sidebar:
   order: 2
 ---
@@ -9,10 +9,12 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## `Vec<T>` — Array บน Heap ที่ขยายได้
 
-`Vec<T>` คือ Collection ลำดับที่ใช้งานหลักใน Rust เก็บ Element ของประเภท `T` อย่าง Contiguous บน Heap และปรับขนาดโดยอัตโนมัติเมื่อคุณ Push เกิน Capacity ปัจจุบัน
+`Vec<T>` คือ collection แบบ sequential หลักของ Rust มันเก็บ element ชนิด `T` แบบต่อเนื่องกันบน heap และขยายขนาดเองอัตโนมัติเมื่อคุณ push เกิน capacity ปัจจุบันของมัน
 
 ```rust
 let mut v: Vec<i32> = Vec::new();     // empty Vec
@@ -30,25 +32,86 @@ let first = v[0];                 // index — panics if out of bounds
 let safe = v.get(100);            // returns Option<&T> — None if out of bounds
 ```
 
-ควรใช้ `.get(i)` เมื่อ Index อาจเกิน Range เพื่อจัดการกรณี `None` แทนที่จะ Panic
+ให้ใช้ `.get(i)` เมื่อ index อาจอยู่นอกช่วง เพื่อจัดการกรณี `None` แทนที่จะปล่อยให้ panic
 
-### การ Iterate ผ่าน Vec
+## Capacity และการขยายขนาด วัดจริง
+
+`Vec<T>` ติดตามตัวเลขสองตัวแยกกัน: `len()` (จำนวน element ที่มีอยู่ตอนนี้) และ `capacity()` (จำนวน element ที่มันเก็บได้ก่อนต้อง allocate buffer ที่ใหญ่ขึ้น) `Vec::with_capacity(n)` จอง buffer สำหรับ `n` element ไว้ล่วงหน้า — มีประโยชน์เมื่อคุณรู้คร่าวๆ ว่า `Vec` จะโตขนาดไหนและต้องการหลีกเลี่ยงการ reallocate ซ้ำๆ
+
+<Mermaid code={`flowchart LR
+    A[push exceeds capacity] --> B[allocate a new, larger buffer]
+    B --> C[copy every existing element into it]
+    C --> D[free the old buffer]
+    D --> E[push the new element]`} title="สิ่งที่เกิดขึ้นเมื่อ Vec โตเกิน capacity ของมัน" />
 
 ```rust
-let nums = vec![1, 2, 3];
-
-for n in &nums {                  // borrow each element as &i32
-    println!("{}", n);
+fn main() {
+    let mut v: Vec<i32> = Vec::with_capacity(2);
+    println!("start: len={} cap={}", v.len(), v.capacity());
+    for i in 0..6 {
+        v.push(i);
+        println!("after push {}: len={} cap={}", i, v.len(), v.capacity());
+    }
+    v.shrink_to_fit();
+    println!("after shrink_to_fit: len={} cap={}", v.len(), v.capacity());
 }
-
-// nums is still valid after the loop because we only borrowed it
 ```
 
-การใช้ `&nums` ยืม Vector; การใช้ `nums` จะย้าย (Move) และทำให้ใช้ไม่ได้หลัง Loop
+นี่คือการรันจริงที่ verify แล้ว — ไม่ใช่สัญญาของ API ที่เอกสารระบุไว้ (ไลบรารีมาตรฐานไม่ได้สัญญา growth factor ที่แน่นอน) แต่เป็นพฤติกรรมจริงของ toolchain นี้:
+
+```text
+start: len=0 cap=2
+after push 0: len=1 cap=2
+after push 1: len=2 cap=2
+after push 2: len=3 cap=4
+after push 3: len=4 cap=4
+after push 4: len=5 cap=8
+after push 5: len=6 cap=8
+after shrink_to_fit: len=6 cap=6
+```
+
+capacity จะเพิ่มเป็นสองเท่าทุกครั้งที่ `len()` กำลังจะเกินมัน — 2 → 4 → 8 — ดังนั้นการ push element หนึ่งตัวที่เกิน capacity จึงเป็น O(1) แบบ *amortized*: การ push ส่วนใหญ่ไม่มีต้นทุนเพิ่ม และการ reallocate-แล้ว-copy ที่เกิดเป็นครั้งคราวก็ถูกกระจายออกไปตลอดการ push ทั้งหมดที่นำไปสู่มัน `shrink_to_fit()` ปล่อยพื้นที่ที่เหลือไม่ได้ใช้ (`cap` 8 → 6) เมื่อคุณรู้ว่า `Vec` จะไม่โตอีก
+
+## วนซ้ำ Vec: แบบ Value, แบบ Reference, แบบ Mutable Reference
+
+loop body เดียวกันอ่านได้ต่างกันมากขึ้นอยู่กับว่าคุณวนซ้ำอะไร:
+
+```rust
+fn main() {
+    let v = vec![String::from("a"), String::from("b"), String::from("c")];
+
+    // by shared reference (&v): borrows, v still valid after
+    for s in &v {
+        print!("{} ", s);
+    }
+    println!("| still valid, len={}", v.len());
+
+    // by mutable reference (&mut v): borrows mutably, mutate elements in place
+    let mut nums = vec![1, 2, 3];
+    for n in &mut nums {
+        *n *= 10;
+    }
+    println!("{:?}", nums);
+
+    // by value (v): moves the Vec, v cannot be used after this loop
+    for s in v {
+        print!("{} ", s);
+    }
+    println!("(v moved)");
+}
+```
+
+```text
+a b c | still valid, len=3
+[10, 20, 30]
+a b c (v moved)
+```
+
+`for s in &v` ยืม (borrow) แต่ละ element เป็น `&T`; `Vec` ไม่ถูกแตะต้องและใช้งานต่อได้ `for n in &mut v` ยืมแต่ละ element เป็น `&mut T` ดังนั้น `*n *= 10` จึงแก้ไข `Vec` ต้นฉบับได้ในที่ `for s in v` เรียก `v.into_iter()` โดยปริยาย ซึ่งเอา ownership ของ `Vec` ไปและคืนค่า `T` ที่เป็นเจ้าของ — หลัง loop นี้ `v` ไม่มีอยู่แล้ว ให้ใช้ `&v` เป็นค่าเริ่มต้น ใช้ `&mut v` เฉพาะเมื่อต้องแก้ไข element ในที่ และใช้ `v` เฉพาะเมื่อคุณใช้ `Vec` เสร็จแล้วและต้องการย้าย element ออกมา
 
 ## `String` — ข้อความที่เป็นเจ้าของและขยายได้
 
-`String` คือประเภทข้อความบน Heap ที่ Mutable ของ Rust เป็นเจ้าของ Byte ของตัวเองและจัดการการ Deallocation
+`String` คือ text type ที่ mutable และ allocate บน heap ของ Rust มันเป็นเจ้าของ byte ของตัวเองและจัดการ deallocation
 
 ```rust
 let mut s = String::from("hello");
@@ -57,16 +120,16 @@ s.push_str("world");                  // append a string slice
 let combined = s + " again";          // + moves s and appends
 ```
 
-### `String` เทียบกับ `&str`
+### `String` กับ `&str`
 
 | | `String` | `&str` |
 |---|---|---|
-| Ownership | เป็นเจ้าของ | Borrowed Slice |
-| ตำแหน่ง | Heap | Stack / Static / ภายใน String |
-| Mutable | ได้ (ด้วย `mut`) | ไม่ได้ |
-| การใช้งานทั่วไป | สร้าง/แก้ไขข้อความ | อ่านข้อความ |
+| Ownership | เป็นเจ้าของ | Slice ที่ยืมมา |
+| ตำแหน่ง | Heap | Stack / static / อยู่ใน String |
+| Mutable | ใช่ (ด้วย `mut`) | ไม่ |
+| ใช้ทั่วไปสำหรับ | สร้าง/แก้ไขข้อความ | อ่านข้อความ |
 
-`&String` จะถูก Coerce เป็น `&str` โดยอัตโนมัติ ดังนั้นควรใช้ `&str` ใน Parameter ของ Function เพื่อความยืดหยุ่นสูงสุด
+`&String` coerce เป็น `&str` โดยอัตโนมัติ ดังนั้นให้ใช้ `&str` เป็น function parameter เพื่อความยืดหยุ่นสูงสุด
 
 ```rust
 fn shout(s: &str) -> String {
@@ -78,9 +141,34 @@ shout(&owned);          // &String coerces to &str
 shout("world");         // string literal is already &str
 ```
 
-### `len()` คือจำนวน Byte ไม่ใช่จำนวนตัวอักษร
+### กลิ่นโค้ดเดียวกัน ต่างแค่ type เดียว: `Vec<String>` กับ `&[String]` / `&[&str]`
 
-`String` เป็น UTF-8 ดังนั้น `.len()` คืนจำนวน **byte** ไม่ใช่จำนวนตัวอักษร สำหรับข้อความ ASCII ตัวเลขทั้งสองจะเท่ากันพอดี ซึ่งซ่อนความแตกต่างไว้จนกว่าจะเจอข้อความหลาย byte — ตัวอักษรไทยแต่ละตัวด้านล่างมี 3 byte:
+การตัดสินใจ `String` เทียบ `&str` ข้างต้นมี "ญาติ" ที่ตรงกันอยู่หนึ่งชั้นเหนือ type: function parameter ที่เป็น `Vec<String>` บังคับให้ผู้เรียกทุกคนต้องยก ownership ให้ (หรือ `.clone()` ทั้ง `Vec`) แม้ว่าฟังก์ชันจะแค่อ่าน element เท่านั้น `&[String]` (หรือ `&[&str]` ถ้าผู้เรียกมี string slice อยู่แล้ว) borrow แทน และยังรับ `&some_vec` ที่จุดเรียกได้เพราะ `Vec<String>` deref เป็น `&[String]`:
+
+```rust
+fn print_lines_bad(lines: Vec<String>) {
+    for line in &lines {
+        println!("{}", line);
+    }
+}
+
+fn print_lines_good(lines: &[String]) {
+    for line in lines {
+        println!("{}", line);
+    }
+}
+
+fn main() {
+    let owned = vec![String::from("a"), String::from("b")];
+    print_lines_good(&owned);
+    println!("owned still usable: {:?}", owned);
+    print_lines_bad(owned); // must move — cannot reuse afterward
+}
+```
+
+## `len()` คือจำนวน Byte ไม่ใช่ตัวอักษร
+
+`String` เป็น UTF-8 ดังนั้น `.len()` จึงคืนจำนวน **byte** ไม่ใช่จำนวนตัวอักษร สำหรับข้อความ ASCII ทั้งสองค่าบังเอิญตรงกัน ซึ่งซ่อนความแตกต่างไว้จนกว่าคุณจะเจอข้อความหลาย byte — ตัวอักษรไทยแต่ละตัวข้างล่างนี้มี 3 byte:
 
 ```rust
 fn main() {
@@ -92,7 +180,7 @@ fn main() {
 
 โค้ดนี้พิมพ์ `len() = 18` และ `chars().count() = 6` — 6 ตัวอักษร 18 byte
 
-การ Slice ด้วย Byte Range (`&s[start..end]`) จะ Index เข้าไปใน Byte Buffer โดยตรง ถ้า `start` หรือ `end` ไม่ตกอยู่บน Character Boundary Rust จะ Panic แทนที่จะยื่นตัวอักษรครึ่งเดียวให้:
+การ slice ตามช่วง byte (`&s[start..end]`) เข้าถึง byte buffer นั้นโดยตรง ถ้า `start` หรือ `end` ไม่ตรงกับขอบเขตตัวอักษร Rust จะ panic แทนที่จะยื่นตัวอักษรครึ่งเดียวให้คุณ:
 
 ```rust
 // @expect-panic
@@ -109,7 +197,7 @@ end byte index 1 is not a char boundary; it is inside 'ส' (bytes 0..3 of strin
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 ```
 
-ใช้ตัวเลือกเหล่านี้แทนการเดา Byte Offset เอง:
+ให้ใช้ตัวใดตัวหนึ่งข้างล่างนี้แทนการเดา byte offset:
 
 ```rust
 fn main() {
@@ -128,6 +216,40 @@ fn main() {
     println!("is_char_boundary(3) = {}", s.is_char_boundary(3));
 }
 ```
+
+## Index Loop กับ Iterator
+
+index loop (`for i in 0..v.len() { ... v[i] ... }`) คือสิ่งที่ภาษาส่วนใหญ่ที่ไม่มี iterator protocol ระดับหนึ่งสอนให้คุณใช้ ใน Rust มันแทบจะเป็นค่าเริ่มต้นที่ผิดเสมอ: มันตรวจ bound ซ้ำทุกครั้งที่ `v[i]`, บดบังเจตนา ("เดินผ่านทุก element" กลายเป็น "นับจาก 0 ถึง len แล้วค่อย index") และ clippy ก็เรียกชื่อมันตรงๆ:
+
+```rust
+fn main() {
+    let v = vec![10, 20, 30];
+    let mut total = 0;
+    for i in 0..v.len() {
+        total += v[i];
+    }
+    println!("{}", total);
+}
+```
+
+```text
+$ cargo clippy
+warning: the loop variable `i` is only used to index `v`
+ --> src/main.rs:4:14
+  |
+4 |     for i in 0..v.len() {
+  |              ^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#needless_range_loop
+  = note: `#[warn(clippy::needless_range_loop)]` on by default
+help: consider using an iterator
+  |
+4 -     for i in 0..v.len() {
+4 +     for <item> in &v {
+  |
+```
+
+`clippy::needless_range_loop` จะแจ้งเตือนทุกครั้งที่ loop variable ถูกใช้เพื่อ index collection เดียวกันเท่านั้น — วิธีแก้เสมอคือ `for item in &v` (หรือ `.iter().sum()` ในกรณีนี้โดยเฉพาะ) ซึ่งคอมไพเลอร์ตรวจ bound ได้ครั้งเดียวแทนที่จะตรวจทุกครั้งที่เข้าถึง และอ่านได้ว่า "สำหรับทุก item" แทนที่จะเป็น "สำหรับทุก index เข้าไปใน Vec ตัวนี้"
 
 export const vecStringCode = `fn main() {
     // Vec<i32> basics
@@ -163,50 +285,109 @@ export const vecStringCode = `fn main() {
 
 <Playground code={vecStringCode} />
 
-<Callout title="Vec<T> เป็นเจ้าของ Array บน Heap ที่ขยายได้">
-`Vec<T>` จัดสรร Element บน Heap เมื่อ `Vec<T>` ถูก Drop Element ทั้งหมดจะถูก Drop ด้วย การ Iterate ด้วย `&v` ยืม Element; การ Iterate ด้วย `v` จะ Consume (Move) Vector ควรใช้ `&v` เมื่อยังต้องการใช้ Vector หลัง Loop
+<Callout title="Vec<T> เป็นเจ้าของ array บน heap ที่ขยายได้">
+`Vec<T>` allocate element ของมันบน heap เมื่อ `Vec<T>` ถูก drop element ทั้งหมดของมันก็ถูก drop ด้วย การวนซ้ำด้วย `&v` จะ borrow element ต่างๆ; การวนซ้ำด้วย `v` จะ consume (ย้าย) vector นั้นไป ให้ใช้ `&v` เมื่อคุณยังต้องใช้ vector หลัง loop
+</Callout>
+
+## แบบจำลองความคิด
+
+`Vec<T>` คือสามคำ (word) บน stack — pointer, length, และ capacity — ที่ชี้ไปยัง buffer ต่อเนื่องเดียวบน heap `len` คือส่วนของ buffer นั้นที่ "มีชีวิต"; `capacity` คือส่วนที่ allocate ไว้จริง การ push แต่ละครั้งจะเขียนลงในพื้นที่ที่ allocate ไว้แล้ว (ถูก) หรือไม่ก็ trigger "allocate ใหญ่ขึ้น, copy ทุกอย่าง, ปล่อย buffer เก่า" (แพง แต่เกิดไม่บ่อยเพราะ capacity เพิ่มเป็นสองเท่า) `String` มีรูปทรงสามคำแบบเดียวกันเป๊ะ เฉพาะทางสำหรับเก็บ byte UTF-8 แทนที่จะเป็น `T` แบบทั่วไป — นี่คือเหตุผลที่ `.len()` นับ byte: มันอ่าน field เดียวกับที่ `Vec<u8>` จะรายงาน
+
+## ข้อแลกเปลี่ยน
+
+`Vec::with_capacity(n)` แลกการ allocate ล่วงหน้าครั้งหนึ่งกับการหลีกเลี่ยง reallocation ประมาณ N ครั้งในภายหลัง — คุ้มค่าเมื่อคุณรู้ (หรือประมาณได้) ขนาดสุดท้ายก่อน loop ที่จะเติมมัน `shrink_to_fit()` แลกการ reallocate ที่อาจเกิดขึ้นตอนนี้กับ memory footprint ที่เล็กลงในระยะยาว — คุ้มค่าสำหรับ `Vec` ที่คุณกำลังจะเก็บไว้นาน ไม่ใช่ตัวที่กำลังจะโตอีก การ index เข้า `String` ด้วย byte (`&s[a..b]`) เป็นการ slice ที่เร็วที่สุดเท่าที่จะทำได้ (ไม่ต้องสแกน) แต่มันผลักภาระ "ตรงกับขอบเขตตัวอักษรหรือเปล่า" มาให้คุณทั้งหมด; `chars()`/`char_indices()` สแกนให้คุณแลกกับการเดินผ่านสตริงทั้งหมด
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`Vec::new()` กับ `Vec::with_capacity(0)` ทำงานต่างกัน"** ไม่ต่างกันเลย — ทั้งคู่เริ่มด้วย capacity ศูนย์และ allocate ตอน push ครั้งแรก `with_capacity` มีผลก็ต่อเมื่อคุณส่งตัวเลขที่มากกว่าศูนย์เท่านั้น
+- **"`.len()` บน `String` นับตัวอักษร เพราะสตริงของ Rust รองรับ Unicode"** มันนับ byte สตริงของ Rust รองรับ UTF-8 ซึ่งเป็นเหตุผลที่ `.len()` ต้องรายงาน byte — ตำแหน่ง "ตัวอักษร" หนึ่งตำแหน่งไม่ได้สอดคล้องกับความกว้าง byte ที่คงที่
+- **"Index loop (`for i in 0..v.len()`) ชัดเจนกว่าและปลอดภัยกว่า `for x in &v`"** จริงๆ แล้วปลอดภัยน้อยกว่าในทางปฏิบัติ: มันเป็นสไตล์เดียวที่ทำให้เกิด bounds panic จากการพิมพ์ผิดได้ (`v[i + 1]`) และ clippy แจ้งว่ามันไม่จำเป็นก็เพราะ `for x in &v` ไม่ต้องตรวจ bound เลยเนื่องจากมันไม่เคยคำนวณ index ที่อยู่นอกช่วงตั้งแต่แรก
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างมักจะเลือก index loop อยู่เสมอ อาจเพราะมันเป็น pattern ที่พบบ่อยที่สุดในโค้ดที่ไม่ใช่ Rust ทั้งหมดในข้อมูลฝึกของมัน — แต่ใน Rust มันทั้งช้ากว่า (ตรวจ bound ซ้ำโดยไม่จำเป็น) และเป็น clippy warning ที่รอเวลาจะถูกจับได้
+
+<SpotTheBug code={`fn sum_all(values: &[i32]) -> i32 {
+    let mut total = 0;
+    for i in 0..values.len() {
+        total += values[i];
+    }
+    total
+}
+`}>
+`i` มีอยู่แค่เพื่อคำนวณ `values[i]` — loop ไม่เคยใช้ index เพื่ออย่างอื่นเลย นี่คือรูปแบบที่ `clippy::needless_range_loop` เตือนพอดี: `total += values[i]` คำนวณการเข้าถึงที่ตรวจ bound ใหม่ทุกรอบโดยไม่มีประโยชน์เพิ่ม วิธีแก้คือ `for v in values { total += v; }` หรือง่ายกว่านั้นคือ `values.iter().sum()` — ทั้งคู่ปล่อยให้ iterator จัดการการเดินผ่านและให้คอมไพเลอร์สร้างโค้ดที่แน่นกว่า
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`Vec<T>` และ `String` มีรูปทรง pointer-length-capacity แบบเดียวกันข้างใต้ — วัด capacity แทนการเดา วนซ้ำด้วย `&v`/`&mut v`/`v` อย่างตั้งใจแทนที่จะใช้ index loop เป็นค่าเริ่มต้น และ slice `String` เฉพาะที่ byte offset ที่ได้จาก `char_indices()` เท่านั้น อย่าเดาเอง
 </Callout>
 
 export const quizVecString = [
     {
-        q: "Vec::pop() คืนค่าอะไรเมื่อ Vec ว่างเปล่า?",
+        q: "Vec::pop() คืนอะไรเมื่อ Vec ว่างเปล่า?",
         options: [
-            "Panic พร้อมข้อความ index out of bounds",
-            "คืน None",
-            "คืน 0",
-            "คืน Vec ว่างเปล่า"
+            "มันจะ panic ด้วย index out of bounds",
+            "มันคืนค่า None",
+            "มันคืนค่า 0",
+            "มันคืนค่า Vec ว่าง"
         ],
-        answer: 1
+        answer: 1,
+        explain: "pop() คืนค่า Option<T>: Some(last_element) เมื่อมี element, None เมื่อ Vec ว่าง — มันไม่เคย panic เลย"
     },
     {
-        q: "ความแตกต่างระหว่างการ Iterate ด้วย &nums กับ nums คืออะไร?",
+        q: "ความแตกต่างระหว่างการวนซ้ำด้วย &nums กับ nums คืออะไร?",
         options: [
-            "ไม่มีความแตกต่าง — ทั้งคู่ยืม Vec",
-            "&nums ยืม Vec (ยังใช้ได้); nums ย้าย Vec ออกไป (ใช้ไม่ได้หลังจากนั้น)",
-            "nums ยืม Vec; &nums ย้าย Vec ออกไป",
-            "ทั้งคู่ Consume Vec และคืนหน่วยความจำ"
+            "ไม่มีความแตกต่าง — ทั้งคู่ borrow Vec",
+            "&nums borrow Vec (มันยังใช้งานได้ต่อ); nums ย้าย Vec ไป (ใช้งานต่อไม่ได้)",
+            "nums borrow Vec; &nums ย้าย Vec ไป",
+            "ทั้งคู่ consume Vec และปล่อยหน่วยความจำ"
         ],
-        answer: 1
+        answer: 1,
+        explain: "for x in &nums borrow แต่ละ element เป็น reference และปล่อยให้ nums ใช้งานต่อได้; for x in nums เรียก into_iter() ซึ่งย้าย Vec และ element ของมันไป"
     },
     {
-        q: "ทำไม Parameter ของ Function ควรใช้ &str แทน &String?",
+        q: "ทำไม function parameter ควรใช้ &str แทน &String?",
         options: [
-            "&str เร็วกว่าณ Runtime เพราะหลีกเลี่ยง Heap Allocation",
-            "&String เลิกใช้แล้วใน Rust 2021",
-            "&str รับทั้ง Reference ของ String ที่เป็นเจ้าของและ String Literal ผ่าน Coerce อัตโนมัติ",
-            "String ไม่ Implement Trait Display"
+            "&str เร็วกว่าตอน runtime เพราะหลีกเลี่ยง heap allocation",
+            "&String ถูก deprecate ใน Rust 2021",
+            "&str รับได้ทั้ง reference ของ String ที่เป็นเจ้าของและ string literal ผ่านการ coerce อัตโนมัติ",
+            "String ไม่ implement trait Display"
         ],
-        answer: 2
+        answer: 2,
+        explain: "&String coerce เป็น &str โดยอัตโนมัติที่จุดเรียก ดังนั้น parameter แบบ &str จึงรับได้ทั้ง &owned_string และ string literal — parameter แบบ &String รับได้แค่แบบแรกเท่านั้น"
     },
     {
-        q: "ควรใช้ Method ใดแทน v[i] เมื่อ Index อาจเกิน Bounds?",
+        q: "ควรใช้ method ไหนแทน v[i] เมื่อ index อาจอยู่นอกช่วง?",
         options: [
             "v.at(i)",
-            "v.get(i) — คืน Option<&T>",
+            "v.get(i) — คืนค่า Option<&T>",
             "v.safe_index(i)",
             "v.try_get(i)"
         ],
-        answer: 1
+        answer: 1,
+        explain: "get(i) คืนค่า Option<&T> — Some(&value) เมื่อ i อยู่ในช่วง, None เมื่อไม่อยู่ — แทนที่จะ panic แบบที่ operator [] ทำ"
+    },
+    {
+        q: "การรันสองครั้งนี้พิมพ์อะไรตามลำดับ?\n```rust\nfn main() {\n    let mut v: Vec<i32> = Vec::with_capacity(2);\n    for i in 0..3 {\n        v.push(i);\n        println!(\"len={} cap={}\", v.len(), v.capacity());\n    }\n}\n```",
+        options: [
+            "len=1 cap=1, len=2 cap=2, len=3 cap=3 — capacity ตรงกับ len เสมอ",
+            "len=1 cap=2, len=2 cap=2, len=3 cap=4 — capacity โตขึ้น (เป็นสองเท่า) เฉพาะเมื่อ len กำลังจะเกินมัน",
+            "compile error เพราะ with_capacity ต้องการขนาดสุดท้ายที่แน่นอน",
+            "len=1 cap=2, len=2 cap=4, len=3 cap=8 — capacity เพิ่มเป็นสองเท่าทุก push"
+        ],
+        answer: 1,
+        explain: "capacity เริ่มที่ 2 (จาก with_capacity(2)) และ reallocate (เพิ่มเป็น 4) ก็ต่อเมื่อ len กำลังจะเกิน capacity ปัจจุบันเท่านั้น — การ push element ตัวที่ 3 คือตัวที่ทำให้เกิดการขยาย"
+    },
+    {
+        q: "ทำไม clippy::needless_range_loop ถึงแจ้งเตือน `for i in 0..v.len() { total += v[i]; }`?",
+        options: [
+            "เพราะ 0..v.len() allocate Vec ใหม่ภายใน",
+            "เพราะ loop variable i ถูกใช้แค่เพื่อ index collection เดียวกัน ซึ่ง for item in &v สื่อความหมายได้ตรงกว่าและไม่ต้องคำนวณ bound ซ้ำ",
+            "เพราะมันเป็น syntax error ใน edition 2024",
+            "เพราะ v.len() ถูกคำนวณใหม่ทุกรอบ ทำให้เกิด infinite loop"
+        ],
+        answer: 1,
+        explain: "lint นี้เจาะจงรูปแบบนี้พอดี: ตัวแปร index ที่ถูกใช้แค่ v[i] for item in &v (หรือ .iter().sum()) สื่อความหมายเดียวกันได้ตรงกว่าและปล่อยให้ iterator จัดการ bound เอง"
     }
 ];
 

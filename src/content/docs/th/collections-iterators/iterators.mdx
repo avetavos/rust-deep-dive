@@ -1,6 +1,6 @@
 ---
 title: 'Iterators'
-description: 'Iterator ใน Rust คือ Chain ของ Adaptor แบบ Lazy ที่ขับเคลื่อนด้วย Consumer เรียนรู้ iter/into_iter/iter_mut, map/filter/enumerate/zip และ collect/sum/fold'
+description: 'Iterator ของ Rust คือ chain แบบ lazy ของ adaptor ที่ขับเคลื่อนโดย consumer พิสูจน์ความ lazy จับ iterator invalidation เชี่ยวชาญ type inference ของ collect/sum และทัวร์ adaptor ทั้งหมด'
 sidebar:
   order: 4
 ---
@@ -9,16 +9,18 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
-## Method สามแบบของ Iterator
+## Method สร้าง Iterator สามตัว
 
-ทุก Collection มีสามวิธีในการสร้าง Iterator:
+ทุก collection เปิดวิธีสร้าง iterator สามแบบ:
 
-| Method | ให้ผลเป็น | Ownership |
+| Method | ให้ค่า | Ownership |
 |--------|--------|-----------|
-| `.iter()` | `&T` | ยืม Collection |
-| `.iter_mut()` | `&mut T` | ยืม Collection แบบ Mutable |
-| `.into_iter()` | `T` | Consume (Move) Collection |
+| `.iter()` | `&T` | Borrow collection |
+| `.iter_mut()` | `&mut T` | Borrow collection แบบ mutable |
+| `.into_iter()` | `T` | Consume (ย้าย) collection |
 
 ```rust
 let v = vec![1, 2, 3];
@@ -27,67 +29,311 @@ for x in v.iter() { }        // v still valid after
 for x in v.into_iter() { }   // v moved — cannot use v after
 ```
 
-## Adaptor — การแปลงแบบ Lazy
+## คอมไพเลอร์พูดว่าอะไร: การแก้ไข Collection ระหว่างวนซ้ำมันอยู่
 
-Adaptor แปลง Iterator หนึ่งเป็น Iterator อื่น และ **ไม่ทำงานจริง** จนกว่า Consumer จะขับเคลื่อน
-
-### `map`
-
-แปลง Element แต่ละตัว:
+`.iter()` ถือ shared borrow ของ collection ไว้ตลอดที่ loop ทำงาน การ push เข้า collection เดียวกันภายใน loop ต้องการ mutable borrow — และ borrow checker จะไม่ยอมให้ทั้งสองมีอยู่พร้อมกัน แม้ว่า "แค่ต่อท้ายเข้าไป" จะรู้สึกไม่มีอันตราย:
 
 ```rust
-let doubled: Vec<i32> = vec![1, 2, 3].iter().map(|&x| x * 2).collect();
-// [2, 4, 6]
-```
-
-### `filter`
-
-เก็บ Element ที่ตรงกับ Predicate สังเกต: `.iter()` บน `Vec<i32>` ให้ `&&i32` ภายใน filter — ใช้ `|&&x|` เพื่อ Destructure:
-
-```rust
-let evens: Vec<i32> = vec![1, 2, 3, 4].iter().filter(|&&x| x % 2 == 0).map(|&x| x).collect();
-// [2, 4]
-```
-
-### `enumerate`
-
-จับคู่แต่ละ Element กับ Index `(usize, &T)`:
-
-```rust
-for (i, val) in vec!["a", "b", "c"].iter().enumerate() {
-    println!("[{}] {}", i, val);
+// @expect-error E0502
+fn main() {
+    let mut v = vec![1, 2, 3];
+    for x in &v {
+        v.push(*x); // ERROR: cannot mutate v while iterating over &v
+    }
+    println!("{:?}", v);
 }
 ```
 
-### `zip`
+```text
+error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable
+ --> src/main.rs:4:9
+  |
+3 |     for x in &v {
+  |              --
+  |              |
+  |              immutable borrow occurs here
+  |              immutable borrow later used here
+4 |         v.push(*x); // ERROR: cannot mutate v while iterating over &v
+  |         ^^^^^^^^^^ mutable borrow occurs here
 
-รวม Iterator สองตัวเป็นคู่ `(A, B)` ทีละ Element โดยหยุดที่ตัวที่สั้นกว่า:
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0502`.
+```
+
+นี่ไม่ใช่ borrow checker ที่ระมัดระวังเกินไป: iterator ของ `Vec` จริงๆ แล้วคือ raw pointer บวก length ที่เหลือเข้าไปใน buffer ของมัน ถ้า `push` trigger การ reallocation (ดูส่วน capacity ของบท `vec-string`) buffer จะย้ายที่ และ raw pointer นั้นจะชี้ไปยังหน่วยความจำที่ถูกปล่อยไปแล้ว — บั๊ก iterator-invalidation แบบคลาสสิกที่ crash แบบเงียบๆ ใน C++ แต่ถูกปฏิเสธตอน compile time ที่นี่ ถ้าคุณต้องสร้าง `Vec` ใหม่จาก `Vec` เก่า ให้ collect เข้า `Vec` แยกต่างหากแทนที่จะแก้ไขตัวที่คุณกำลังวนซ้ำอยู่
+
+## ความ Lazy ที่พิสูจน์แล้ว
+
+adaptor อย่าง `map` และ `filter` ไม่รัน closure ของมันตอนที่คุณเรียกมัน — มันจะรันก็ต่อเมื่อ *consumer* ดึงค่าผ่าน chain เท่านั้น นี่คือหลักฐาน ไม่ใช่แค่คำกล่าวอ้าง: closure ของ `map` ที่ print ทำงานสองแบบต่างกัน
 
 ```rust
-let names = vec!["Alice", "Bob"];
-let scores = vec![100, 85];
-for (name, score) in names.iter().zip(scores.iter()) {
-    println!("{}: {}", name, score);
+fn main() {
+    let v = vec![1, 2, 3];
+    let iter = v.iter().map(|x| {
+        println!("mapping {}", x);
+        x * 2
+    });
+    println!("iterator built, nothing printed yet");
+    let sum: i32 = iter.sum();
+    println!("sum = {}", sum);
 }
 ```
 
-## Consumer — ขับเคลื่อน Chain
+```text
+iterator built, nothing printed yet
+mapping 1
+mapping 2
+mapping 3
+sum = 12
+```
 
-Consumer ดึงค่าผ่าน Chain ของ Adaptor และสร้างผลลัพธ์สุดท้าย
-
-| Consumer | ผลลัพธ์ |
-|----------|--------|
-| `.collect::<Vec<T>>()` | สร้าง Collection |
-| `.sum::<i32>()` | รวมค่าตัวเลข |
-| `.fold(init, f)` | ลดเหลือค่าเดียวด้วย Accumulator |
-| `.count()` | นับ Element |
-| `.any(pred)` / `.all(pred)` | Test Boolean แบบ Short-circuit |
+`"iterator built, nothing printed yet"` พิมพ์**ก่อน**บรรทัด `"mapping"` ใดๆ เลย — การสร้าง chain ของ `map` ไม่ได้ทำงานอะไรเลย มีแค่ `.sum()` ซึ่งเป็น consumer เท่านั้นที่ดึง element ผ่านมาและรัน closure ทีนี้ลองเทียบกับสิ่งที่เกิดขึ้นถ้า iterator ไม่เคยถูก consume:
 
 ```rust
-let nums = vec![1, 2, 3, 4, 5];
-let total: i32 = nums.iter().sum();            // 15
-let product: i32 = nums.iter().fold(1, |acc, &x| acc * x);  // 120
+fn main() {
+    let v = vec![1, 2, 3];
+    v.iter().map(|x| {
+        println!("mapping {}", x);
+        x * 2
+    });
+    println!("done");
+}
 ```
+
+การ compile โค้ดนี้ (โดยไม่ปิด warning) จะพิมพ์ warning ออกมา และการรันมันจะพิมพ์แค่ `"done"` — ไม่มีบรรทัด `"mapping"` ทำงานเลยแม้แต่บรรทัดเดียว:
+
+```text
+$ cargo build
+warning: unused `Map` that must be used
+ --> src/main.rs:3:5
+  |
+3 | /     v.iter().map(|x| {
+4 | |         println!("mapping {}", x);
+5 | |         x * 2
+6 | |     });
+  | |______^
+  |
+  = note: iterators are lazy and do nothing unless consumed
+  = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
+```
+
+คอมไพเลอร์ไม่ได้แค่เตือนเรื่องค่าที่ถูกทิ้งไป — note ที่มันแนบมา *"iterators are lazy and do nothing unless consumed"* คือแบบจำลองความคิดเป๊ะๆ ที่ section นี้กำลังพิสูจน์อยู่ adaptor chain ที่ไม่ถูก consume ไม่ใช่แค่ถูกทิ้งไปเฉยๆ มันคือ no-op และไลบรารีมาตรฐานทำเครื่องหมาย method ที่คืน iterator ด้วย `#[must_use]` โดยเฉพาะเพื่อจับสิ่งนี้ทันทีที่คุณเขียนมัน
+
+<Mermaid code={`flowchart LR
+    S[Source: v.iter] --> F[filter: keep even] --> M[map: multiply by 10] --> C{Consumer?}
+    C -->|collect / sum / for loop| R[Values flow through, work happens now]
+    C -->|nothing — chain dropped| N[No work ever happens]`} title="Adaptor pipeline ไม่ทำงานอะไรจนกว่า consumer จะขับเคลื่อนมัน" />
+
+## `collect()` — Turbofish, การ Short-circuit ของ `Result`, และ `String`
+
+`.collect()` เป็น generic เหนือ target type ของมัน ดังนั้นคอมไพเลอร์ต้องรู้ว่าคุณกำลัง collect *เข้าอะไร* — ไม่ว่าจะจาก context รอบๆ (`let v: Vec<i32> = ...`) หรือจาก turbofish ที่ชัดเจน (`::<Type>`):
+
+```rust
+struct Countdown(u32);
+
+impl Iterator for Countdown {
+    type Item = u32;
+    fn next(&mut self) -> Option<u32> {
+        if self.0 == 0 {
+            None
+        } else {
+            self.0 -= 1;
+            Some(self.0 + 1)
+        }
+    }
+}
+
+fn evens_up_to(n: u32) -> impl Iterator<Item = u32> {
+    (1..=n).filter(|x| x % 2 == 0)
+}
+
+fn main() {
+    let collected: Vec<u32> = Countdown(3).collect();
+    println!("custom Iterator: {:?}", collected);
+
+    let evens: Vec<u32> = evens_up_to(10).collect();
+    println!("impl Iterator return: {:?}", evens);
+
+    // collect::<T>() turbofish
+    let doubled = (1..5).map(|x| x * 2).collect::<Vec<i32>>();
+    println!("turbofish collect: {:?}", doubled);
+
+    // collect::<Result<Vec<_>, _>>() short-circuits on the first Err
+    let good = vec!["1", "2", "3"];
+    let bad = vec!["1", "oops", "3"];
+    let ok_result: Result<Vec<i32>, _> = good.iter().map(|s| s.parse::<i32>()).collect();
+    let err_result: Result<Vec<i32>, _> = bad.iter().map(|s| s.parse::<i32>()).collect();
+    println!("collect Result ok: {:?}", ok_result);
+    println!("collect Result err: {:?}", err_result);
+
+    // collect::<String>()
+    let word: String = vec!['R', 'u', 's', 't'].into_iter().collect();
+    println!("collect String: {}", word);
+}
+```
+
+```text
+custom Iterator: [3, 2, 1]
+impl Iterator return: [2, 4, 6, 8, 10]
+turbofish collect: [2, 4, 6, 8]
+collect Result ok: Ok([1, 2, 3])
+collect Result err: Err(ParseIntError { kind: InvalidDigit })
+collect String: Rust
+```
+
+มีสองอย่างที่ควรดึงออกมาจากการรันนั้น: `Countdown` คือ `struct` ที่เขียนเองพร้อม `impl Iterator for Countdown` — `.next()` ที่คืน `Option<Self::Item>` คือสัญญาทั้งหมด และ `.collect()`, `.sum()`, adaptor ทุกตัวในบทนี้ทำงานกับมันได้ฟรีทันทีที่ method ตัวนั้นมีอยู่ `evens_up_to` คืนค่า `impl Iterator<Item = u32>` แทนที่จะเอ่ยชื่อ adaptor type ที่เป็นรูปธรรม (`Filter<RangeInclusive<u32>, ...>` ที่คุณต้องสะกดออกมาถ้าไม่ใช้แบบนี้) — ผู้เรียกแค่ต้องรู้ว่า "สิ่งนี้ให้ค่า `u32`" ไม่ต้องรู้ว่า adaptor ตัวไหนสร้างมัน และ `collect::<Result<Vec<i32>, _>>()` บน `bad` หยุดที่ความล้มเหลวในการ parse ครั้งแรกและคืน `Err` ตัวนั้นตัวเดียว — มันไม่ collect ความสำเร็จก่อนหน้ามันและไม่เดินหน้าต่อเพื่อหา error เพิ่ม
+
+## `sum()` ต้องรู้ Type ของตัวเอง
+
+`.sum()` เป็น generic เหนือ return type ของมันเหมือนกับ `.collect()` — และไม่เหมือน `.collect()` ตรงที่ไม่มี pattern แบบ `let x: Vec<i32> = ...` ให้คอมไพเลอร์พึ่งพา เว้นแต่คุณจะเขียน type จริงๆ:
+
+```rust
+// @expect-error E0283
+fn main() {
+    let nums = vec![1, 2, 3, 4];
+    let total = nums.iter().sum();
+    println!("{}", total);
+}
+```
+
+```text
+error[E0283]: type annotations needed
+    --> src/main.rs:3:9
+     |
+   3 |     let total = nums.iter().sum();
+     |         ^^^^^               --- type must be known at this point
+     |
+     = note: the type must implement `Sum<&i32>`
+     = help: the following types implement trait `Sum<A>`:
+               `Duration` implements `Sum<&'a Duration>`
+               `Duration` implements `Sum`
+               `Option<T>` implements `Sum<Option<U>>`
+               `Result<T, E>` implements `Sum<Result<U, E>>`
+               `Saturating<u128>` implements `Sum<&'a Saturating<u128>>`
+               `Saturating<u128>` implements `Sum`
+               `Saturating<u16>` implements `Sum<&'a Saturating<u16>>`
+               `Saturating<u16>` implements `Sum`
+             and 88 others
+help: consider giving `total` an explicit type
+     |
+   3 |     let total: /* Type */ = nums.iter().sum();
+     |              ++++++++++++
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0283`.
+```
+
+หลาย type implement `Sum` (`i32`, `f64`, `Duration`, แม้แต่ `Option<T>` และ `Result<T, E>` สำหรับผลรวมแบบ short-circuit) ดังนั้นคอมไพเลอร์จึงเดาไม่ได้จริงๆ ว่าคุณหมายถึงตัวไหน — วิธีแก้คือให้ type ที่ `let` อย่างชัดเจน หรือใช้ turbofish แบบเดียวกับที่ `collect()` ใช้:
+
+```rust
+fn main() {
+    let nums = vec![1, 2, 3, 4];
+    let total: i32 = nums.iter().sum();
+    println!("total = {}", total);
+    let total2 = nums.iter().sum::<i32>();
+    println!("total2 = {}", total2);
+}
+```
+
+```text
+total = 10
+total2 = 10
+```
+
+## ทัวร์ Adaptor แบบเต็ม
+
+ทุก adaptor ข้างล่างนี้ lazy ทั้งหมด — ไม่มีตัวไหนทำงานอะไรเลยจนกว่า consumer (ที่นี่คือ `collect()` หรือ loop `for`) จะขับเคลื่อนมัน:
+
+```rust
+fn main() {
+    let names = vec!["ann", "bo", "carl", "dee", "eve"];
+    let scores = vec![90, 85, 70, 95];
+
+    // zip stops at the shorter iterator
+    let zipped: Vec<(&&str, &i32)> = names.iter().zip(scores.iter()).collect();
+    println!("zip: {:?}", zipped);
+
+    // enumerate pairs index with element
+    for (i, n) in names.iter().enumerate().take(2) {
+        println!("enumerate[{}] = {}", i, n);
+    }
+
+    // filter_map: parse and drop failures in one step
+    let words = vec!["1", "two", "3", "four", "5"];
+    let parsed: Vec<i32> = words.iter().filter_map(|s| s.parse().ok()).collect();
+    println!("filter_map: {:?}", parsed);
+
+    // flat_map: flatten a transformation that yields iterators
+    let nested = vec![vec![1, 2], vec![3, 4], vec![5]];
+    let flat: Vec<i32> = nested.iter().flat_map(|v| v.iter().copied()).collect();
+    println!("flat_map: {:?}", flat);
+
+    // take_while / skip_while
+    let nums = vec![1, 2, 3, 10, 4, 5];
+    let taken: Vec<&i32> = nums.iter().take_while(|&&x| x < 5).collect();
+    let skipped: Vec<&i32> = nums.iter().skip_while(|&&x| x < 5).collect();
+    println!("take_while: {:?}", taken);
+    println!("skip_while: {:?}", skipped);
+
+    // windows / chunks (slices only)
+    let data = [1, 2, 3, 4, 5];
+    let windows: Vec<&[i32]> = data.windows(2).collect();
+    let chunks: Vec<&[i32]> = data.chunks(2).collect();
+    println!("windows(2): {:?}", windows);
+    println!("chunks(2): {:?}", chunks);
+
+    // rev
+    let reversed: Vec<&i32> = nums.iter().rev().collect();
+    println!("rev: {:?}", reversed);
+
+    // peekable
+    let mut p = nums.iter().peekable();
+    while let Some(&x) = p.next() {
+        if let Some(&&next) = p.peek() {
+            print!("{}->{} ", x, next);
+        }
+    }
+    println!();
+
+    // scan: running sum
+    let running: Vec<i32> = nums.iter().scan(0, |acc, &x| { *acc += x; Some(*acc) }).collect();
+    println!("scan running sum: {:?}", running);
+
+    // fold
+    let product = nums.iter().fold(1, |acc, &x| acc * x);
+    println!("fold product: {}", product);
+
+    // any / all / position / find
+    println!("any > 9: {}", nums.iter().any(|&x| x > 9));
+    println!("all > 0: {}", nums.iter().all(|&x| x > 0));
+    println!("position of 10: {:?}", nums.iter().position(|&x| x == 10));
+    println!("find > 3: {:?}", nums.iter().find(|&&x| x > 3));
+}
+```
+
+```text
+zip: [("ann", 90), ("bo", 85), ("carl", 70), ("dee", 95)]
+enumerate[0] = ann
+enumerate[1] = bo
+filter_map: [1, 3, 5]
+flat_map: [1, 2, 3, 4, 5]
+take_while: [1, 2, 3]
+skip_while: [10, 4, 5]
+windows(2): [[1, 2], [2, 3], [3, 4], [4, 5]]
+chunks(2): [[1, 2], [3, 4], [5]]
+rev: [5, 4, 10, 3, 2, 1]
+1->2 2->3 3->10 10->4 4->5 
+scan running sum: [1, 3, 6, 16, 20, 25]
+fold product: 1200
+any > 9: true
+all > 0: true
+position of 10: Some(3)
+find > 3: Some(10)
+```
+
+`zip` ตัดให้เท่ากับ iterator ที่สั้นกว่าในสองตัว (5 ชื่อ แต่มีแค่ 4 คะแนน ดังนั้น `zipped` จึงมี 4 คู่) `windows(2)` ให้ทุกคู่ที่ overlap กัน; `chunks(2)` ให้ทุกคู่ที่ *ไม่* overlap กัน โดยมี chunk สุดท้ายที่สั้นกว่าถ้าความยาวเป็นเลขคี่ `any`/`position`/`find` ล้วน short-circuit — มันหยุดที่การ match ครั้งแรกแทนที่จะสแกนไปจนจบ ซึ่งสำคัญเมื่อ iterator มีต้นทุนสูงหรือไม่มีที่สิ้นสุด
 
 export const iteratorsCode = `fn main() {
     let numbers = vec![1, 2, 3, 4, 5, 6];
@@ -119,30 +365,64 @@ export const iteratorsCode = `fn main() {
 
 <Playground code={iteratorsCode} />
 
-<Callout title="Iterator Adaptor เป็น Lazy — ไม่มีอะไรเกิดขึ้นจนกว่า Consumer จะทำงาน">
-การเรียก `.map(...)` หรือ `.filter(...)` ไม่ได้รันโค้ดใดๆ ทันที แค่สร้างคำอธิบายของการแปลงเอาไว้ เฉพาะเมื่อ Consumer — `collect`, `sum`, `fold`, Loop `for` — ดึงค่าผ่าน Chain จึงจะเกิดการคำนวณ ทำให้ Chain ของ Adaptor ยาวๆ มีประสิทธิภาพเท่ากับ Loop ที่เขียนด้วยมือ
+<Callout title="Iterator adaptor เป็น lazy — ไม่มีอะไรเกิดขึ้นจนกว่า consumer จะรัน">
+การเรียก `.map(...)` หรือ `.filter(...)` ไม่รันโค้ดใดๆ ทันที มันแค่สร้างคำอธิบายของการแปลง งานจะเกิดขึ้นก็ต่อเมื่อ consumer — `collect`, `sum`, `fold`, loop `for` — ดึงค่าผ่าน chain เท่านั้น สิ่งนี้ทำให้ adaptor chain ยาวๆ มีประสิทธิภาพเท่ากับ loop ที่เขียนมือตัวเดียว
+</Callout>
+
+## แบบจำลองความคิด
+
+iterator คือ method เดียว — `fn next(&mut self) -> Option<Self::Item>` — และไม่มีอะไรมากกว่านั้น; adaptor ทุกตัว (`map`, `filter`, `zip`, ...) เป็น wrapper struct ที่เก็บ iterator ข้างในบวกกับสิ่งที่มันต้องการ (closure, iterator ตัวที่สอง) และ implement `next()` โดยเรียก `next()` ของ iterator ข้างในแล้วแปลงผลลัพธ์ นั่นคือเหตุผลทั้งหมดที่ทำให้ความ lazy เป็นแบบอัตโนมัติแทนที่จะเป็นสิ่งที่คุณต้องเลือกใช้: ไม่มีงานเกิดขึ้นจนกว่า *บางสิ่ง* จะเรียก `.next()` และสิ่งเดียวที่เรียก `.next()` เลยคือ consumer
+
+## ข้อแลกเปลี่ยน
+
+`.iter()`/`.iter_mut()`/`.into_iter()` แลกความยืดหยุ่นกับข้อจำกัดของ borrow checker: การ borrow ทำให้ source ใช้งานต่อได้แต่ห้ามการแก้ไขเชิงโครงสร้าง (รวมถึงการโต) ระหว่าง loop; การย้ายปลดล็อกคุณจากข้อจำกัดนั้นแลกกับการ consume source การใส่ type annotation ชัดเจนบน `collect()`/`sum()` เสียตัวอักษรเพิ่มไม่กี่ตัวแต่บันทึกเจตนาไว้ที่จุดเรียก; การพึ่ง inference ที่อื่นในฟังก์ชันกระชับกว่าแต่พังทันทีที่ context การ infer นั้นหายไป การ implement `Iterator` เองมีต้นทุนคือคุณต้องเขียน method `next()` หนึ่งตัว แต่แลกกับ adaptor และ consumer ทุกตัวในบทนี้ (และไลบรารีมาตรฐานทั้งหมด) ทำงานกับ type ของคุณได้ฟรี
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"การเรียก `.map()` รัน closure บนทุก element ทันที เหมือนกับ loop `for`"** มันสร้าง wrapper แบบ lazy และไม่รันอะไรเลย — การพิสูจน์ความ lazy ข้างบนแสดงให้เห็นว่า `println!` ของ closure เองทำงานก็ต่อเมื่อ `.sum()` (consumer) ขับเคลื่อน chain เท่านั้น ไม่ใช่ตอนที่เรียก `.map()`
+- **"`v.iter().map(...)` โดยไม่มี `.collect()` ต่อท้าย ก็ยังทำการแปลงอยู่ แค่ไม่เก็บผลลัพธ์"** มันไม่ทำ*อะไรเลย* — ไม่ใช่ "งานเกิดขึ้นแต่ผลลัพธ์ถูกทิ้งไป" แต่คือ "งานไม่เคยเกิดขึ้นเลย" ซึ่งตรงกับที่ note `unused_must_use` ของคอมไพเลอร์ ("iterators are lazy and do nothing unless consumed") กำลังบอกคุณพอดี
+- **"`sum()` ควร compile ได้เสมอโดยไม่ต้องมี annotation เพราะ element ถูกกำหนด type ไว้แล้ว (`i32`)"** `sum()` เป็น generic เหนือ type ที่*คืนกลับ* และหลาย type implement `Sum<i32>` (หรือ `Sum<&i32>`) — คอมไพเลอร์ต้องการให้คุณเลือกตัวหนึ่ง เหมือนกับที่มันต้องการให้คุณเลือก target ของ `collect()`
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างบางครั้ง collect iterator เข้า `Vec` แค่เพื่อจะวนซ้ำมันอีกครั้งทันทีหลังจากนั้น — ขั้นตอนที่เพิ่มการ allocate โดยไม่ได้อะไรเลย เพราะ iterator ต้นฉบับ (หรือตัวใหม่) วนซ้ำได้โดยตรงอยู่แล้ว
+
+<SpotTheBug code={`fn print_evens(nums: &[i32]) {
+    let evens: Vec<i32> = nums.iter().filter(|&&x| x % 2 == 0).copied().collect();
+    for e in evens {
+        println!("{}", e);
+    }
+}
+`}>
+`evens` ถูกสร้างขึ้น แล้วถูก consume ทันทีด้วย loop `for` เดียว และไม่ถูกใช้อีกเลย — `Vec` ตรงกลางไม่ได้ให้อะไรนอกจากการ allocate และการ copy เลขคู่ทุกตัว วิธีแก้คือตัด `collect()` ทิ้งไปเลย: `for e in nums.iter().filter(|&&x| x % 2 == 0) { println!("{}", e); }` วนซ้ำ adaptor chain ที่ filter แล้วโดยตรง เพราะ `for` เองก็เป็น consumer ที่ดีอยู่แล้ว
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+iterator คือ method เดียว (`next`) และไม่มีอะไรรันจนกว่า consumer จะเรียกมัน — พิสูจน์ความ lazy ให้ตัวเองเห็นแทนที่จะสมมติเอา ให้ type ที่ชัดเจนกับ `collect()`/`sum()` ทันทีที่ inference หาไม่เจอ และอย่า `collect()` เข้า `Vec` ที่คุณกำลังจะวนซ้ำแค่ครั้งเดียว
 </Callout>
 
 export const quizIterators = [
     {
-        q: "ความแตกต่างสำคัญระหว่าง .iter() กับ .into_iter() บน Vec คืออะไร?",
+        q: "ความแตกต่างหลักระหว่าง .iter() และ .into_iter() บน Vec คืออะไร?",
         options: [
             ".iter() เร็วกว่า; .into_iter() ปลอดภัยกว่า",
-            ".iter() ยืม Vec (ยังใช้ได้); .into_iter() Consume (Move) Vec ไป",
-            ".into_iter() ยืม Vec; .iter() Consume Vec ไป",
+            ".iter() borrow Vec (มันยังใช้งานได้ต่อ); .into_iter() consume (ย้าย) มัน",
+            ".into_iter() borrow Vec; .iter() consume มัน",
             "ไม่มีความแตกต่างในทางปฏิบัติ"
         ],
-        answer: 1
+        answer: 1,
+        explain: ".iter() ให้ค่า &T และแค่ borrow Vec ทำให้ใช้งานต่อได้; .into_iter() ให้ค่า T โดยเอา ownership ไป consume Vec"
     },
     {
-        q: "Adaptor .map() รัน Closure ของตัวเองจริงเมื่อใด?",
+        q: "adaptor .map() จะรัน closure ของมันจริงๆ เมื่อไร?",
         options: [
             "ทันทีที่เรียก .map()",
-            "เมื่อ Adaptor ถัดไปใน Chain ถูกแนบ",
-            "เฉพาะเมื่อ Consumer เช่น .collect() หรือ .sum() ขับเคลื่อน Iterator",
-            "เมื่อ Vec หลุด Scope"
+            "เมื่อ adaptor ตัวถัดไปใน chain ถูกต่อเข้ามา",
+            "เฉพาะเมื่อ consumer อย่าง .collect() หรือ .sum() ขับเคลื่อน iterator",
+            "เมื่อ Vec ออกจาก scope"
         ],
-        answer: 2
+        answer: 2,
+        explain: "map() แค่ห่อ source iterator ไว้ใน struct แบบ lazy closure จะรันหนึ่งครั้งต่อ element ก็ต่อเมื่อ consumer ดึงค่าผ่านมาจริงๆ ด้วยการเรียก next() ซ้ำๆ"
     },
     {
         q: ".fold(0, |acc, &x| acc + x) คำนวณอะไรสำหรับ vec![1, 2, 3]?",
@@ -150,19 +430,54 @@ export const quizIterators = [
             "ค่าสูงสุด: 3",
             "ผลคูณ: 6",
             "ผลรวม: 6",
-            "จำนวน Element: 3"
+            "จำนวน: 3"
         ],
-        answer: 2
+        answer: 2,
+        explain: "fold เริ่มด้วย accumulator 0 แล้วบวก element ทีละตัว: 0+1=1, 1+2=3, 3+3=6 — คือผลรวม"
     },
     {
-        q: "ทำไม Closure ของ filter บน .iter() ของ Vec<i32> จึงรับ &&i32?",
+        q: "ทำไม closure ของ filter บน .iter() ของ Vec<i32> ถึงได้รับ &&i32?",
         options: [
-            "เป็น Bug ของ Rust Compiler",
-            ".iter() ให้ &i32 และ filter ห่อ Element แต่ละตัวด้วย Reference อีกชั้น ทำให้ได้ &&i32",
-            "filter เพิ่ม Reference สองชั้นเสมอไม่ว่าจะเป็นประเภท Iterator ใด",
-            "Vec<i32> จัดเก็บ i32 เป็น Double Pointer ภายใน"
+            "เป็นบั๊กของคอมไพเลอร์ Rust",
+            ".iter() ให้ค่า &i32 และ filter ห่อแต่ละ element ด้วย reference อีกชั้น กลายเป็น &&i32",
+            "filter เพิ่ม reference สองชั้นเสมอไม่ว่า iterator จะเป็นชนิดไหน",
+            "Vec<i32> เก็บ i32 เป็น double pointer ภายใน"
         ],
-        answer: 1
+        answer: 1,
+        explain: ".iter() ให้ &i32 อยู่แล้ว; predicate ของ filter รับ reference ไปยัง item นั้น (&Self::Item) ดังนั้น closure parameter จึงกลายเป็น &&i32"
+    },
+    {
+        q: "โปรแกรมนี้พิมพ์อะไร?\n```rust\nfn main() {\n    let v = vec![1, 2, 3];\n    let it = v.iter().map(|x| {\n        println!(\"touch {}\", x);\n        x * 2\n    });\n    println!(\"built\");\n    let s: i32 = it.sum();\n    println!(\"sum={}\", s);\n}\n```",
+        options: [
+            "touch 1, touch 2, touch 3, built, sum=12 — map รันทันทีตอนสร้าง",
+            "built, touch 1, touch 2, touch 3, sum=12 — ไม่มีอะไรรันจนกว่า .sum() จะ consume iterator",
+            "built, sum=12 — บรรทัด touch ไม่เคยพิมพ์เลยเพราะ map เป็น lazy",
+            "compile error เพราะ closure ของ map มี side effect"
+        ],
+        answer: 1,
+        explain: "map() แค่สร้าง wrapper แบบ lazy; \"built\" พิมพ์ก่อนบรรทัด \"touch\" ใดๆ เพราะ closure จะรันก็ต่อเมื่อ .sum() (consumer) เริ่มดึง element ผ่านมา"
+    },
+    {
+        q: "โค้ดนี้คอมไพล์ไม่ผ่านด้วยอะไร?\n```rust\nfn main() {\n    let mut v = vec![1, 2, 3];\n    for x in &v {\n        v.push(*x);\n    }\n}\n```",
+        options: [
+            "error[E0382]: use of moved value",
+            "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable",
+            "คอมไพล์ผ่านและ loop ไม่มีที่สิ้นสุด",
+            "error[E0308]: mismatched types"
+        ],
+        answer: 1,
+        explain: "for x in &v ถือ shared borrow ของ v ไว้ตลอด loop; v.push(*x) ต้องการ mutable borrow และ borrow checker ปฏิเสธการมีทั้งสองอยู่พร้อมกัน — นี่คือ E0502"
+    },
+    {
+        q: "ทำไม `let total = nums.iter().sum();` จึงคอมไพล์ไม่ผ่านโดยไม่มี context เพิ่ม ในขณะที่ `let v: Vec<i32> = nums.iter().collect();` คอมไพล์ผ่านตามที่เขียน?",
+        options: [
+            "sum() เป็น generic ไม่ได้ใน Rust มีแค่ collect() เท่านั้นที่ทำได้",
+            "collect() default เป็น Vec<i32> เสมอเมื่อไม่มี type อื่นที่เข้ากันได้",
+            "บรรทัดที่สองให้ type ผ่าน let binding (Vec<i32>) ที่คอมไพเลอร์ใช้เลือก target ของ collect() ได้; บรรทัดแรกไม่ได้ให้ type เลย ดังนั้น sum() จึงไม่มีทางเลือก Sum implementation",
+            "sum() ต้องการ turbofish syntax เสมอ ไม่มีข้อยกเว้น"
+        ],
+        answer: 2,
+        explain: "ทั้ง sum() และ collect() เป็น generic เหนือ return type ของมัน annotation Vec<i32> ให้สิ่งที่คอมไพเลอร์ต้องการสำหรับ collect(); โดยไม่มี annotation ใดๆ sum() จึงกำกวมจริงๆ ระหว่างหลาย Sum implementation ทำให้เกิด E0283"
     }
 ];
 

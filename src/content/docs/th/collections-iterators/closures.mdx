@@ -1,6 +1,6 @@
 ---
 title: 'Closures'
-description: 'Closure คือ Function นิรนามที่จับ Environment ของตัวเอง เรียนรู้ Fn, FnMut, FnOnce, Keyword move และวิธีที่ Closure ขับเคลื่อน Iterator Adaptor'
+description: 'Closure คือฟังก์ชันไม่มีชื่อที่ capture environment ของมัน เชี่ยวชาญการ infer Fn/FnMut/FnOnce, error E0525/E0502 ที่เผยมันออกมา, move, การคืนค่า closure และวิธีที่ closure ขับเคลื่อน iterator adaptor'
 sidebar:
   order: 5
 ---
@@ -9,10 +9,12 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Closure คืออะไร?
 
-**Closure** คือ Function นิรนามที่กำหนด Inline ด้วย Syntax `|params| body` ต่างจาก `fn` ทั่วไป Closure สามารถ **จับ** (Capture) ตัวแปรจาก Scope ที่ล้อมรอบได้
+**Closure** คือฟังก์ชันไม่มีชื่อที่ประกาศแบบ inline ด้วย syntax `|params| body` ต่างจาก `fn` ปกติตรงที่ closure สามารถ **capture** ตัวแปรจาก scope รอบๆ มันได้
 
 ```rust
 let multiplier = 3;
@@ -20,19 +22,26 @@ let triple = |x| x * multiplier;    // captures multiplier from the environment
 println!("{}", triple(7));           // 21
 ```
 
-## การจับ Environment
+## การ Capture Environment
 
-Rust มี Trait สำหรับ Closure สามแบบที่อธิบายว่า Closure ใช้ค่าที่จับไว้อย่างไร:
+Rust มี closure trait สามตัวที่บอกว่า closure ใช้ค่าที่ capture มายังไง:
 
-| Trait | วิธีการจับ | สามารถเรียกได้ |
+| Trait | วิธี capture | เรียกได้กี่ครั้ง |
 |-------|----------------|---------------|
-| `Fn` | ยืมแบบ Immutable (`&T`) | กี่ครั้งก็ได้ |
-| `FnMut` | ยืมแบบ Mutable (`&mut T`) | กี่ครั้งก็ได้ |
-| `FnOnce` | รับ Ownership (`T`) | ครั้งเดียวเท่านั้น |
+| `Fn` | borrow แบบ immutable (`&T`) | กี่ครั้งก็ได้ |
+| `FnMut` | borrow แบบ mutable (`&mut T`) | กี่ครั้งก็ได้ |
+| `FnOnce` | เอา ownership ไป (`T`) | ครั้งเดียวเท่านั้น |
 
-ทุก Closure Implement `FnOnce` เป็นอย่างน้อย ถ้า Closure แค่ยืมค่า ก็จะ Implement `Fn` ด้วย
+closure ทุกตัว implement `FnOnce` เป็นอย่างน้อย ถ้ามันแค่ borrow มันก็ implement `Fn` ด้วย คอมไพเลอร์ infer ว่า closure implement trait ไหนโดยดูว่า body ของมันทำอะไรกับแต่ละตัวแปรที่ capture มาจริงๆ — ไม่เคยดูว่าคุณ*ตั้งใจ*จะใช้มันยังไง การ infer นั้นไม่ใช่รายละเอียดที่คุณละเลยได้ เพราะทันทีที่คุณใช้ closure ในที่ที่ต้องการการรับประกันที่แข็งแรงกว่าที่ body ได้มา คอมไพเลอร์จะบอกคุณ
 
-### `Fn` — ยืมแบบ Immutable
+<Mermaid code={`flowchart TD
+    A[What does the closure body do with a captured variable?] --> B{Only reads it?}
+    B -->|Yes| C[Fn: borrows &T]
+    B -->|No, mutates it| D{Only mutates, never consumes?}
+    D -->|Yes| E[FnMut: borrows &mut T]
+    D -->|No, moves or drops it| F[FnOnce: takes ownership T]`} title="คอมไพเลอร์ infer Fn / FnMut / FnOnce อย่างไร" />
+
+### `Fn` — Borrow แบบ Immutable
 
 ```rust
 fn apply<F: Fn(i32) -> i32>(f: F, x: i32) -> i32 { f(x) }
@@ -42,7 +51,7 @@ let add_base = |x| x + base;    // borrows base immutably
 println!("{}", apply(add_base, 5));  // 15
 ```
 
-### `FnMut` — ยืมแบบ Mutable
+### `FnMut` — Borrow แบบ Mutable
 
 ```rust
 let mut count = 0;
@@ -53,9 +62,9 @@ drop(increment);                  // release the mutable borrow
 println!("count is {}", count);  // 2
 ```
 
-ต้องเรียก `drop(increment)` ก่อนอ่าน `count` โดยตรง เพราะ `increment` ถือ `&mut count` ที่จะขัดแย้งกับ Immutable Borrow ใน `println!`
+`drop(increment)` ต้องถูกเรียกก่อนอ่าน `count` โดยตรง เพราะ `increment` ถือ `&mut count` ที่จะขัดแย้งกับ immutable borrow ใน `println!`
 
-### `FnOnce` — รับ Ownership
+### `FnOnce` — เอา Ownership ไป
 
 ```rust
 let name = String::from("Rust");
@@ -64,9 +73,59 @@ greet();    // name is consumed here
 // greet(); // would compile-error — FnOnce can only be called once
 ```
 
+## คอมไพเลอร์พูดว่าอะไร: Closure ที่ Consume ค่าเรียกซ้ำสองครั้งไม่ได้
+
+`Fn` เป็นข้อกำหนดแบบ *supertrait*: อะไรก็ตามที่ต้องการ `Fn` ต้องเรียก closure ได้กี่ครั้งก็ได้ตามที่ต้องการ ดังนั้น closure ที่ body ของมัน consume ค่าที่ capture มาจริงๆ — แม้แค่เรียก `drop()` บนมัน — จะเป็นได้แค่ `FnOnce` เท่านั้น และการใช้มันในที่ที่ต้องการ `Fn` คือ type error ไม่ใช่ความประหลาดใจตอน runtime:
+
+```rust
+// @expect-error E0525
+fn call_twice<F: Fn()>(f: F) {
+    f();
+    f();
+}
+
+fn main() {
+    let name = String::from("Rust");
+    // this closure takes ownership of `name` and consumes it inside — FnOnce only
+    let greet = move || {
+        println!("bye, {}", name);
+        drop(name);
+    };
+    call_twice(greet); // ERROR: call_twice requires Fn, greet is only FnOnce
+}
+```
+
+```text
+error[E0525]: expected a closure that implements the `Fn` trait, but this closure only implements `FnOnce`
+  --> src/main.rs:9:17
+   |
+ 9 |     let greet = move || {
+   |                 ^^^^^^^ this closure implements `FnOnce`, not `Fn`
+10 |         println!("bye, {}", name);
+11 |         drop(name);
+   |              ---- closure is `FnOnce` because it moves the variable `name` out of its environment
+12 |     };
+13 |     call_twice(greet); // ERROR: call_twice requires Fn, greet is only FnOnce
+   |     ---------- ----- the requirement to implement `Fn` derives from here
+   |     |
+   |     required by a bound introduced by this call
+   |
+note: required by a bound in `call_twice`
+  --> src/main.rs:1:18
+   |
+ 1 | fn call_twice<F: Fn()>(f: F) {
+   |                  ^^^^ required by this bound in `call_twice`
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0525`.
+```
+
+สังเกตว่า diagnostic ชี้ไปที่บรรทัดที่แน่นอน (`drop(name)`) ที่ทำให้ closure ตกไปเป็น `FnOnce` — คอมไพเลอร์ไม่ได้เดาเอา มันสรุปมาจาก body ของ closure จริงๆ การเอา `drop(name)` ออก (แค่ print `name` โดยไม่ consume มัน) จะทำให้ closure เป็น `Fn` และคอมไพล์ผ่าน
+
 ## Keyword `move`
 
-`move` บังคับให้ Closure รับ Ownership ของตัวแปรที่จับทั้งหมด ไม่ว่าจะยืมเพียงอย่างเดียวก็ตาม:
+`move` บังคับให้ closure เอา ownership ของทุกตัวแปรที่ capture มา ไม่ว่ามันจะแค่ borrow เฉยๆ ถ้าไม่มี `move` ก็ตาม:
 
 ```rust
 let message = String::from("hi");
@@ -75,11 +134,107 @@ let say = move || println!("{}", message);  // message moved into say
 say();
 ```
 
-`move` จำเป็นเมื่อ Closure มีอายุยาวกว่า Scope ที่กำหนด (เช่น ส่งไปยัง Thread)
+`move` จำเป็นเมื่อ closure ต้องมีชีวิตอยู่นานกว่า scope ที่มันถูกสร้างขึ้น (เช่น ส่งให้ thread) ให้สังเกตว่า `move` เพียงอย่างเดียวไม่ได้บังคับให้เป็น `FnOnce` — closure `greet` ข้างบนต้องมีทั้ง `move` *และ* `drop(name)` ภายในเพื่อให้กลายเป็น `FnOnce`; closure แบบ `move` ที่แค่อ่าน `String` ที่ capture มาก็ยังเป็น `Fn` อยู่ เพราะ `Fn`/`FnMut`/`FnOnce` อธิบายว่า closure *ใช้* สิ่งที่ capture มายังไง ไม่ใช่ว่ามัน capture มายังไง
 
-## Closures เป็น Iterator Adaptor
+## คอมไพเลอร์พูดว่าอะไร: Closure ที่ยังมีชีวิตอยู่ยังถือ Borrow ของมันไว้
 
-Iterator Adaptor เช่น `map` และ `filter` รับ Closure โดยตรง:
+closure แบบ `FnMut` ถือ `&mut captured_var` ไว้ตลอดที่ closure นั้นยังอาจถูกเรียกอีก — ไม่ใช่แค่ระหว่างการเรียกครั้งเดียว การอ่านตัวแปรโดยตรงระหว่างการเรียกสองครั้งคือ borrow conflict แบบเดียวกับ `E0502` ที่เห็นในบท `iterators` เพียงแต่ครั้งนี้มาจากการ capture ของ closure แทนที่จะเป็น `&mut` ที่เขียนตรงๆ:
+
+```rust
+// @expect-error E0502
+fn main() {
+    let mut count = 0;
+    let mut incrementer = || { count += 1; count };
+    println!("first: {}", incrementer());
+    println!("count directly: {}", count); // ERROR: incrementer is used again below, so its &mut count borrow is still live
+    println!("second: {}", incrementer());
+}
+```
+
+```text
+error[E0502]: cannot borrow `count` as immutable because it is also borrowed as mutable
+ --> src/main.rs:5:36
+  |
+3 |     let mut incrementer = || { count += 1; count };
+  |                           --   ----- first borrow occurs due to use of `count` in closure
+  |                           |
+  |                           mutable borrow occurs here
+4 |     println!("first: {}", incrementer());
+5 |     println!("count directly: {}", count); // ERROR: incrementer is used again below, so its &mut count borrow is still live
+  |                                    ^^^^^ immutable borrow occurs here
+6 |     println!("second: {}", incrementer());
+  |                            ----------- mutable borrow later used here
+```
+
+รูปแบบเดียวกันนี้ก็เกิดขึ้นระหว่าง closure สองตัวที่ capture ตัวแปรเดียวกันแบบ mutable ด้วย: การมี `&mut count` ที่ยังมีชีวิตอยู่สองตัวพร้อมกันคือ `E0499` ไม่ใช่ `E0502` แต่กฎเบื้องหลัง (การเข้าถึงแบบเอกสิทธิ์) เหมือนกันเป๊ะ:
+
+```rust
+// @expect-error E0499
+fn main() {
+    let mut count = 0;
+    let mut add_one = || count += 1;
+    let mut add_two = || count += 2; // ERROR: two live mutable borrows of count
+    add_one();
+    add_two();
+}
+```
+
+```text
+error[E0499]: cannot borrow `count` as mutable more than once at a time
+ --> src/main.rs:4:23
+  |
+3 |     let mut add_one = || count += 1;
+  |                       -- ----- first borrow occurs due to use of `count` in closure
+  |                       |
+  |                       first mutable borrow occurs here
+4 |     let mut add_two = || count += 2; // ERROR: two live mutable borrows of count
+  |                       ^^ ----- second borrow occurs due to use of `count` in closure
+  |                       |
+  |                       second mutable borrow occurs here
+5 |     add_one();
+  |     ------- first borrow later used here
+```
+
+## การคืนค่า Closure
+
+ฟังก์ชันที่คืนค่า closure ไม่สามารถเอ่ยชื่อ concrete type ของ closure ได้ (closure ทุกตัวได้ type ที่ไม่ซ้ำกันซึ่งคอมไพเลอร์สร้างให้) — มันต้องคืนค่าเป็น `impl Fn(...) -> ...` (type ที่เป็นรูปธรรมแต่ไม่มีชื่อหนึ่งตัว ตัดสิน ณ compile time) หรือ `Box<dyn Fn(...) -> ...>` (trait object เมื่อ concrete type ต่างกันจริงๆ เช่น แต่ละ branch คืนค่า closure ต่างชนิดกัน):
+
+```rust
+fn make_adder(base: i32) -> impl Fn(i32) -> i32 {
+    move |x| x + base
+}
+
+fn make_multiplier(factor: i32) -> Box<dyn Fn(i32) -> i32> {
+    Box::new(move |x| x * factor)
+}
+
+fn main() {
+    let add5 = make_adder(5);
+    println!("add5(10) = {}", add5(10));
+
+    let ops: Vec<Box<dyn Fn(i32) -> i32>> = vec![
+        make_multiplier(2),
+        make_multiplier(3),
+        Box::new(|x| x - 1),
+    ];
+    for op in &ops {
+        println!("op(10) = {}", op(10));
+    }
+}
+```
+
+```text
+add5(10) = 15
+op(10) = 20
+op(10) = 30
+op(10) = 9
+```
+
+`make_adder` คืนค่า closure รูปทรงเดียวกันเสมอ (`move |x| x + base` ตัวเดียว) ดังนั้น `impl Fn(i32) -> i32` — ไม่มีต้นทุนเพิ่ม ไม่ต้อง allocate บน heap ไม่มี vtable — ก็เพียงพอแล้ว `Vec<Box<dyn Fn(i32) -> i32>>` ใน `main` ต้องการ `Box<dyn Fn>` เพราะมันเก็บ concrete closure type ที่*ต่างกัน*ไว้ในที่เดียวกันใน collection เดียว — `impl Trait` ทำแบบนั้นไม่ได้ เพราะมันเอ่ยชื่อ concrete type แค่ตัวเดียวต่อ function signature หนึ่งอัน
+
+## Closure ในฐานะ Iterator Adaptor
+
+iterator adaptor อย่าง `map` และ `filter` รับ closure ได้โดยตรง:
 
 ```rust
 let threshold = 3;
@@ -134,50 +289,119 @@ fn main() {
 
 <Playground code={closuresCode} />
 
-<Callout title="Closure จับ Environment ของตัวเอง; move โอน Ownership เข้า Closure">
-โดยค่าเริ่มต้น Closure ยืมตัวแปรที่จับในระดับขั้นต่ำที่จำเป็น (`Fn` หรือ `FnMut`) Keyword `move` บังคับการโอน Ownership — จำเป็นเมื่อ Closure ต้องมีอายุยาวกว่า Scope ที่กำหนด เช่น เมื่อส่งไปยัง Thread ใหม่หรือ Return จาก Function
+<Callout title="Closure capture environment ของมัน; move ย้าย ownership เข้าไปใน closure">
+โดยค่าเริ่มต้น closure จะ borrow ตัวแปรที่ capture มาในระดับต่ำสุดที่จำเป็น (`Fn` หรือ `FnMut`) keyword `move` บังคับให้ย้าย ownership — จำเป็นเมื่อ closure ต้องมีชีวิตอยู่นานกว่า scope ที่มันถูกสร้างขึ้น เช่น ตอนส่งให้ thread ใหม่ หรือคืนค่าจากฟังก์ชัน
+</Callout>
+
+## แบบจำลองความคิด
+
+closure คือ syntax sugar ของ `struct` ไม่มีชื่อบวก trait impl: คอมไพเลอร์สร้าง struct ที่เก็บตัวแปรที่ capture มาพอดี (ด้วย `&`, `&mut`, หรือ value — แล้วแต่ body ต้องการ) และ implement `Fn`/`FnMut`/`FnOnce` ให้มันตามสิ่งที่การ `call` ทำกับ field เหล่านั้น `Fn`/`FnMut`/`FnOnce` สร้างเป็นลำดับชั้น ไม่ใช่ตัวเลือกสามอันที่ไม่เกี่ยวข้องกัน: closure ที่เป็น `Fn` ทุกตัวก็เป็น `FnMut` และ `FnOnce` ด้วย (คุณเรียกอะไรน้อยครั้งกว่าหรือผ่าน borrow ที่อ่อนกว่าที่มันต้องการได้เสมอ) แต่กลับกันไม่จริง เมื่อคุณเห็น `E0525` ให้อ่านมันว่า "struct ที่ closure นี้สร้างมา implement แค่ trait ที่อ่อนกว่า แต่จุดเรียกต้องการตัวที่แข็งแรงกว่า"
+
+## ข้อแลกเปลี่ยน
+
+`impl Fn(...) -> ...` เป็น return type ไม่มีต้นทุนตอน runtime (คอมไพเลอร์ monomorphize concrete closure type เข้าไปใน caller) แต่ต้องการให้ทุก code path ในฟังก์ชันคืนค่า concrete closure type *เดียวกัน* `Box<dyn Fn(...) -> ...>` มีต้นทุนคือ heap allocation หนึ่งครั้งและ vtable indirection หนึ่งครั้งต่อการเรียก แต่ให้คุณคืนค่า (หรือเก็บใน `Vec` เดียว) closure ที่ต่างกันจริงๆ ได้ การ borrow เป็นค่าเริ่มต้น (`Fn`/`FnMut`) ทำให้ข้อมูลที่ capture มาใช้งานนอก closure ได้ต่อ; `move` สละความยืดหยุ่นนั้นแลกกับ closure ที่มีชีวิตอยู่นานกว่า scope ที่สร้างมันได้
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`move` ทำให้ closure เป็น `FnOnce`"** `move` เปลี่ยนแค่*วิธี*ที่ตัวแปรถูก capture (เป็น value แทนที่จะเป็น reference); มันไม่ได้บอกอะไรเกี่ยวกับวิธีที่ body ของ closure*ใช้*มันต่อ closure แบบ `move` ที่แค่อ่านข้อมูลที่ capture มาก็ยังเป็น `Fn` อยู่ — ตัวอย่าง `E0525` ข้างบนต้องมี `drop(name)` ที่ชัดเจนอยู่ใน body เพื่อให้กลายเป็น `FnOnce` ไม่ใช่แค่ `move` เฉยๆ
+- **"`Fn`, `FnMut`, และ `FnOnce` เป็นสามหมวดที่แยกจากกันและไม่ทับซ้อนกัน ที่ closure หนึ่งตัวสังกัดอยู่"** มันสร้างเป็นลำดับชั้น: closure ทุกตัว implement `FnOnce`; closure ที่ไม่ consume สิ่งที่ capture มาก็ implement `FnMut` ด้วย; ตัวที่ไม่ได้แม้แต่จะ mutate มันก็ implement `Fn` ด้วย closure ที่ "เป็น `Fn`" implement ทั้งสามตัวพร้อมกัน
+- **"เพราะ `increment()` ถูกเรียกไปแล้วครั้งหนึ่ง borrow ของมันต่อ `count` น่าจะจบไปแล้วตอนที่ฉันอ่าน `count` โดยตรง"** Non-lexical lifetimes จบ borrow ที่จุด*ใช้จริง*ครั้งสุดท้าย ไม่ใช่ครั้งแรก — ถ้า closure ถูกเรียกอีกครั้งในภายหลังในฟังก์ชันเดียวกัน borrow นั้นครอบคลุมทั้งช่วง รวมถึงความพยายามใดๆ ที่จะอ่าน `count` โดยตรงระหว่างนั้น (นั่นคือตัวอย่าง `E0502` ข้างบนพอดี)
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างบางครั้งเลือกใช้ `.clone()` กับข้อมูลที่ capture มาโดย closure ที่ส่งให้ `map`/`filter` เพียงเพื่อหลบข้อร้องเรียนของ borrow checker ที่มันวินิจฉัยไม่ครบ แม้ว่า closure จะแค่ต้องอ่านข้อมูลผ่าน reference เท่านั้น
+
+<SpotTheBug code={`fn tag_all(prefix: String, items: &[String]) -> Vec<String> {
+    items
+        .iter()
+        .map(|item| format!("{}{}", prefix.clone(), item))
+        .collect()
+}
+`}>
+`prefix.clone()` รันหนึ่งครั้งต่อ element ของ `items` โดย clone `String` เดิมซ้ำแล้วซ้ำเล่าภายใน closure แม้ว่า closure จะแค่*อ่าน* `prefix` เท่านั้น — มันไม่เคยต้องการเป็นเจ้าของสำเนาใหม่เลย `format!("{}{}", prefix, item)` borrow `prefix` แบบ immutable แทน (closure capture ด้วย shared reference เป็นค่าเริ่มต้นเมื่อ body แค่อ่านเท่านั้น) และ closure นี้เรียกได้กี่ครั้งก็ได้โดยไม่ต้อง clone เลย `.clone()` ตรงนี้ไม่ได้แก้ borrow-checker error จริงๆ — มันเป็นปฏิกิริยาสะท้อนที่ใช้ไปโดยไม่ตรวจสอบว่าจำเป็นต้องมี ownership จริงหรือเปล่า
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`Fn`/`FnMut`/`FnOnce` ถูก infer จากสิ่งที่ body ของ closure ทำกับแต่ละตัวแปรที่ capture มาจริงๆ ไม่ใช่จาก `move` หรือเจตนาของคุณ — อ่าน `E0525`/`E0502`/`E0499` ว่าเป็นคอมไพเลอร์ที่ชี้ไปยังบรรทัดที่แน่นอนซึ่งทำให้ closure ได้ trait ที่อ่อนกว่าที่จุดเรียกต้องการ และเลือกใช้ `impl Fn` (concrete type เดียวกันทุกที่) ก่อน `Box<dyn Fn>` (closure ที่ต่างกันจริงๆ แลกกับ allocation เพิ่มหนึ่งครั้ง)
 </Callout>
 
 export const quizClosures = [
     {
-        q: "Closure Trait ใดอธิบาย Closure ที่ยืมตัวแปรที่จับแบบ Mutable?",
+        q: "closure trait ไหนอธิบาย closure ที่ borrow ตัวแปรที่ capture มาแบบ mutable?",
         options: [
             "Fn",
             "FnMut",
             "FnOnce",
             "FnCapture"
         ],
-        answer: 1
+        answer: 1,
+        explain: "FnMut อธิบาย closure ที่ borrow อย่างน้อยหนึ่งตัวแปรที่ capture มาแบบ mutable (&mut T) แต่ไม่เคย consume มัน จึงยังเรียกซ้ำได้"
     },
     {
-        q: "ทำไมต้องเรียก drop(increment) ก่อน println!(\"{}\", count) ในตัวอย่าง FnMut?",
+        q: "ทำไม drop(increment) ต้องถูกเรียกก่อน println!(\"{}\", count) ในตัวอย่าง FnMut?",
         options: [
-            "drop คืนหน่วยความจำของตัวแปร count",
-            "increment ถือ Mutable Borrow ของ count; การเรียก drop ปล่อย Borrow นั้นเพื่อให้ทำ Immutable Borrow ได้",
-            "println! ต้องการ Exclusive Ownership ของ Argument",
-            "FnMut Closure ใช้ไม่ได้หลังจากถูกเรียก"
+            "drop ปล่อยตัวแปร count จากหน่วยความจำ",
+            "increment ถือ mutable borrow ของ count; การเรียก drop จะปล่อยมัน เพื่อให้ immutable borrow ทำได้",
+            "println! ต้องการ exclusive ownership ของ argument ของมัน",
+            "closure แบบ FnMut ใช้งานต่อไม่ได้หลังถูกเรียก"
         ],
-        answer: 1
+        answer: 1,
+        explain: "borrow &mut count ของ closure ยังมีชีวิตอยู่ตราบเท่าที่ closure อาจถูกเรียกอีก; drop(increment) จบอายุของ closure ก่อนเวลา ปล่อย borrow นั้น ทำให้อ่าน count โดยตรงได้"
     },
     {
-        q: "Keyword move ทำอะไรกับ Closure?",
+        q: "keyword move ทำอะไรกับ closure?",
         options: [
-            "ทำให้ Closure เรียกได้แค่ครั้งเดียว",
-            "ป้องกัน Closure จากการจับตัวแปรใดๆ",
-            "บังคับ Closure ให้รับ Ownership ของตัวแปรที่จับทั้งหมด",
-            "Copy ตัวแปรที่จับทั้งหมดด้วย Value"
+            "มันทำให้ closure เรียกได้แค่ครั้งเดียว",
+            "มันป้องกันไม่ให้ closure capture ตัวแปรใดๆ",
+            "มันบังคับให้ closure เอา ownership ของตัวแปรที่ capture มาทั้งหมด",
+            "มัน copy ตัวแปรที่ capture มาทั้งหมดโดย value"
         ],
-        answer: 2
+        answer: 2,
+        explain: "move เปลี่ยนแค่วิธี capture ตัวแปร (เป็น value แทน reference) — มันไม่ได้กำหนดเองว่า closure จะจบลงเป็น Fn, FnMut, หรือ FnOnce"
     },
     {
-        q: "Closure ที่แค่อ่านตัวแปรที่จับโดยไม่แก้ไข Implement Trait ใดบ้าง?",
+        q: "closure ที่แค่อ่านตัวแปรที่ capture มาโดยไม่แก้ไข implement trait ไหน?",
         options: [
-            "FnOnce เท่านั้น",
+            "แค่ FnOnce",
             "FnOnce และ FnMut",
-            "Fn, FnMut และ FnOnce — ทั้งสามแบบ",
-            "Fn เท่านั้น"
+            "Fn, FnMut, และ FnOnce — ทั้งสามตัว",
+            "แค่ Fn"
         ],
-        answer: 2
+        answer: 2,
+        explain: "Fn/FnMut/FnOnce สร้างเป็นลำดับชั้น: closure ที่แค่อ่านสิ่งที่ capture มาตอบสนองการรับประกันที่แข็งแรงที่สุด (Fn) และ Fn ก็หมายความว่า FnMut และ FnOnce ด้วย"
+    },
+    {
+        q: "โค้ดนี้คอมไพล์ไม่ผ่านด้วยอะไร?\n```rust\nfn call_twice<F: Fn()>(f: F) {\n    f();\n    f();\n}\nfn main() {\n    let s = String::from(\"hi\");\n    let c = move || { println!(\"{}\", s); drop(s); };\n    call_twice(c);\n}\n```",
+        options: [
+            "error[E0382]: use of moved value: `s`",
+            "error[E0525]: expected a closure that implements the `Fn` trait, but this closure only implements `FnOnce`",
+            "คอมไพล์ผ่านและพิมพ์ \"hi\" สองครั้ง",
+            "error[E0499]: cannot borrow as mutable more than once"
+        ],
+        answer: 1,
+        explain: "closure เรียก drop(s) ซึ่ง consume String ที่ capture มา — นั่นทำให้มันเป็น FnOnce ไม่ใช่ Fn call_twice ต้องการ F: Fn() ดังนั้นการส่ง closure ที่เป็นแค่ FnOnce จึงเป็น E0525"
+    },
+    {
+        q: "ทำไมฟังก์ชันที่คืนค่า concrete closure ต่างกันในแต่ละ branch จึงต้องการ Box<dyn Fn(...)> แทน impl Fn(...)?",
+        options: [
+            "impl Fn ไม่สามารถ capture ตัวแปรใดๆ จาก environment ได้",
+            "impl Fn เอ่ยชื่อ concrete type แค่ตัวเดียวต่อ function signature แต่ branch ที่ต่างกันสร้าง concrete closure type ที่ต่างกัน; Box<dyn Fn> ลบความต่างนั้นซ่อนไว้หลัง trait object type เดียว",
+            "Box<dyn Fn> จำเป็นทุกครั้งที่ closure ใช้ move",
+            "impl Fn ทำงานได้แค่กับ closure ที่ไม่มี parameter"
+        ],
+        answer: 1,
+        explain: "ตำแหน่ง return ของ impl Trait ผูกมัดกับ concrete type เดียวที่ตัดสิน ณ compile time เมื่อ branch ต่างๆ จะคืนค่า closure type ที่ต่างกันจริงๆ มีแค่ trait object (Box<dyn Fn>) เท่านั้นที่รวมพวกมันเข้าเป็น return type เดียวได้"
+    },
+    {
+        q: "ใน `items.iter().map(|item| format!(\"{}{}\", prefix.clone(), item))` ทำไม `prefix.clone()` มักจะไม่จำเป็น?",
+        options: [
+            "String ไม่ implement Clone ดังนั้นโค้ดนี้จะคอมไพล์ไม่ผ่าน",
+            "closure แค่อ่าน prefix เพื่อ format มัน — การ borrow prefix ด้วย reference ก็ทำงานได้ดีเท่ากันและหลีกเลี่ยงการ clone ต่อ element",
+            "map() ต้องการให้ค่าที่ capture มาทั้งหมดถูก clone ก่อนใช้",
+            "clone() จำเป็นทุกครั้งที่ String ข้าม closure boundary"
+        ],
+        answer: 1,
+        explain: "closure ไม่เคยต้องเป็นเจ้าของ prefix สำเนาใหม่เลย — มันแค่อ่านมันเพื่อสร้าง String การ capture prefix ด้วย shared reference (ค่าเริ่มต้นเมื่อ body แค่อ่าน) หลีกเลี่ยงการ clone ในทุก element"
     }
 ];
 

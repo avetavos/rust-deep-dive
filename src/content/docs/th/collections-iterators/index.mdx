@@ -1,6 +1,6 @@
 ---
-title: 'Collections & Iterators'
-description: 'ภาพรวมของ Collections ในไลบรารีมาตรฐานของ Rust และระบบ Iterator — สองเสาหลักที่ทำให้การจัดการข้อมูลนั้นกระชับและปลอดภัย'
+title: 'Collections และ Iterators'
+description: 'ภาพรวมของ collection ในไลบรารีมาตรฐานของ Rust และระบบ iterator — สองเสาหลักที่ทำให้การจัดการข้อมูลทั้งกระชับและปลอดภัย'
 sidebar:
   order: 1
 ---
@@ -9,32 +9,34 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## โมดูลนี้ครอบคลุมอะไรบ้าง
 
-Rust มาพร้อมกับชุด Collections ในไลบรารีมาตรฐานที่ทรงพลัง และระบบ Iterator แบบ Lazy ที่มีต้นทุนเป็นศูนย์ ทั้งสองสิ่งนี้ช่วยให้คุณจัดเก็บ แปลง และประมวลผลข้อมูลได้โดยไม่ต้องเขียน Loop ด้วยตนเองหรือจัดสรรหน่วยความจำโดยไม่จำเป็น
+Rust มาพร้อมชุด collection ของไลบรารีมาตรฐานที่ทรงพลัง และระบบ iterator ที่ lazy และไม่มีต้นทุนเพิ่ม (zero-cost) เมื่อรวมกันแล้วมันให้คุณเก็บ แปลง และบริโภคข้อมูลได้โดยไม่ต้องเขียน loop มือหรือ allocate โดยไม่จำเป็น
 
-โมดูลนี้แบ่งออกเป็นห้าบทเรียนที่มีโฟกัสชัดเจน:
+โมดูลนี้พาไปทีละบทใน 5 บท:
 
-| บทเรียน | หัวข้อ |
+| บท | หัวข้อ |
 |--------|-------|
-| `Vec<T>` & `String` | Sequence ที่ขยายได้และข้อความที่เป็นเจ้าของ |
-| `HashMap<K, V>` | การค้นหาด้วย Key พร้อม Entry API |
-| Iterators | Chain แบบ Lazy: `map`, `filter`, `collect`, `fold` |
-| Closures | การจับ Environment; `Fn` / `FnMut` / `FnOnce` |
+| `Vec<T>` & `String` | ลำดับที่ขยายได้และข้อความที่เป็นเจ้าของ |
+| `HashMap<K, V>` | การค้นหาแบบ key-value ด้วย entry API |
+| Iterators | chain แบบ lazy: `map`, `filter`, `collect`, `fold` |
+| Closures | การ capture environment; `Fn` / `FnMut` / `FnOnce` |
 
-## Collections หลักทั้งสี่
+## Collection หลักทั้งสี่
 
-Collections ที่ใช้มากที่สุดใน Rust และเมื่อไหรควรเลือกใช้แต่ละอัน:
+collection ที่ใช้บ่อยที่สุดของ Rust และเวลาที่ควรเลือกใช้แต่ละตัว:
 
-- **`Vec<T>`** — Array บน Heap แบบ Contiguous ที่เรียงลำดับได้ ใช้เมื่อต้องการเข้าถึงด้วย Index หรือต้องการ List ที่ขยายได้
-- **`String`** — ข้อความ UTF-8 ที่เป็นเจ้าของ ใช้เมื่อต้องสร้างหรือแก้ไขข้อความ ณ Runtime
-- **`HashMap<K, V>`** — Hash Table ที่ Map Key ไปยัง Value ใช้เมื่อต้องการค้นหาอย่างรวดเร็วด้วย Key
-- **`HashSet<T>`** — ชุดของค่าที่ไม่ซ้ำกัน ใช้เมื่อต้องการตรวจสอบ Membership เพียงอย่างเดียว
+- **`Vec<T>`** — array บน heap ที่เรียงต่อกันและมีลำดับ ใช้เมื่อต้องการเข้าถึงด้วย index หรือ list ที่ขยายได้
+- **`String`** — ข้อความ UTF-8 ที่เป็นเจ้าของและขยายได้ ใช้เมื่อต้องสร้างหรือแก้ไขข้อความตอน runtime
+- **`HashMap<K, V>`** — hash table ที่แม็ป key ไปยัง value ใช้สำหรับการค้นหาด้วย key ที่รวดเร็ว
+- **`HashSet<T>`** — เซตของค่าที่ไม่ซ้ำกัน ใช้เมื่อต้องการแค่ตรวจสอบสมาชิกภาพ
 
 ## ระบบ Iterator
 
-ทุก Collection ใน Rust เปิดเผย Iterator การทำงานของ Iterator นั้นเป็นแบบ **Lazy** — ไม่มีงานใดเกิดขึ้นจนกว่า *Consumer* (เช่น `collect`, `sum`, หรือ `for`) จะดึงค่าผ่าน Chain
+ทุก collection ของ Rust เปิดให้ใช้ iterator ได้ Iterator นั้น **lazy** — ไม่มีงานใดเกิดขึ้นจนกว่า *consumer* (เช่น `collect`, `sum`, หรือ `for`) จะดึงค่าผ่าน chain นั้น
 
 ```rust
 let v = vec![1, 2, 3, 4, 5];
@@ -80,40 +82,149 @@ fn main() {
 
 <Playground code={collectionsOverviewCode} />
 
-<Callout title="Collections อยู่บน Heap; Iterators ไม่มีต้นทุน">
-Collections ทุกตัวในไลบรารีมาตรฐานจัดสรรหน่วยความจำบน Heap และจัดการหน่วยความจำของตัวเอง Iterator Adaptor เช่น `map` และ `filter` จะถูก Compile ลงเป็น Machine Code เดียวกับ Loop ที่เขียนด้วยมือ — ไม่มี Overhead ณ Runtime จากการ Chain
+<Callout title="Collection อยู่บน heap; iterator ไม่มีต้นทุนเพิ่ม">
+collection มาตรฐานทั้งหมด allocate บน heap และจัดการหน่วยความจำของตัวเอง iterator adaptor อย่าง `map` และ `filter` คอมไพล์ออกมาเป็นโค้ดเครื่องเดียวกับ loop ที่เขียนมือ — ไม่มี overhead ตอน runtime สำหรับการต่อ chain เหล่านี้
+</Callout>
+
+## คอมไพเลอร์พูดว่าอะไร: Collection ไม่แปลงชนิดตัวเลขให้อัตโนมัติ
+
+collection เป็น generic เหนือ element type เพียงชนิดเดียวเท่านั้น — `Vec<i32>` เก็บได้แค่ `i32` เท่านั้น แม้แต่ชนิดที่ "ควร" แปลงได้ก็ไม่มีข้อยกเว้น Rust ไม่เคยแทรกการแปลงตัวเลขให้อัตโนมัติ ไม่ว่าจะใน collection หรือที่ไหนก็ตาม:
+
+```rust
+// @expect-error E0308
+fn main() {
+    let mut v: Vec<i32> = vec![1, 2, 3];
+    v.push(3.0);
+    println!("{:?}", v);
+}
+```
+
+```text
+error[E0308]: mismatched types
+    --> src/main.rs:3:12
+     |
+   3 |     v.push(3.0);
+     |       ---- ^^^ expected `i32`, found floating-point number
+     |       |
+     |       arguments to this method are incorrect
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0308`.
+```
+
+วิธีแก้เป็นแบบชัดเจนเสมอ: เลือกชนิดที่คุณต้องการ (`v.push(3)` สำหรับ `i32` หรือประกาศ `Vec<f64>` ถ้า collection ทั้งหมดควรเก็บ float) แล้วแปลงตรงจุดที่ต่อกันด้วย `as` หรือ `From`/`Into` ไม่ใช่หวังว่าคอมไพเลอร์จะเดาให้ อีกสี่บทที่ตามมาจะแสดงรูปแบบที่เฉพาะเจาะจงกว่านี้มาก — key ของ `HashMap` ที่เป็น float ไม่ได้, การเรียก `sum()` ที่คอมไพเลอร์เดา type เองไม่ได้ — นี่คือรูปแบบทั่วไปที่ทุกกรณีมีร่วมกัน: Rust ขอให้ *คุณ* ระบุ type ให้ชัดเจนแทนที่จะเลือกให้อย่างเงียบๆ
+
+## เลือก Collection ให้เหมาะ
+
+<Mermaid code={`flowchart TD
+    A[Need to store values?] --> B{Look up by key?}
+    B -->|Yes| C{Need sorted iteration order?}
+    C -->|Yes| D[BTreeMap / BTreeSet]
+    C -->|No, speed matters more| E[HashMap / HashSet]
+    B -->|No, just a sequence| F{Growable, indexed list?}
+    F -->|Yes| G[Vec]
+    F -->|Owned, mutable text| H[String]`} title="การเลือก collection มาตรฐาน" />
+
+แผนภาพนี้เป็นจุดเริ่มต้น ไม่ใช่กฎตายตัว: `BTreeMap` ก็เป็นตัวเลือกที่ถูกต้องเช่นกันเมื่อคุณต้องการ query แบบ "ขอ key ในช่วงหนึ่ง" ที่คล้าย `Vec` ซึ่ง `HashMap` ทำไม่ได้เลย ไม่ว่าความเร็วจะเป็นอย่างไร
+
+## แบบจำลองความคิด
+
+ให้มองทุก collection เป็น **ownership บวกกับรูปทรง**: `Vec<T>` เป็นเจ้าของช่วงต่อเนื่องของ `T`, `String` เป็นเจ้าของช่วงต่อเนื่องของ byte แบบ UTF-8, `HashMap<K, V>` เป็นเจ้าของ hash table ของคู่ `K` ไปยัง `V` ระบบ iterator เป็นแนวคิดที่*สอง* แยกออกจากกันและวางซ้อนอยู่ด้านบน: มันคือวิธีเดินผ่านรูปทรงเหล่านั้นแบบสม่ำเสมอ ทีละสมาชิก แบบ lazy โดยที่โค้ดที่เดินไม่จำเป็นต้องรู้ว่ากำลังเดินผ่านรูปทรงไหน เมื่อคุณเห็น collection และ iterator เป็นสองเรื่องที่แยกกัน — "ข้อมูลถูกเก็บอย่างไร" กับ "ฉันประมวลผลมันอย่างไร" — ที่เหลือของโมดูลนี้ก็แค่รายละเอียดปลีกย่อยของสองคำถามนี้
+
+## ข้อแลกเปลี่ยน
+
+`Vec<T>` ให้พื้นที่เก็บข้อมูลต่อเนื่องที่เป็นมิตรกับ cache และเข้าถึงด้วย index แบบ O(1) แลกกับการแทรก/ลบตรงกลางที่เป็น O(n) `HashMap<K, V>` ให้การค้นหาด้วย key แบบ O(1) โดยเฉลี่ย แลกกับการไม่มีการรับประกันลำดับและ overhead ของ seed สุ่มต่อ map หนึ่งตัว `BTreeMap<K, V>` ให้การวนซ้ำแบบเรียงลำดับและ query ตามช่วง แลกกับการดำเนินการ O(log n) แทนที่จะเป็น O(1) โดยเฉลี่ยแบบ `HashMap` ไม่มีตัวไหนดีกว่าเสมอไป — ตัวเลือกที่ถูกต้องขึ้นอยู่กับว่าโค้ดของคุณทำการดำเนินการไหน ("วนซ้ำตามลำดับ", "ค้นหาด้วย key", "เข้าถึงด้วยตำแหน่ง") บ่อยที่สุด
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"Collection ของ Rust แปลง element type ให้อัตโนมัติเพื่อความสะดวก เหมือนภาษาที่เป็น dynamically-typed บางภาษา"** ไม่เคยเป็นแบบนั้นเลย — `Vec<i32>` รับได้แค่ `i32` เท่านั้น จบ ทุกการแปลงคือ call ที่คุณต้องเขียนเอง
+- **"Iterator เป็นแค่ syntax ที่สวยกว่าของ loop `for` ไม่มีความแตกต่างเชิงฟังก์ชัน"** มันคอมไพล์ออกมาเป็นโค้ดเดียวกับ loop ที่เขียนมือ แต่มันก็เป็น *ค่า* (value) ด้วย — คุณสร้าง chain ส่งต่อไปได้ แล้วค่อยตัดสินใจทีหลัง (ด้วย `collect`, `sum`, หรือ loop `for`) ว่าจะบริโภคมันยังไง loop `for` เป็นแค่ consumer หนึ่งตัวในหลายๆ ตัว
+- **"`HashSet<T>` ก็แค่ `HashMap<T, ()>` ที่ไม่ต้องคิดอะไรเพิ่ม"** จริงในแง่รายละเอียดการ implement แต่มันก็ยังต้องการ `T: Eq + Hash` ซึ่งเป็นข้อกำหนดเดียวกันเป๊ะๆ กับที่ทำให้คนสับสนกับ key ของ `HashMap` — บท `hashmap` ครอบคลุมเรื่องนี้อย่างลึกซึ้ง
+
+## อ่านโค้ดที่ AI เขียน
+
+AI มักจะเลือก ownership ที่ "กว้างที่สุด" ที่ฟังก์ชันจะรับได้ — `Vec<String>` — แม้ว่าฟังก์ชันจะแค่อ่านข้อมูล ไม่เคยเพิ่มหรือแก้ไขมันเลย นั่นบังคับให้ผู้เรียกทุกคนต้องย้าย `Vec<String>` ที่เป็นเจ้าของเข้ามา หรือไม่ก็ต้องเสียค่า clone ทั้งก้อนแค่เพื่อให้ตรงกับ signature
+
+<SpotTheBug code={`fn print_report(lines: Vec<String>) {
+    for line in &lines {
+        println!("{}", line);
+    }
+}
+`}>
+`print_report` ไม่เคย push เข้า `lines` ไม่เคยลบออกจากมัน ไม่เคยต้องเป็นเจ้าของมันเลย — มันแค่วนซ้ำผ่าน reference เท่านั้น การรับ `Vec<String>` แบบ by value บังคับให้ผู้เรียกทุกคนต้องสละ ownership (หรือ `.clone()` ทั้ง `Vec<String>` แค่เพื่อเก็บสำเนาของตัวเองไว้) วิธีแก้คือ borrow แทน: `fn print_report(lines: &[String])` (หรือ `&[&str]` ถ้าผู้เรียกมี string slice อยู่แล้ว) รับมุมมองแบบ borrow โดยไม่ต้องเรียกร้อง ownership เลย และยังใช้กับ `&some_vec` ได้ในทุกจุดที่เรียก
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+collection คือ "ownership บวกกับรูปทรง" และ iterator คือวิธีเดินผ่านรูปทรงเหล่านั้นแบบ lazy และสม่ำเสมอ — เลือกรูปทรงตามการดำเนินการ (index, ค้นหาด้วย key, ช่วงที่เรียงลำดับ) ที่โค้ดของคุณทำบ่อยที่สุด และอย่าคาดหวังว่าคอมไพเลอร์จะแปลง element type ให้คุณ
 </Callout>
 
 export const quizCollectionsIndex = [
     {
-        q: "คุณควรเลือก Collection ใดสำหรับการค้นหาอย่างรวดเร็วด้วย String Key?",
+        q: "คุณจะเลือก collection ไหนสำหรับการค้นหาที่รวดเร็วด้วย key แบบ String?",
         options: [
             "Vec<T>",
             "HashMap<K, V>",
             "HashSet<T>",
             "String"
         ],
-        answer: 1
+        answer: 1,
+        explain: "HashMap<K, V> ถูกสร้างมาเฉพาะสำหรับการค้นหาด้วย key แบบ O(1) โดยเฉลี่ย; Vec ต้องสแกนแบบเชิงเส้น และ HashSet ไม่มี value ที่เชื่อมโยง"
     },
     {
-        q: "Iterator Adaptor เช่น map หรือ filter ทำงานจริงเมื่อใด?",
+        q: "iterator adaptor (เช่น map หรือ filter) จะรันงานจริงเมื่อไร?",
         options: [
-            "ทันทีที่เรียก Method ของ Adaptor",
-            "เฉพาะเมื่อ Consumer เช่น collect หรือ sum ขับเคลื่อน Chain",
-            "เมื่อ Iterator หลุด Scope",
-            "เมื่อโปรแกรมสิ้นสุดการทำงาน"
+            "ทันทีที่เรียก method ของ adaptor",
+            "เฉพาะเมื่อ consumer อย่าง collect หรือ sum ขับเคลื่อน chain",
+            "เมื่อ iterator ออกจาก scope",
+            "เมื่อโปรแกรมจบการทำงาน"
         ],
-        answer: 1
+        answer: 1,
+        explain: "adaptor แค่สร้างคำอธิบายของการแปลงเท่านั้น ไม่มี element ไหนถูกประมวลผลจริงจนกว่า consumer (collect, sum, fold, loop for, ...) จะดึงค่าผ่านทั้ง chain"
     },
     {
-        q: "วิธีที่ถูกต้องในการ Iterate HashMap เพื่อให้ได้ผลลัพธ์ที่มี Order แน่นอนคืออะไร?",
+        q: "วิธีที่ idiomatic ในการวนซ้ำ HashMap เพื่อให้ได้ลำดับ output ที่แน่นอนคืออะไร?",
         options: [
-            "HashMap รับประกัน Order ตาม Insertion ไม่ต้อง Sort",
-            "เก็บ Key ลงใน Vec แล้ว Sort จากนั้น Iterate ผ่าน Key ที่ Sort แล้ว",
+            "HashMap รับประกันลำดับการ insert อยู่แล้ว จึงไม่ต้อง sort",
+            "เก็บ key เข้า Vec แล้ว sort จากนั้นวนซ้ำ key ที่ sort แล้ว",
             "ใช้ iter_mut() แทน iter()",
-            "ส่ง Comparator ให้กับ HashMap::new()"
+            "ส่ง comparator ให้ HashMap::new()"
         ],
-        answer: 1
+        answer: 1,
+        explain: "HashMap ไม่มีการรับประกันลำดับใดๆ เลย — การ sort key เองอย่างชัดเจน (หรือเปลี่ยนไปใช้ BTreeMap) เป็นทางเดียวที่จะได้ลำดับที่คงที่"
+    },
+    {
+        q: "โปรแกรมนี้ทำอะไร?\n```rust\nfn main() {\n    let mut v: Vec<i32> = vec![1, 2, 3];\n    v.push(3.0);\n}\n```",
+        options: [
+            "คอมไพล์ผ่านและพิมพ์ [1, 2, 3, 3]",
+            "คอมไพล์ไม่ผ่านด้วย error[E0308]: mismatched types",
+            "คอมไพล์ผ่านและตัดทอน 3.0 ให้เป็น 3 อย่างเงียบๆ",
+            "panic ตอน runtime ด้วย type mismatch panic"
+        ],
+        answer: 1,
+        explain: "Vec<i32> รับได้แค่ค่า i32 เท่านั้น Rust ไม่แปลงตัวเลขให้อัตโนมัติ ดังนั้นการ push floating-point literal จึงเป็น type error ตอน compile time (E0308) ไม่ใช่ปัญหาตอน runtime"
+    },
+    {
+        q: "BTreeMap เพิ่มข้อกำหนดอะไรเหนือ HashMap เพื่อแลกกับการวนซ้ำแบบเรียงลำดับ?",
+        options: [
+            "key ต้อง implement Eq + Hash เหมือน HashMap เป๊ะๆ",
+            "key ต้อง implement Ord และการดำเนินการกลายเป็น O(log n) แทน O(1) โดยเฉลี่ย",
+            "value ต้อง implement Clone",
+            "BTreeMap ไม่มีข้อกำหนดเพิ่มเลย — มันคือการอัปเกรดที่ดีกว่า HashMap เสมอ"
+        ],
+        answer: 1,
+        explain: "BTreeMap ต้องการ Ord บน key เพื่อรักษาลำดับที่เรียงแล้ว และการดำเนินการมีต้นทุน O(log n) แทนที่จะเป็น O(1) โดยเฉลี่ยของ HashMap — เป็นข้อแลกเปลี่ยนจริง ไม่ใช่การอัปเกรดฟรี"
+    },
+    {
+        q: "ทำไม `fn print_report(lines: Vec<String>)` มักจะเป็นกลิ่นโค้ดที่ไม่ดีเมื่อฟังก์ชันแค่อ่าน `lines`?",
+        options: [
+            "Vec<String> ไม่สามารถวนซ้ำแบบ reference ได้",
+            "มันบังคับให้ผู้เรียกทุกคนต้องสละ ownership หรือ clone ทั้ง Vec แค่เพื่อเรียกฟังก์ชันที่อ่านอย่างเดียว",
+            "String ไม่ implement Display ทำให้ println! ล้มเหลว",
+            "Rust บังคับให้ทุก function parameter ต้องเป็นแบบ borrow"
+        ],
+        answer: 1,
+        explain: "การรับ ownership (Vec<String>) สำหรับฟังก์ชันที่ไม่เคยแก้ไขหรือเก็บข้อมูลเลย เป็นการจำกัดผู้เรียกโดยไม่จำเป็น การ borrow (&[String] หรือ &[&str]) อ่านข้อมูลเดียวกันได้โดยไม่ต้องเรียกร้อง ownership"
     }
 ];
 

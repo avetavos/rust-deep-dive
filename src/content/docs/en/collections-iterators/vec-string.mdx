@@ -1,6 +1,6 @@
 ---
 title: 'Vec and String'
-description: 'Vec<T> is a growable heap array; String is owned, growable UTF-8 text. Learn push, pop, indexing, iteration, and how String relates to &str.'
+description: 'Vec<T> is a growable heap array; String is owned, growable UTF-8 text. Learn capacity, growth, push/pop, iteration by value/ref/mut, and how String relates to &str.'
 sidebar:
   order: 2
 ---
@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## `Vec<T>` — Growable Heap Array
 
@@ -32,19 +34,80 @@ let safe = v.get(100);            // returns Option<&T> — None if out of bound
 
 Prefer `.get(i)` when the index might be out of range so you handle the `None` case instead of panicking.
 
-### Iterating Over a Vec
+## Capacity and Growth, Measured
+
+A `Vec<T>` tracks two numbers separately: `len()` (how many elements it currently holds) and `capacity()` (how many elements it can hold before it must allocate a bigger buffer). `Vec::with_capacity(n)` pre-allocates room for `n` elements up front — useful when you know roughly how big the `Vec` will get and want to avoid repeated reallocation.
+
+<Mermaid code={`flowchart LR
+    A[push exceeds capacity] --> B[allocate a new, larger buffer]
+    B --> C[copy every existing element into it]
+    C --> D[free the old buffer]
+    D --> E[push the new element]`} title="What happens when a Vec outgrows its capacity" />
 
 ```rust
-let nums = vec![1, 2, 3];
-
-for n in &nums {                  // borrow each element as &i32
-    println!("{}", n);
+fn main() {
+    let mut v: Vec<i32> = Vec::with_capacity(2);
+    println!("start: len={} cap={}", v.len(), v.capacity());
+    for i in 0..6 {
+        v.push(i);
+        println!("after push {}: len={} cap={}", i, v.len(), v.capacity());
+    }
+    v.shrink_to_fit();
+    println!("after shrink_to_fit: len={} cap={}", v.len(), v.capacity());
 }
-
-// nums is still valid after the loop because we only borrowed it
 ```
 
-Using `&nums` borrows the vector; using `nums` would move it and make it unavailable after the loop.
+This is a real, verified run — not the documented API contract (the standard library does not promise a specific growth factor), but the actual behavior of this toolchain:
+
+```text
+start: len=0 cap=2
+after push 0: len=1 cap=2
+after push 1: len=2 cap=2
+after push 2: len=3 cap=4
+after push 3: len=4 cap=4
+after push 4: len=5 cap=8
+after push 5: len=6 cap=8
+after shrink_to_fit: len=6 cap=6
+```
+
+Capacity doubles each time `len()` would exceed it — 2 → 4 → 8 — so pushing one element past capacity is *amortized* O(1): most pushes are free, and the occasional reallocation-and-copy is spread out over all the pushes that led up to it. `shrink_to_fit()` releases the unused slack (`cap` 8 → 6) once you know the `Vec` will not grow again.
+
+## Iterating a Vec: by Value, by Reference, by Mutable Reference
+
+The same loop body reads very differently depending on what you iterate over:
+
+```rust
+fn main() {
+    let v = vec![String::from("a"), String::from("b"), String::from("c")];
+
+    // by shared reference (&v): borrows, v still valid after
+    for s in &v {
+        print!("{} ", s);
+    }
+    println!("| still valid, len={}", v.len());
+
+    // by mutable reference (&mut v): borrows mutably, mutate elements in place
+    let mut nums = vec![1, 2, 3];
+    for n in &mut nums {
+        *n *= 10;
+    }
+    println!("{:?}", nums);
+
+    // by value (v): moves the Vec, v cannot be used after this loop
+    for s in v {
+        print!("{} ", s);
+    }
+    println!("(v moved)");
+}
+```
+
+```text
+a b c | still valid, len=3
+[10, 20, 30]
+a b c (v moved)
+```
+
+`for s in &v` borrows each element as `&T`; the `Vec` is untouched and usable afterward. `for n in &mut v` borrows each element as `&mut T`, so `*n *= 10` mutates the original `Vec` in place. `for s in v` calls `v.into_iter()` implicitly, which takes ownership of the `Vec` and yields owned `T` values — after this loop, `v` no longer exists. Reach for `&v` by default; use `&mut v` only when you need to mutate elements in place; use `v` only when you are done with the `Vec` and want its elements moved out.
 
 ## `String` — Owned, Growable Text
 
@@ -78,7 +141,32 @@ shout(&owned);          // &String coerces to &str
 shout("world");         // string literal is already &str
 ```
 
-### `len()` Is Bytes, Not Characters
+### The Same Smell, One Type Over: `Vec<String>` vs `&[String]` / `&[&str]`
+
+The `String`-vs-`&str` decision above has a direct sibling one layer up the type: a function parameter of `Vec<String>` forces every caller to hand over ownership (or `.clone()` the whole `Vec`) even when the function only reads the elements. `&[String]` (or `&[&str]` if callers already have string slices) borrows instead, and still accepts `&some_vec` at the call site because `Vec<String>` derefs to `&[String]`:
+
+```rust
+fn print_lines_bad(lines: Vec<String>) {
+    for line in &lines {
+        println!("{}", line);
+    }
+}
+
+fn print_lines_good(lines: &[String]) {
+    for line in lines {
+        println!("{}", line);
+    }
+}
+
+fn main() {
+    let owned = vec![String::from("a"), String::from("b")];
+    print_lines_good(&owned);
+    println!("owned still usable: {:?}", owned);
+    print_lines_bad(owned); // must move — cannot reuse afterward
+}
+```
+
+## `len()` Is Bytes, Not Characters
 
 `String` is UTF-8, so `.len()` returns the number of **bytes**, not the number of characters. For ASCII text the two happen to match, which hides the difference until you meet multi-byte text — every Thai character below is 3 bytes:
 
@@ -129,6 +217,40 @@ fn main() {
 }
 ```
 
+## Index Loop vs Iterator
+
+An index loop (`for i in 0..v.len() { ... v[i] ... }`) is what most languages without a first-class iterator protocol teach you to reach for. In Rust it is almost always the wrong default: it re-checks bounds on every `v[i]`, obscures the intent ("walk every element" becomes "count from 0 to len, then index"), and clippy calls it out by name:
+
+```rust
+fn main() {
+    let v = vec![10, 20, 30];
+    let mut total = 0;
+    for i in 0..v.len() {
+        total += v[i];
+    }
+    println!("{}", total);
+}
+```
+
+```text
+$ cargo clippy
+warning: the loop variable `i` is only used to index `v`
+ --> src/main.rs:4:14
+  |
+4 |     for i in 0..v.len() {
+  |              ^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#needless_range_loop
+  = note: `#[warn(clippy::needless_range_loop)]` on by default
+help: consider using an iterator
+  |
+4 -     for i in 0..v.len() {
+4 +     for <item> in &v {
+  |
+```
+
+`clippy::needless_range_loop` fires whenever the loop variable is used only to index the same collection — the fix is always `for item in &v` (or `.iter().sum()` here specifically), which the compiler can bounds-check once instead of once per access, and which reads as "for every item" instead of "for every index into this specific Vec".
+
 export const vecStringCode = `fn main() {
     // Vec<i32> basics
     let mut nums: Vec<i32> = Vec::new();
@@ -167,6 +289,39 @@ export const vecStringCode = `fn main() {
 `Vec<T>` allocates its elements on the heap. When a `Vec<T>` is dropped, all its elements are dropped too. Iterating with `&v` borrows the elements; iterating with `v` consumes (moves) the vector. Prefer `&v` when you still need the vector after the loop.
 </Callout>
 
+## Mental Model
+
+A `Vec<T>` is three words on the stack — a pointer, a length, and a capacity — pointing at a single contiguous buffer on the heap. `len` is how much of that buffer is "live"; `capacity` is how much is actually allocated. Every push either writes into already-allocated slack (cheap) or triggers "allocate bigger, copy everything, free the old buffer" (expensive, but rare because capacity doubles). A `String` is the exact same three-word shape, specialized to hold UTF-8 bytes instead of an arbitrary `T` — which is why `.len()` counts bytes: it is reading the same field a `Vec<u8>` would report.
+
+## Trade-offs
+
+`Vec::with_capacity(n)` trades an up-front allocation for avoiding N-ish reallocations later — worth it whenever you know (or can estimate) the final size before the loop that fills it. `shrink_to_fit()` trades a possible reallocation now for a smaller long-term memory footprint — worth it for a `Vec` you are about to store for a long time, not for one you are about to grow again. Byte indexing into a `String` (`&s[a..b]`) is the fastest possible slice operation (no scanning), but it pushes the "did I land on a character boundary" responsibility entirely onto you; `chars()`/`char_indices()` do that scanning for you at the cost of walking the string.
+
+## Common Misconceptions
+
+- **"`Vec::new()` and `Vec::with_capacity(0)` behave differently."** They don't — both start with zero capacity and allocate on the first push; `with_capacity` only matters when you pass a number greater than zero.
+- **"`.len()` on a `String` counts characters, since Rust strings are Unicode-aware."** It counts bytes. Rust strings are UTF-8-aware, which is precisely why `.len()` must report bytes — a single "character" position doesn't correspond to a fixed byte width.
+- **"An index loop (`for i in 0..v.len()`) is more explicit and therefore safer than `for x in &v`."** It is strictly less safe in practice: it is the only style capable of causing a bounds panic from a typo (`v[i + 1]`), and clippy flags it as unnecessary precisely because `for x in &v` bounds-checks nothing because it never computes an out-of-range index in the first place.
+
+## Reading AI-generated Code
+
+AI-generated code defaults to index loops constantly, likely because they are the most common pattern across all the non-Rust code in its training data — but in Rust they are both slower (redundant bounds checks) and a clippy warning waiting to fire.
+
+<SpotTheBug code={`fn sum_all(values: &[i32]) -> i32 {
+    let mut total = 0;
+    for i in 0..values.len() {
+        total += values[i];
+    }
+    total
+}
+`}>
+`i` exists only to compute `values[i]` — the loop never uses the index for anything else. This is exactly the shape `clippy::needless_range_loop` warns about: `total += values[i]` re-derives a bounds-checked access on every iteration for no benefit. The fix is `for v in values { total += v; }`, or simply `values.iter().sum()` — both let the iterator handle traversal and the compiler generate tighter code.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`Vec<T>` and `String` are the same pointer-length-capacity shape underneath — measure capacity instead of guessing, iterate with `&v`/`&mut v`/`v` deliberately instead of defaulting to an index loop, and slice a `String` only at a byte offset you got from `char_indices()`, never one you guessed.
+</Callout>
+
 export const quizVecString = [
     {
         q: "What does Vec::pop() return when the Vec is empty?",
@@ -176,7 +331,8 @@ export const quizVecString = [
             "It returns 0",
             "It returns an empty Vec"
         ],
-        answer: 1
+        answer: 1,
+        explain: "pop() returns Option<T>: Some(last_element) when there is one, None when the Vec is empty — it never panics."
     },
     {
         q: "What is the difference between iterating with &nums versus nums?",
@@ -186,7 +342,8 @@ export const quizVecString = [
             "nums borrows the Vec; &nums moves it",
             "Both consume the Vec and free its memory"
         ],
-        answer: 1
+        answer: 1,
+        explain: "for x in &nums borrows each element by reference and leaves nums usable afterward; for x in nums calls into_iter(), which moves the Vec and its elements."
     },
     {
         q: "Why should function parameters prefer &str over &String?",
@@ -196,7 +353,8 @@ export const quizVecString = [
             "&str accepts both owned String references and string literals via automatic coercion",
             "String does not implement the Display trait"
         ],
-        answer: 2
+        answer: 2,
+        explain: "A &String automatically coerces to &str at the call site, so a &str parameter accepts both &owned_string and a string literal — &String parameters only accept the former."
     },
     {
         q: "Which method should you use instead of v[i] when the index might be out of bounds?",
@@ -206,7 +364,30 @@ export const quizVecString = [
             "v.safe_index(i)",
             "v.try_get(i)"
         ],
-        answer: 1
+        answer: 1,
+        explain: "get(i) returns Option<&T> — Some(&value) when i is in range, None otherwise — instead of panicking like the [] index operator does."
+    },
+    {
+        q: "What do these two runs print, in order?\n```rust\nfn main() {\n    let mut v: Vec<i32> = Vec::with_capacity(2);\n    for i in 0..3 {\n        v.push(i);\n        println!(\"len={} cap={}\", v.len(), v.capacity());\n    }\n}\n```",
+        options: [
+            "len=1 cap=1, len=2 cap=2, len=3 cap=3 — capacity always matches len exactly",
+            "len=1 cap=2, len=2 cap=2, len=3 cap=4 — capacity only grows (by doubling) once len would exceed it",
+            "A compile error, because with_capacity requires an exact final size",
+            "len=1 cap=2, len=2 cap=4, len=3 cap=8 — capacity doubles on every push"
+        ],
+        answer: 1,
+        explain: "Capacity starts at 2 (from with_capacity(2)) and only reallocates (doubling to 4) once len would exceed the current capacity — pushing the 3rd element is the one that triggers growth."
+    },
+    {
+        q: "Why does clippy::needless_range_loop flag `for i in 0..v.len() { total += v[i]; }`?",
+        options: [
+            "Because 0..v.len() allocates a new Vec internally",
+            "Because the loop variable i is used only to index the same collection, which for item in &v expresses more directly and without repeated bounds derivation",
+            "Because it is a syntax error in edition 2024",
+            "Because v.len() is recomputed on every iteration, causing an infinite loop"
+        ],
+        answer: 1,
+        explain: "The lint targets exactly this shape: an index variable whose only use is v[i]. for item in &v (or .iter().sum()) says the same thing more directly and lets the iterator handle bounds internally."
     }
 ];
 
