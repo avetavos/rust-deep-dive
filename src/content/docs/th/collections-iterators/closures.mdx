@@ -16,7 +16,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ```rust
 let multiplier = 3;
-let triple = |x| x * multiplier;    // จับ multiplier จาก Environment
+let triple = |x| x * multiplier;    // captures multiplier from the environment
 println!("{}", triple(7));           // 21
 ```
 
@@ -38,7 +38,7 @@ Rust มี Trait สำหรับ Closure สามแบบที่อธ�
 fn apply<F: Fn(i32) -> i32>(f: F, x: i32) -> i32 { f(x) }
 
 let base = 10;
-let add_base = |x| x + base;    // ยืม base แบบ Immutable
+let add_base = |x| x + base;    // borrows base immutably
 println!("{}", apply(add_base, 5));  // 15
 ```
 
@@ -49,7 +49,7 @@ let mut count = 0;
 let mut increment = || { count += 1; count };
 println!("{}", increment());     // 1
 println!("{}", increment());     // 2
-drop(increment);                  // ปล่อย Mutable Borrow ก่อนอ่าน count
+drop(increment);                  // release the mutable borrow
 println!("count is {}", count);  // 2
 ```
 
@@ -59,9 +59,9 @@ println!("count is {}", count);  // 2
 
 ```rust
 let name = String::from("Rust");
-let greet = || println!("Hello, {}!", name);   // ย้าย name เข้า Closure
-greet();    // name ถูก Consume ที่นี่
-// greet(); // Compile Error — FnOnce เรียกได้แค่ครั้งเดียว
+let greet = || println!("Hello, {}!", name);   // moves name into closure
+greet();    // name is consumed here
+// greet(); // would compile-error — FnOnce can only be called once
 ```
 
 ## Keyword `move`
@@ -70,8 +70,8 @@ greet();    // name ถูก Consume ที่นี่
 
 ```rust
 let message = String::from("hi");
-let say = move || println!("{}", message);  // message ถูกย้ายเข้า say
-// println!("{}", message);  // error — message ถูกย้ายไปแล้ว
+let say = move || println!("{}", message);  // message moved into say
+// println!("{}", message);  // error — message was moved
 say();
 ```
 
@@ -85,7 +85,7 @@ Iterator Adaptor เช่น `map` และ `filter` รับ Closure โด�
 let threshold = 3;
 let big: Vec<i32> = vec![1, 2, 3, 4, 5]
     .iter()
-    .filter(|&&x| x > threshold)   // Closure จับ threshold ด้วย &
+    .filter(|&&x| x > threshold)   // closure captures threshold by &
     .map(|&x| x * 10)
     .collect();
 // [40, 50]

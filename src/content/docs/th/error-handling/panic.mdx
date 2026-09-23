@@ -17,6 +17,7 @@ Panic คือวิธีที่ Rust บอกว่า "สถานกา
 คุณสามารถทริกเกอร์ panic อย่างชัดเจนด้วย macro `panic!`:
 
 ```rust
+// @expect-panic
 fn main() {
     panic!("something went terribly wrong");
 }
@@ -25,6 +26,7 @@ fn main() {
 หลายการดำเนินการมาตรฐานยัง panic โดยอัตโนมัติเมื่อใช้ไม่ถูกต้อง:
 
 ```rust
+// @expect-panic
 fn main() {
     let v = vec![1, 2, 3];
     println!("{}", v[10]); // index out of bounds — panic!
@@ -32,6 +34,7 @@ fn main() {
 ```
 
 ```rust
+// @expect-panic
 fn main() {
     let x: Option<i32> = None;
     let _ = x.unwrap(); // called unwrap() on a None value — panic!

@@ -50,6 +50,46 @@ fn main() {
 }
 ```
 
+### What Happens Without `move`
+
+Drop the `move` keyword and the closure tries to *borrow* `message` instead of owning it. The compiler rejects this: it cannot prove the borrow stays valid for as long as the spawned thread might run.
+
+```rust
+// @expect-error E0373
+use std::thread;
+
+fn main() {
+    let message = String::from("hello");
+    let handle = thread::spawn(|| {
+        println!("{}", message);
+    });
+    handle.join().unwrap();
+}
+```
+
+```text
+error[E0373]: closure may outlive the current function, but it borrows `message`, which is owned by the current function
+ --> src/main.rs:5:32
+  |
+5 |     let handle = thread::spawn(|| {
+  |                                ^^ may outlive borrowed value `message`
+6 |         println!("{}", message);
+  |                        ------- `message` is borrowed here
+  |
+note: function requires argument type to outlive `'static`
+ --> src/main.rs:5:18
+  |
+5 |       let handle = thread::spawn(|| {
+  |  __________________^
+6 | |         println!("{}", message);
+7 | |     });
+  | |______^
+help: to force the closure to take ownership of `message` (and any other referenced variables), use the `move` keyword
+  |
+5 |     let handle = thread::spawn(move || {
+  |                                ++++
+```
+
 ### Sharing State with `Arc<Mutex<T>>`
 
 To share mutable data between multiple threads, wrap it in `Arc<Mutex<T>>`:
@@ -149,6 +189,43 @@ fn main() {
 
 <Playground code={threadsCode} />
 
+### `Rc<T>` Is Not `Send`
+
+`Arc<Mutex<T>>` works across threads because `Arc`'s reference count is atomic. `Rc<T>`'s count is a plain, non-atomic integer — two threads incrementing it at once would race. The compiler catches this at the type level, before any code runs:
+
+```rust
+// @expect-error E0277
+use std::rc::Rc;
+use std::thread;
+
+fn main() {
+    let data = Rc::new(42);
+    let handle = thread::spawn(move || {
+        println!("{}", data);
+    });
+    handle.join().unwrap();
+}
+```
+
+```text
+error[E0277]: `Rc<i32>` cannot be sent between threads safely
+   --> src/main.rs:6:32
+    |
+  6 |       let handle = thread::spawn(move || {
+    |                    ------------- ^------
+    |                    |             |
+    |  __________________|_____________within this `{closure@src/main.rs:6:32: 6:39}`
+    | |                  |
+    | |                  required by a bound introduced by this call
+  7 | |         println!("{}", data);
+  8 | |     });
+    | |_____^ `Rc<i32>` cannot be sent between threads safely
+    |
+    = help: within `{closure@src/main.rs:6:32: 6:39}`, the trait `Send` is not implemented for `Rc<i32>`
+```
+
+Swapping `Rc::new` for `Arc::new` fixes it — `Arc<i32>` is `Send`, so the closure captures a type that is safe to move across the thread boundary.
+
 <Callout title="Send and Sync make data races a compile error">
 Rust's type system enforces thread safety through the `Send` and `Sync` marker traits. `Arc<Mutex<T>>` is `Send` (you can move it to another thread) and `Sync` (you can share a reference to it across threads). If you try to share a `Rc<T>` or `RefCell<T>` across threads, the compiler rejects the code with a clear error — no sanitizers needed, no runtime panics from data races.
 </Callout>
@@ -157,32 +234,32 @@ export const quizThreads = [
     {
         q: "What does JoinHandle::join() do?",
         options: [
-            "Merges two threads into one",
             "Blocks the calling thread until the spawned thread finishes and returns its result",
+            "Merges two threads into one",
             "Kills the spawned thread immediately",
             "Detaches the thread so it runs independently"
         ],
-        answer: 1
+        answer: 0
     },
     {
         q: "Why do thread closures typically use the move keyword?",
         options: [
             "Because closures without move cannot use println!",
-            "Because the thread may outlive the scope where variables were defined, so they must be owned by the thread",
             "Because move makes the closure run faster",
-            "Because move is required by std::thread::spawn for all closures"
+            "Because move is required by std::thread::spawn for all closures",
+            "Because the thread may outlive the scope where variables were defined, so they must be owned by the thread"
         ],
-        answer: 1
+        answer: 3
     },
     {
         q: "What is the role of Arc in Arc<Mutex<T>>?",
         options: [
             "Arc provides the lock that prevents concurrent access",
-            "Arc ensures the value is dropped when the last reference disappears, and is safe to clone across threads",
             "Arc is a deprecated alias for Box",
+            "Arc ensures the value is dropped when the last reference disappears, and is safe to clone across threads",
             "Arc converts the inner type to Send automatically"
         ],
-        answer: 1
+        answer: 2
     },
     {
         q: "Why do we sort results after joining all threads?",

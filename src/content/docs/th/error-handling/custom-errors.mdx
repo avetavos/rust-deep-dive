@@ -38,6 +38,13 @@ trait `std::fmt::Display` ควบคุมข้อความข้อผิ
 ```rust
 use std::fmt;
 
+#[derive(Debug)]
+enum AppError {
+    ParseError(std::num::ParseIntError),
+    NegativeNumber(i32),
+    TooBig(i32),
+}
+
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -54,6 +61,25 @@ impl fmt::Display for AppError {
 เพื่อให้ใช้ได้ทุกที่ที่คาดหวัง `dyn Error` (เช่น ใน `Box<dyn Error>`) ประเภทของคุณต้อง implement `std::error::Error` trait นี้ไม่มีเมธอดที่ต้องการ — การ implement เริ่มต้นเพียงพอสำหรับกรณีส่วนใหญ่ เลือก implement `source()` เพื่อเปิดเผยสาเหตุที่อยู่เบื้องหลัง:
 
 ```rust
+use std::fmt;
+
+#[derive(Debug)]
+enum AppError {
+    ParseError(std::num::ParseIntError),
+    NegativeNumber(i32),
+    TooBig(i32),
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::ParseError(e)     => write!(f, "parse error: {}", e),
+            AppError::NegativeNumber(n) => write!(f, "number is negative: {}", n),
+            AppError::TooBig(n)         => write!(f, "number is too big: {} (max 100)", n),
+        }
+    }
+}
+
 impl std::error::Error for AppError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -69,6 +95,13 @@ impl std::error::Error for AppError {
 การ implement `From<SomeOtherError> for AppError` ให้ตัวดำเนินการ `?` แปลงโดยอัตโนมัติเมื่อเรียกฟังก์ชันที่คืน `SomeOtherError`:
 
 ```rust
+#[derive(Debug)]
+enum AppError {
+    ParseError(std::num::ParseIntError),
+    NegativeNumber(i32),
+    TooBig(i32),
+}
+
 impl From<std::num::ParseIntError> for AppError {
     fn from(e: std::num::ParseIntError) -> Self {
         AppError::ParseError(e)

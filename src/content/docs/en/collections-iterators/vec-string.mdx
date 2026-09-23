@@ -78,6 +78,57 @@ shout(&owned);          // &String coerces to &str
 shout("world");         // string literal is already &str
 ```
 
+### `len()` Is Bytes, Not Characters
+
+`String` is UTF-8, so `.len()` returns the number of **bytes**, not the number of characters. For ASCII text the two happen to match, which hides the difference until you meet multi-byte text — every Thai character below is 3 bytes:
+
+```rust
+fn main() {
+    let s = "สวัสดี";
+    println!("len() = {}", s.len());               // bytes
+    println!("chars().count() = {}", s.chars().count()); // characters
+}
+```
+
+This prints `len() = 18` and `chars().count() = 6` — 6 characters, 18 bytes.
+
+Byte-range slicing (`&s[start..end]`) indexes into that byte buffer directly. If `start` or `end` does not land on a character boundary, Rust panics rather than hand you a half-character:
+
+```rust
+// @expect-panic
+fn main() {
+    let s = "สวัสดี";
+    let bad = &s[..1]; // byte index 1 lands inside the first character
+    println!("{}", bad);
+}
+```
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:4:17:
+end byte index 1 is not a char boundary; it is inside 'ส' (bytes 0..3 of string)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+Reach for one of these instead of guessing at byte offsets:
+
+```rust
+fn main() {
+    let s = "สวัสดี";
+
+    // char_indices() gives you (byte_offset, char) pairs — always on a boundary
+    if let Some((offset, ch)) = s.char_indices().next() {
+        println!("first char '{}' starts at byte {}", ch, offset);
+    }
+
+    // chars().nth(n) gets the nth character without slicing bytes
+    println!("2nd char = {:?}", s.chars().nth(1));
+
+    // is_char_boundary(i) lets you check before you slice
+    println!("is_char_boundary(1) = {}", s.is_char_boundary(1));
+    println!("is_char_boundary(3) = {}", s.is_char_boundary(3));
+}
+```
+
 export const vecStringCode = `fn main() {
     // Vec<i32> basics
     let mut nums: Vec<i32> = Vec::new();

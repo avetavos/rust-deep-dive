@@ -36,38 +36,38 @@ Cargo คือระบบ build อย่างเป็นทางการ�
 ### คำสั่ง Cargo ที่จำเป็น
 
 ```bash
-# สร้างโปรเจกต์ binary ใหม่
+# Create a new binary project
 cargo new my_project
 cd my_project
 
-# สร้าง library crate ใหม่
+# Create a new library crate
 cargo new my_lib --lib
 
-# Build ในโหมด debug (คอมไพล์เร็ว ไม่ optimize)
+# Build in debug mode (fast compile, unoptimized)
 cargo build
 
-# Build ในโหมด release (คอมไพล์ช้า optimize แล้ว)
+# Build in release mode (slow compile, optimized)
 cargo build --release
 
-# Build และรันในขั้นตอนเดียว
+# Build and run in one step
 cargo run
 
-# รันพร้อม argument
+# Run with arguments
 cargo run -- arg1 arg2
 
-# ตรวจสอบ compile error โดยไม่สร้าง binary
+# Check for compile errors without producing a binary
 cargo check
 
-# เพิ่ม dependency
+# Add a dependency
 cargo add serde --features derive
 
-# อัปเดต dependency เป็นเวอร์ชันที่เข้ากันได้ล่าสุด
+# Update dependencies to latest compatible versions
 cargo update
 
-# Format โค้ด
+# Format code
 cargo fmt
 
-# รัน linter
+# Run the linter
 cargo clippy
 ```
 
@@ -89,7 +89,7 @@ tokio       = { version = "1", features = ["full"] }
 anyhow      = "1"
 
 [dev-dependencies]
-# compile เฉพาะสำหรับ test และ benchmark
+# only compiled for tests and benchmarks
 pretty_assertions = "1"
 ```
 
@@ -110,14 +110,14 @@ key `edition` เลือก dialect ของภาษาที่ crate ข�
 การย้าย crate เดิมมี 2 ขั้น และ Cargo ทำให้เกือบหมด:
 
 ```bash
-# 1. แก้โค้ดให้มีความหมายเหมือนกันทั้งสอง edition
+# 1. rewrite the code so it means the same thing under both editions
 cargo fix --edition
 
-# 2. เปลี่ยน edition = "2024" ใน Cargo.toml แล้วยืนยันพฤติกรรม
+# 2. bump edition = "2024" in Cargo.toml, then confirm behaviour
 cargo test
 ```
 
-resolver ของ dependency ก็รู้จัก edition ด้วย: บน `edition = "2024"` Cargo จะเลือกเวอร์ชัน dependency ที่เข้ากับ `rust-version` ที่คุณประกาศไว้ แทนที่จะหยิบตัวใหม่สุดเสมอ
+การ resolve dependency แบบรู้จัก MSRV เป็นกลไกแยกต่างหากของ Cargo ที่ต้อง opt-in เอง — มาจาก field `rust-version` บวกกับ config `resolver.incompatible-rust-versions` (ค่า default คือ `fallback` ตั้งแต่ Cargo 1.84) และ**ไม่เกี่ยวกับ `edition`**เลย เมื่อตั้ง `rust-version` ไว้ พฤติกรรม `fallback` ที่เป็นค่า default จะทำให้ Cargo ข้ามเวอร์ชัน dependency ที่ประกาศ `rust-version` ของตัวเองใหม่กว่าของคุณ แล้วถอยไปใช้เวอร์ชันเก่ากว่าที่เข้ากันได้แทน หากตั้ง `resolver.incompatible-rust-versions = "deny"` จะทำให้กรณีนั้นกลายเป็น error ทันทีแทนที่จะเงียบๆ ลดเวอร์ชันให้
 
 ## Unit Testing ด้วย `#[test]`
 
@@ -161,7 +161,7 @@ pub fn divide(a: f64, b: f64) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::*; // นำ item ของ parent module มาใช้ใน scope
+    use super::*; // bring parent module items into scope
 
     #[test]
     fn test_multiply() {
@@ -190,7 +190,7 @@ mod tests {
 mod tests {
     #[test]
     fn demonstrate_assertions() {
-        // ความเท่ากัน
+        // equality
         assert_eq!(2 + 2, 4);
         assert_ne!(2 + 2, 5);
 
@@ -198,19 +198,41 @@ mod tests {
         assert!(4 > 3);
         assert!(!"hello".is_empty());
 
-        // พร้อม custom message
+        // with custom message
         assert_eq!(1 + 1, 2, "basic arithmetic must hold");
 
-        // panic
-        // ใช้ #[should_panic] เพื่อ assert ว่าฟังก์ชัน panic
+        // panics
+        // use #[should_panic] to assert a function panics
     }
 
     #[test]
     #[should_panic(expected = "divide by zero")]
     fn test_panic() {
-        let _ = 1 / 0; // นี่ panic — test ผ่านเพราะเราคาดหวังมัน
+        let _ = 1 / std::hint::black_box(0); // this panics — test passes because we expect it
     }
 }
+```
+
+literal `1 / 0` ตรงๆ นั้นไปไม่ถึงขั้นรันด้วยซ้ำ: การวิเคราะห์ constant-propagation พิสูจน์ได้ว่าการหารนี้ panic แน่นอน จึงปฏิเสธไม่ compile ให้ เพราะ `unconditional_panic` เป็น lint ที่ deny-by-default `std::hint::black_box` ช่วยซ่อนค่า `0` จากการวิเคราะห์นั้น ทำให้ panic เกิดตอน runtime แทน ซึ่งเป็นสิ่งที่ `#[should_panic]` ต้องการเพื่อทดสอบ
+
+```text
+error: this operation will panic at runtime
+  --> src/main.rs:23:17
+   |
+23 |         let _ = 1 / 0; // this panics — test passes because we expect it
+   |                 ^^^^^ attempt to divide `1_i32` by zero
+   |
+   = note: `#[deny(unconditional_panic)]` on by default
+```
+
+พอแก้แล้ว `cargo test` ก็ compile ผ่านและ test ผ่านจริง:
+
+```text
+running 2 tests
+test tests::demonstrate_assertions ... ok
+test tests::test_panic - should panic ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
 ### Integration Tests
@@ -218,6 +240,7 @@ mod tests {
 ไฟล์ภายใต้ `tests/` คือ integration test ซึ่งทดสอบ public API ของ crate ของคุณในฐานะ consumer ภายนอก
 
 ```rust
+// @skip-verify multi-file: integration test
 // tests/integration_test.rs
 use my_lib::multiply;
 
@@ -250,6 +273,7 @@ cargo test -- --nocapture
 สำหรับ async function ใช้ `#[tokio::test]`:
 
 ```rust
+// @skip-verify crate: tokio
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -15,8 +15,8 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 `Vec<T>` คือ Collection ลำดับที่ใช้งานหลักใน Rust เก็บ Element ของประเภท `T` อย่าง Contiguous บน Heap และปรับขนาดโดยอัตโนมัติเมื่อคุณ Push เกิน Capacity ปัจจุบัน
 
 ```rust
-let mut v: Vec<i32> = Vec::new();     // Vec ว่างเปล่า
-let w = vec![1, 2, 3];               // Macro vec! แบบย่อ
+let mut v: Vec<i32> = Vec::new();     // empty Vec
+let w = vec![1, 2, 3];               // vec! macro shorthand
 ```
 
 ### Push, Pop และ Index
@@ -24,10 +24,10 @@ let w = vec![1, 2, 3];               // Macro vec! แบบย่อ
 ```rust
 let mut v = vec![10, 20, 30];
 
-v.push(40);                       // เพิ่ม Element ท้ายสุด
-let last = v.pop();               // ลบและคืน Element ท้ายสุด → Some(40)
-let first = v[0];                 // Index — Panic ถ้าเกิน Bounds
-let safe = v.get(100);            // คืน Option<&T> — None ถ้าเกิน Bounds
+v.push(40);                       // append an element
+let last = v.pop();               // remove and return the last element → Some(40)
+let first = v[0];                 // index — panics if out of bounds
+let safe = v.get(100);            // returns Option<&T> — None if out of bounds
 ```
 
 ควรใช้ `.get(i)` เมื่อ Index อาจเกิน Range เพื่อจัดการกรณี `None` แทนที่จะ Panic
@@ -37,11 +37,11 @@ let safe = v.get(100);            // คืน Option<&T> — None ถ้าเ�
 ```rust
 let nums = vec![1, 2, 3];
 
-for n in &nums {                  // ยืม Element แต่ละตัวเป็น &i32
+for n in &nums {                  // borrow each element as &i32
     println!("{}", n);
 }
 
-// nums ยังใช้ได้หลัง Loop เพราะเราแค่ยืมมัน
+// nums is still valid after the loop because we only borrowed it
 ```
 
 การใช้ `&nums` ยืม Vector; การใช้ `nums` จะย้าย (Move) และทำให้ใช้ไม่ได้หลัง Loop
@@ -52,9 +52,9 @@ for n in &nums {                  // ยืม Element แต่ละตัว�
 
 ```rust
 let mut s = String::from("hello");
-s.push(' ');                          // Push ตัวอักษรเดียว
-s.push_str("world");                  // ต่อท้าย String Slice
-let combined = s + " again";          // + ย้าย s และต่อท้าย
+s.push(' ');                          // push a single char
+s.push_str("world");                  // append a string slice
+let combined = s + " again";          // + moves s and appends
 ```
 
 ### `String` เทียบกับ `&str`
@@ -74,8 +74,59 @@ fn shout(s: &str) -> String {
 }
 
 let owned = String::from("hello");
-shout(&owned);          // &String ถูก Coerce เป็น &str
-shout("world");         // String Literal เป็น &str อยู่แล้ว
+shout(&owned);          // &String coerces to &str
+shout("world");         // string literal is already &str
+```
+
+### `len()` คือจำนวน Byte ไม่ใช่จำนวนตัวอักษร
+
+`String` เป็น UTF-8 ดังนั้น `.len()` คืนจำนวน **byte** ไม่ใช่จำนวนตัวอักษร สำหรับข้อความ ASCII ตัวเลขทั้งสองจะเท่ากันพอดี ซึ่งซ่อนความแตกต่างไว้จนกว่าจะเจอข้อความหลาย byte — ตัวอักษรไทยแต่ละตัวด้านล่างมี 3 byte:
+
+```rust
+fn main() {
+    let s = "สวัสดี";
+    println!("len() = {}", s.len());               // bytes
+    println!("chars().count() = {}", s.chars().count()); // characters
+}
+```
+
+โค้ดนี้พิมพ์ `len() = 18` และ `chars().count() = 6` — 6 ตัวอักษร 18 byte
+
+การ Slice ด้วย Byte Range (`&s[start..end]`) จะ Index เข้าไปใน Byte Buffer โดยตรง ถ้า `start` หรือ `end` ไม่ตกอยู่บน Character Boundary Rust จะ Panic แทนที่จะยื่นตัวอักษรครึ่งเดียวให้:
+
+```rust
+// @expect-panic
+fn main() {
+    let s = "สวัสดี";
+    let bad = &s[..1]; // byte index 1 lands inside the first character
+    println!("{}", bad);
+}
+```
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:4:17:
+end byte index 1 is not a char boundary; it is inside 'ส' (bytes 0..3 of string)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+ใช้ตัวเลือกเหล่านี้แทนการเดา Byte Offset เอง:
+
+```rust
+fn main() {
+    let s = "สวัสดี";
+
+    // char_indices() gives you (byte_offset, char) pairs — always on a boundary
+    if let Some((offset, ch)) = s.char_indices().next() {
+        println!("first char '{}' starts at byte {}", ch, offset);
+    }
+
+    // chars().nth(n) gets the nth character without slicing bytes
+    println!("2nd char = {:?}", s.chars().nth(1));
+
+    // is_char_boundary(i) lets you check before you slice
+    println!("is_char_boundary(1) = {}", s.is_char_boundary(1));
+    println!("is_char_boundary(3) = {}", s.is_char_boundary(3));
+}
 ```
 
 export const vecStringCode = `fn main() {

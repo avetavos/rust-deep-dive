@@ -14,6 +14,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 Rust's `async`/`.await` syntax lets you write non-blocking code that looks like ordinary sequential code. Under the hood, an `async fn` returns a **Future** — a value that represents a computation that may not have completed yet.
 
 ```rust
+// @skip-verify crate: tokio
 use tokio::time::{sleep, Duration};
 
 async fn fetch_data(id: u32) -> String {
@@ -35,6 +36,7 @@ The `.await` keyword suspends the current async function until the Future it is 
 A `Future<Output = T>` is a trait that represents a value of type `T` that will be available at some point in the future. Calling an `async fn` does not execute the body immediately — it returns a Future. The body only runs when you `.await` it (or poll it via an executor).
 
 ```rust
+// @skip-verify crate: tokio
 // This does nothing yet — just creates a Future
 let fut = fetch_data(42);
 
@@ -49,6 +51,7 @@ This lazy evaluation is why Rust async is zero-cost: futures that are never awai
 To run multiple async tasks at the same time, use `tokio::join!`. It drives all futures concurrently on the same thread (or across worker threads, depending on the runtime configuration).
 
 ```rust
+// @skip-verify crate: tokio
 use tokio::time::{sleep, Duration};
 
 async fn task(name: &str, ms: u64) -> String {
@@ -76,6 +79,7 @@ All three tasks start immediately. `tokio::join!` waits until all three complete
 `tokio::spawn` launches a task onto the tokio thread pool. It returns a `JoinHandle` similar to `std::thread::spawn`.
 
 ```rust
+// @skip-verify crate: tokio
 use tokio::task;
 
 #[tokio::main]
@@ -116,6 +120,7 @@ tokio = { version = "1", features = ["full"] }
 Then annotate your entry point:
 
 ```rust
+// @skip-verify crate: tokio
 #[tokio::main]
 async fn main() {
     // your async code here
@@ -132,42 +137,42 @@ export const quizAsync = [
     {
         q: "What does an async fn return in Rust?",
         options: [
-            "The computed value immediately",
             "A Future that resolves to the return type when awaited",
+            "The computed value immediately",
             "A thread handle",
             "A Result wrapping the return type"
         ],
-        answer: 1
+        answer: 0
     },
     {
         q: "Why does Rust require an external executor like tokio to run async code?",
         options: [
             "Because async is only available on nightly Rust",
-            "Because the standard library does not include a runtime — futures are lazy and need something to poll them",
             "Because tokio provides the async/await syntax",
+            "Because the standard library does not include a runtime — futures are lazy and need something to poll them",
             "Because async fn cannot be called from a regular fn without tokio"
         ],
-        answer: 1
+        answer: 2
     },
     {
         q: "What is the difference between tokio::join! and sequential awaits?",
         options: [
             "join! runs tasks on separate OS threads; sequential awaits do not",
-            "join! drives all futures concurrently; sequential awaits run one at a time",
             "There is no difference — both are equivalent",
-            "join! only works with futures that implement Copy"
+            "join! only works with futures that implement Copy",
+            "join! drives all futures concurrently; sequential awaits run one at a time"
         ],
-        answer: 1
+        answer: 3
     },
     {
         q: "When should you use spawn_blocking instead of a regular tokio::spawn?",
         options: [
             "When the task needs to read from a file",
-            "When the task performs heavy CPU-bound work that would block the async executor thread",
             "When you need more than 8 concurrent tasks",
+            "When the task performs heavy CPU-bound work that would block the async executor thread",
             "spawn_blocking is deprecated — never use it"
         ],
-        answer: 1
+        answer: 2
     }
 ];
 

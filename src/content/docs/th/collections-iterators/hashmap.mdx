@@ -25,15 +25,18 @@ Key ต้อง Implement `Eq` และ `Hash` ประเภท Key ทั�
 ## การ Insert และอ่านค่า
 
 ```rust
+use std::collections::HashMap;
+
+let mut scores: HashMap<String, u32> = HashMap::new();
 scores.insert(String::from("Alice"), 100);
 scores.insert(String::from("Bob"), 85);
 
-// get คืน Option<&V>
+// get returns Option<&V>
 if let Some(score) = scores.get("Alice") {
     println!("Alice: {}", score);
 }
 
-// Index Syntax — Panic ถ้า Key ไม่มี
+// index syntax — panics if key is missing
 let bob_score = scores["Bob"];
 ```
 
@@ -44,10 +47,16 @@ let bob_score = scores["Bob"];
 `entry` API ให้วิธีที่สะอาดในการ Insert ค่าเฉพาะเมื่อ Key ยังไม่มี หลีกเลี่ยงการ Lookup สองครั้ง:
 
 ```rust
-// Insert 70 สำหรับ "Dave" ถ้า "Dave" ยังไม่มีใน Map
+use std::collections::HashMap;
+
+let mut scores: HashMap<String, u32> = HashMap::new();
+scores.insert(String::from("Alice"), 100);
+scores.insert(String::from("Bob"), 85);
+
+// Insert 70 for "Dave" if "Dave" is not yet present
 scores.entry(String::from("Dave")).or_insert(70);
 
-// เพิ่ม Counter — Insert 0 ถ้ายังไม่มี แล้วบวก 1
+// Increment a counter — insert 0 first if absent, then add 1
 let count = scores.entry(String::from("Eve")).or_insert(0);
 *count += 1;
 ```
@@ -59,6 +68,12 @@ let count = scores.entry(String::from("Eve")).or_insert(0);
 `HashMap` **ไม่รับประกัน** Order การ Iterate การรันโปรแกรมเดียวกันสองครั้งอาจให้ Order ต่างกัน เมื่อ Order มีความสำคัญ (Tests, Playground การเรียนรู้, Logging) ให้ Sort Key ก่อน:
 
 ```rust
+use std::collections::HashMap;
+
+let mut scores: HashMap<String, u32> = HashMap::new();
+scores.insert(String::from("Alice"), 100);
+scores.insert(String::from("Bob"), 85);
+
 let mut keys: Vec<&String> = scores.keys().collect();
 keys.sort();
 for k in keys {
@@ -69,6 +84,12 @@ for k in keys {
 ## การลบ Entry
 
 ```rust
+use std::collections::HashMap;
+
+let mut scores: HashMap<String, u32> = HashMap::new();
+scores.insert(String::from("Alice"), 100);
+scores.insert(String::from("Bob"), 85);
+
 scores.remove("Bob");
 println!("Bob present: {}", scores.contains_key("Bob"));
 ```

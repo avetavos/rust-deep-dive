@@ -117,7 +117,7 @@ cargo fix --edition
 cargo test
 ```
 
-The dependency resolver is edition-aware too: on `edition = "2024"` Cargo picks dependency versions compatible with the `rust-version` you declare, instead of always taking the newest.
+MSRV-aware dependency resolution is a separate, opt-in Cargo mechanism — it comes from the `rust-version` field plus the `resolver.incompatible-rust-versions` config (default `fallback` since Cargo 1.84), and is **independent of `edition`**. With `rust-version` set, the default `fallback` behavior makes Cargo skip a dependency version whose own declared `rust-version` is newer than yours, falling back to an older compatible release instead; set `resolver.incompatible-rust-versions = "deny"` to make that situation a hard error rather than a silent downgrade.
 
 ## Unit Testing with `#[test]`
 
@@ -208,9 +208,31 @@ mod tests {
     #[test]
     #[should_panic(expected = "divide by zero")]
     fn test_panic() {
-        let _ = 1 / 0; // this panics — test passes because we expect it
+        let _ = 1 / std::hint::black_box(0); // this panics — test passes because we expect it
     }
 }
+```
+
+A literal `1 / 0` does not even get this far: the constant-propagation pass proves the division always panics and refuses to compile it, since `unconditional_panic` is a deny-by-default lint. `std::hint::black_box` hides the `0` from that analysis so the panic happens at runtime instead, which is what `#[should_panic]` needs to test.
+
+```text
+error: this operation will panic at runtime
+  --> src/main.rs:23:17
+   |
+23 |         let _ = 1 / 0; // this panics — test passes because we expect it
+   |                 ^^^^^ attempt to divide `1_i32` by zero
+   |
+   = note: `#[deny(unconditional_panic)]` on by default
+```
+
+With the fix, `cargo test` compiles and the test passes:
+
+```text
+running 2 tests
+test tests::demonstrate_assertions ... ok
+test tests::test_panic - should panic ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
 ### Integration Tests
@@ -218,6 +240,7 @@ mod tests {
 Files under `tests/` are integration tests. They test your crate's public API as an external consumer would.
 
 ```rust
+// @skip-verify multi-file: integration test
 // tests/integration_test.rs
 use my_lib::multiply;
 
@@ -250,6 +273,7 @@ cargo test -- --nocapture
 For async functions, use `#[tokio::test]`:
 
 ```rust
+// @skip-verify crate: tokio
 #[cfg(test)]
 mod tests {
     use super::*;

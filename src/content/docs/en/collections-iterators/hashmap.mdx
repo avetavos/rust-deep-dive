@@ -25,6 +25,9 @@ Keys must implement `Eq` and `Hash`. Common key types — `String`, `&str`, inte
 ## Inserting and Reading Values
 
 ```rust
+use std::collections::HashMap;
+
+let mut scores: HashMap<String, u32> = HashMap::new();
 scores.insert(String::from("Alice"), 100);
 scores.insert(String::from("Bob"), 85);
 
@@ -44,6 +47,12 @@ Prefer `.get(key)` in production code so you handle the missing-key case gracefu
 The `entry` API provides a clean way to insert a value only if the key is absent, avoiding a double-lookup:
 
 ```rust
+use std::collections::HashMap;
+
+let mut scores: HashMap<String, u32> = HashMap::new();
+scores.insert(String::from("Alice"), 100);
+scores.insert(String::from("Bob"), 85);
+
 // Insert 70 for "Dave" if "Dave" is not yet present
 scores.entry(String::from("Dave")).or_insert(70);
 
@@ -59,6 +68,12 @@ let count = scores.entry(String::from("Eve")).or_insert(0);
 `HashMap` does **not** guarantee any iteration order. Two runs of the same program can yield different orderings. When output order matters (tests, learning playgrounds, logging), sort the keys first:
 
 ```rust
+use std::collections::HashMap;
+
+let mut scores: HashMap<String, u32> = HashMap::new();
+scores.insert(String::from("Alice"), 100);
+scores.insert(String::from("Bob"), 85);
+
 let mut keys: Vec<&String> = scores.keys().collect();
 keys.sort();
 for k in keys {
@@ -69,6 +84,12 @@ for k in keys {
 ## Removing Entries
 
 ```rust
+use std::collections::HashMap;
+
+let mut scores: HashMap<String, u32> = HashMap::new();
+scores.insert(String::from("Alice"), 100);
+scores.insert(String::from("Bob"), 85);
+
 scores.remove("Bob");
 println!("Bob present: {}", scores.contains_key("Bob"));
 ```

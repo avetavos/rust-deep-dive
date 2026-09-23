@@ -25,7 +25,7 @@ fn main() {
 
     tx.send(42).unwrap();
 
-    let value = rx.recv().unwrap(); // บล็อกจนกว่าค่าจะมาถึง
+    let value = rx.recv().unwrap(); // blocks until a value arrives
     println!("Received: {}", value);
 }
 ```
@@ -46,7 +46,7 @@ fn main() {
     thread::spawn(move || {
         let s = String::from("hello from thread");
         tx.send(s).unwrap();
-        // println!("{}", s); // จะไม่คอมไพล์ — s ถูกย้ายเข้า channel แล้ว
+        // println!("{}", s); // would not compile — s was moved into the channel
     });
 
     let received = rx.recv().unwrap();
@@ -67,18 +67,18 @@ fn main() {
     let mut handles = Vec::new();
 
     for i in 0..3 {
-        let tx = tx.clone(); // แต่ละ thread ได้รับ clone ของ sender
+        let tx = tx.clone(); // each thread gets its own sender clone
         handles.push(thread::spawn(move || {
             tx.send(format!("message {}", i)).unwrap();
         }));
     }
-    drop(tx); // drop tx ตัวเดิมเพื่อให้ channel ปิดเมื่อ clone ทั้งหมดหายไป
+    drop(tx); // drop the original tx so the channel closes when all clones are gone
 
     for h in handles {
         h.join().unwrap();
     }
 
-    let mut msgs: Vec<String> = rx.iter().collect(); // รวบรวมจนกว่า channel จะปิด
+    let mut msgs: Vec<String> = rx.iter().collect(); // collect until channel closes
     msgs.sort();
     for m in &msgs {
         println!("{}", m);

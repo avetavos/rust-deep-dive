@@ -19,11 +19,11 @@ use std::thread;
 
 fn main() {
     let handle = thread::spawn(|| {
-        // นี่รันบน OS thread ใหม่
+        // This runs on a new OS thread
         42
     });
 
-    let result = handle.join().unwrap(); // บล็อกจนกว่า thread จะเสร็จ
+    let result = handle.join().unwrap(); // block until the thread finishes
     println!("Thread returned: {}", result);
 }
 ```
@@ -41,13 +41,53 @@ fn main() {
     let message = String::from("hello from the main thread");
 
     let handle = thread::spawn(move || {
-        // message ถูกย้ายมาที่นี่ — thread เป็นเจ้าของตัวเองแล้ว
+        // message is moved here — the thread now owns it
         println!("{}", message);
     });
 
     handle.join().unwrap();
-    // println!("{}", message); // จะไม่คอมไพล์ — ถูกย้ายไปแล้ว
+    // println!("{}", message); // would not compile — moved above
 }
+```
+
+### ถ้าไม่มี `move` จะเกิดอะไรขึ้น
+
+ถ้าตัด `move` ออก closure จะพยายาม *ยืม* `message` แทนที่จะเป็นเจ้าของ คอมไพเลอร์ปฏิเสธทันที เพราะพิสูจน์ไม่ได้ว่า borrow นี้จะยังใช้ได้ตลอดเวลาที่ thread ที่ spawn อาจรันอยู่
+
+```rust
+// @expect-error E0373
+use std::thread;
+
+fn main() {
+    let message = String::from("hello");
+    let handle = thread::spawn(|| {
+        println!("{}", message);
+    });
+    handle.join().unwrap();
+}
+```
+
+```text
+error[E0373]: closure may outlive the current function, but it borrows `message`, which is owned by the current function
+ --> src/main.rs:5:32
+  |
+5 |     let handle = thread::spawn(|| {
+  |                                ^^ may outlive borrowed value `message`
+6 |         println!("{}", message);
+  |                        ------- `message` is borrowed here
+  |
+note: function requires argument type to outlive `'static`
+ --> src/main.rs:5:18
+  |
+5 |       let handle = thread::spawn(|| {
+  |  __________________^
+6 | |         println!("{}", message);
+7 | |     });
+  | |______^
+help: to force the closure to take ownership of `message` (and any other referenced variables), use the `move` keyword
+  |
+5 |     let handle = thread::spawn(move || {
+  |                                ++++
 ```
 
 ### การแชร์ State ด้วย `Arc<Mutex<T>>`
@@ -68,11 +108,11 @@ fn main() {
     let mut handles = Vec::new();
 
     for _ in 0..4 {
-        let counter = Arc::clone(&counter); // เพิ่ม ref-count ราคาถูก
+        let counter = Arc::clone(&counter); // cheap ref-count increment
         let h = thread::spawn(move || {
-            let mut n = counter.lock().unwrap(); // ขอ lock
+            let mut n = counter.lock().unwrap(); // acquire lock
             *n += 1;
-        }); // lock ถูก release เมื่อ n drop
+        }); // lock released when n drops
         handles.push(h);
     }
 
@@ -149,6 +189,43 @@ fn main() {
 
 <Playground code={threadsCode} />
 
+### `Rc<T>` ไม่ใช่ `Send`
+
+`Arc<Mutex<T>>` ทำงานข้าม thread ได้เพราะตัวนับ reference ของ `Arc` เป็น atomic ส่วนตัวนับของ `Rc<T>` เป็นแค่ integer ธรรมดาที่ไม่ atomic — ถ้าสอง thread เพิ่มค่าพร้อมกันก็จะเกิด race คอมไพเลอร์จับสิ่งนี้ได้ตั้งแต่ระดับ type ก่อนโค้ดจะรันด้วยซ้ำ:
+
+```rust
+// @expect-error E0277
+use std::rc::Rc;
+use std::thread;
+
+fn main() {
+    let data = Rc::new(42);
+    let handle = thread::spawn(move || {
+        println!("{}", data);
+    });
+    handle.join().unwrap();
+}
+```
+
+```text
+error[E0277]: `Rc<i32>` cannot be sent between threads safely
+   --> src/main.rs:6:32
+    |
+  6 |       let handle = thread::spawn(move || {
+    |                    ------------- ^------
+    |                    |             |
+    |  __________________|_____________within this `{closure@src/main.rs:6:32: 6:39}`
+    | |                  |
+    | |                  required by a bound introduced by this call
+  7 | |         println!("{}", data);
+  8 | |     });
+    | |_____^ `Rc<i32>` cannot be sent between threads safely
+    |
+    = help: within `{closure@src/main.rs:6:32: 6:39}`, the trait `Send` is not implemented for `Rc<i32>`
+```
+
+เปลี่ยน `Rc::new` เป็น `Arc::new` ก็แก้ปัญหาได้ทันที — `Arc<i32>` เป็น `Send` closure จึง capture ประเภทที่ปลอดภัยที่จะย้ายข้าม thread boundary
+
 <Callout title="Send และ Sync ทำให้ Data Race เป็น Compile Error">
 ระบบประเภทของ Rust บังคับใช้ thread safety ผ่าน marker trait `Send` และ `Sync` `Arc<Mutex<T>>` เป็น `Send` (คุณย้ายไปยัง thread อื่นได้) และ `Sync` (คุณแชร์ reference ข้าม thread ได้) ถ้าคุณพยายามแชร์ `Rc<T>` หรือ `RefCell<T>` ข้าม thread คอมไพเลอร์จะปฏิเสธโค้ดด้วย error ที่ชัดเจน — ไม่ต้องการ sanitizer ไม่มี panic จาก data race เวลา runtime
 </Callout>
@@ -157,32 +234,32 @@ export const quizThreads = [
     {
         q: "JoinHandle::join() ทำอะไร?",
         options: [
-            "รวม thread สอง thread เข้าเป็นหนึ่ง",
             "บล็อก thread ที่เรียกจนกว่า thread ที่ spawn จะเสร็จและส่งคืนผลลัพธ์",
+            "รวม thread สอง thread เข้าเป็นหนึ่ง",
             "ฆ่า spawned thread ทันที",
             "Detach thread เพื่อให้รันอิสระ"
         ],
-        answer: 1
+        answer: 0
     },
     {
         q: "ทำไม thread closure จึงมักใช้คำสั่ง move?",
         options: [
             "เพราะ closure ที่ไม่มี move ไม่สามารถใช้ println! ได้",
-            "เพราะ thread อาจมีอายุยาวกว่า scope ที่ตัวแปรถูกกำหนด ดังนั้น thread จึงต้องเป็นเจ้าของค่านั้นเอง",
             "เพราะ move ทำให้ closure รันเร็วขึ้น",
-            "เพราะ move เป็นสิ่งที่ std::thread::spawn ต้องการสำหรับ closure ทั้งหมด"
+            "เพราะ move เป็นสิ่งที่ std::thread::spawn ต้องการสำหรับ closure ทั้งหมด",
+            "เพราะ thread อาจมีอายุยาวกว่า scope ที่ตัวแปรถูกกำหนด ดังนั้น thread จึงต้องเป็นเจ้าของค่านั้นเอง"
         ],
-        answer: 1
+        answer: 3
     },
     {
         q: "บทบาทของ Arc ใน Arc<Mutex<T>> คืออะไร?",
         options: [
             "Arc ให้ lock ที่ป้องกันการเข้าถึงพร้อมกัน",
-            "Arc รับประกันว่าค่าถูก drop เมื่อ reference สุดท้ายหายไป และปลอดภัยที่จะ clone ข้าม thread",
             "Arc เป็น alias ที่ deprecated ของ Box",
+            "Arc รับประกันว่าค่าถูก drop เมื่อ reference สุดท้ายหายไป และปลอดภัยที่จะ clone ข้าม thread",
             "Arc แปลง inner type ให้เป็น Send โดยอัตโนมัติ"
         ],
-        answer: 1
+        answer: 2
     },
     {
         q: "ทำไมเราจึง sort ผลลัพธ์หลังจาก join thread ทั้งหมด?",
