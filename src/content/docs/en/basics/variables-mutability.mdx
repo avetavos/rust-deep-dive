@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Variables Are Immutable by Default
 
@@ -68,7 +70,36 @@ fn main() {
 }
 ```
 
-Shadowing is not the same as `mut`. With `mut`, you re-assign to the same variable. With shadowing, you create a new variable that happens to have the same name. After the scope ends, the outer binding comes back into view.
+Shadowing is not the same as `mut`. With `mut`, you re-assign to the same variable — and that new value **must be the same type** as the original, because `mut` only ever changes the value stored in one fixed binding. With shadowing, you create a new variable that happens to have the same name, so its type is free to be completely different, as `word` (a `&str`) becoming `word` (a `usize`) above shows. After the scope ends, the outer binding comes back into view.
+
+## What the Compiler Says: `mut` Cannot Change Type
+
+Because `mut` reuses the same binding, giving it a value of a different type is a type error, not a shadowing opportunity:
+
+```rust
+// @expect-error E0308
+fn main() {
+    let mut x: i32 = 5;
+    x = "a";
+    println!("x = {}", x);
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> src/main.rs:4:9
+  |
+3 |     let mut x: i32 = 5;
+  |                --- expected due to this type
+4 |     x = "a";
+  |         ^^^ expected `i32`, found `&str`
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0308`.
+```
+
+This is the same `E0308: mismatched types` you will see throughout Rust whenever a value's type does not match what the context expects — an annotation, a parameter, a return type. `mut` only lifts the "assigned twice" restriction from `E0384`; it does not lift the type check.
 
 ### Constants
 
@@ -90,6 +121,33 @@ fn main() {
 ```
 
 The underscore in `100_000` is a **numeric separator** — it is purely cosmetic and ignored by the compiler. It makes large numbers easier to read.
+
+### `static`
+
+`static` also declares a value that lives for the whole program, but it means something different from `const`: a `static` has **one fixed memory address** for the entire run of the program, while a `const` has no guaranteed address at all — the compiler is free to inline its value at every use site, as if you had pasted the literal in by hand.
+
+```rust
+static APP_NAME: &str = "rust-deep-dive";
+const MAX_RETRIES: u32 = 5;
+
+fn main() {
+    println!("{} allows {} retries", APP_NAME, MAX_RETRIES);
+}
+```
+
+| | `let` | `const` | `static` |
+|---|---|---|---|
+| Type annotation | optional (inferred) | **required** | **required** |
+| Value | any expression, evaluated at runtime | constant expression, evaluated at compile time | constant expression, evaluated at compile time |
+| Lifetime | ends when its scope ends | inlined at every use site — no single address | one fixed memory address for the whole program |
+| Mutable? | with `mut` | never | `static mut` exists but requires `unsafe` to touch — reach for an atomic or a `Mutex` instead |
+
+<Mermaid code={`flowchart TD
+    L["let x = 5;"] -->|"scope ends"| D["dropped"]
+    C["const MAX: u32 = 100;"] -->|"used"| I["inlined at each call site\n(no fixed address)"]
+    S["static NAME: &str = ...;"] -->|"used"| A["same address\nfor the whole program"]`} title="let vs const vs static" />
+
+In practice: reach for `let` for almost everything, `const` for a fixed value you want named (a limit, a default), and `static` only when you specifically need one shared address — most commonly for FFI or a global you plan to wrap in an atomic type.
 
 export const variablesMutabilityCode = `fn main() {
     let x = 5;
@@ -114,6 +172,40 @@ export const variablesMutabilityCode = `fn main() {
 
 <Callout title="Variables are immutable by default — opt into mutation with mut">
 Making immutability the default forces you to be explicit about which data changes. When you see `mut`, you know that variable is expected to be modified. When you do not see `mut`, the compiler guarantees it is never mutated — no defensive copies needed.
+</Callout>
+
+## Mental Model
+
+Think of `let` as naming a value, not a memory cell you can freely overwrite. `mut` upgrades that name to also allow overwriting — but only with a value of the exact same type, because the compiler already fixed the storage size and layout for that binding. Shadowing sidesteps the whole question: it does not reuse storage at all, it introduces a brand-new name that happens to print the same on screen, which is exactly why it is allowed to change type.
+
+## Trade-offs
+
+Immutable-by-default means most bindings in a Rust codebase carry a compiler-enforced guarantee: nothing downstream can have changed this value. That makes it dramatically easier to reason about a function in isolation — no need to trace every call site to know whether the value read on line 40 could differ from what it was on line 10. The cost is friction: you must add `mut` deliberately, and forgetting it produces a compile error rather than a runtime surprise, which some newcomers experience as the language "getting in the way" before they internalize that the alternative is a much harder-to-find class of bug.
+
+## Common Misconceptions
+
+- **"Shadowing is just a shorthand for `mut`."** They solve different problems. `mut` mutates one binding's value in place (same type, same storage). Shadowing creates an entirely new binding — it can change type, and the old binding is still there (just no longer nameable) until its scope ends.
+- **"`const` and `static` are interchangeable ways to write a global constant."** `const` has no guaranteed memory address — the compiler can and does inline it everywhere it is used. `static` guarantees exactly one address for the whole program. Reach for `const` unless you specifically need that one shared address.
+- **"An immutable variable's underlying memory can never change."** Immutability is about the *binding*, not necessarily the bytes — a `String` behind an immutable `let` still owns a heap allocation the compiler could theoretically reuse across shadowed rebinds; what `let` without `mut` actually guarantees is that *you* cannot write to it through that name.
+
+## Reading AI-generated code
+
+AI assistants frequently add `mut` "just in case" — to a loop counter that is only ever read, or a value that is only reassigned once inside a branch that could just as easily be a fresh `let`. The compiler will not stop you (an unused `mut` is a warning, not an error), so this kind of clutter survives code review unless someone is looking for it.
+
+<SpotTheBug code={`fn main() {
+    let mut total = 0;
+    for price in [10, 20, 30] {
+        println!("adding {price}");
+    }
+    total = 60;
+    println!("total = {total}");
+}
+`}>
+`total` is declared `mut` but the `for` loop never actually updates it — it is reassigned exactly once afterward, which a plain `let mut total = 0;` followed by `total = 60;` does not need at all (and the loop body does not even use `total`). Compiling this produces `warning: variable does not need to be mutable` pointing at the `let mut total` line with help: remove this `mut` — the real fix here is almost always to actually accumulate inside the loop (`total += price;`) rather than to silence the warning by deleting `mut`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`mut` lets the same binding hold a new value of the same type; shadowing gives you a brand-new binding, possibly of a different type — reach for `mut` when you are truly updating a running value, and shadowing when you are transforming one value into its next form.
 </Callout>
 
 export const quizVariablesMutability = [
@@ -146,6 +238,28 @@ export const quizVariablesMutability = [
             "A lifetime parameter"
         ],
         answer: 1
+    },
+    {
+        q: "Does this compile?\n```rust\nfn main() {\n    let mut x: i32 = 5;\n    x = \"a\";\n    println!(\"x = {}\", x);\n}\n```",
+        options: [
+            "Yes — mut allows any type to be assigned",
+            "No — error[E0308], mismatched types: mut keeps the original type",
+            "No — error[E0384], cannot assign twice to immutable variable",
+            "Yes, but it prints garbage at runtime"
+        ],
+        answer: 1,
+        explain: "mut only lifts the restriction on reassigning — the new value must still be the same type as the binding's declared type, so this fails with error[E0308]: expected `i32`, found `&str`."
+    },
+    {
+        q: "What is the key difference between const and static?",
+        options: [
+            "const is mutable, static is not",
+            "static requires no type annotation, const does",
+            "const has no guaranteed memory address (the compiler may inline it); static has exactly one fixed address for the whole program",
+            "There is no difference — they compile to identical code"
+        ],
+        answer: 2,
+        explain: "const values are inlined at every use site with no single address; static guarantees one fixed address for the entire program's lifetime."
     },
     {
         q: "What does the underscore in 100_000 mean to the Rust compiler?",

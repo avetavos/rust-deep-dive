@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Scalar Types
 
@@ -28,6 +30,37 @@ Integer types encode their signedness and bit-width in the name.
 | `isize` | `usize` | pointer-width |
 
 The default integer type is `i32`. Use `usize` for indexing into arrays and slices.
+
+### `usize` Is Not Optional for Indexing
+
+Array and slice indices must be `usize` — not `i32`, not any other integer type. This is not a style preference; the compiler rejects any other index type outright.
+
+```rust
+// @expect-error E0277
+fn main() {
+    let v: [i32; 3] = [10, 20, 30];
+    let i: i32 = 1;
+    println!("{}", v[i]);
+}
+```
+
+```text
+error[E0277]: the type `[i32]` cannot be indexed by `i32`
+   --> src/main.rs:5:22
+    |
+  5 |     println!("{}", v[i]);
+    |                      ^ slice indices are of type `usize` or ranges of `usize`
+    |
+    = help: the trait `SliceIndex<[i32]>` is not implemented for `i32`
+    = note: required for `[i32]` to implement `Index<i32>`
+    = note: required for `[i32; 3]` to implement `Index<i32>`
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0277`.
+```
+
+Fix it with `v[i as usize]`. `usize` is defined as "the same width as a pointer on this platform" precisely because it exists to index memory and measure sizes (`.len()` also returns `usize`) — it is not meant to represent quantities that could sensibly be negative, so Rust does not allow anything else to silently stand in for it.
 
 ### Floating-Point Numbers
 
@@ -94,6 +127,41 @@ fn main() {
 }
 ```
 
+### No Implicit Numeric Conversion
+
+Unlike C or JavaScript, Rust never silently widens or narrows a numeric type for you — not even from a smaller type to a strictly larger one that could hold every possible value. `i32` and `i64` cannot mix without an explicit conversion:
+
+```rust
+// @expect-error E0308
+fn main() {
+    let a: i32 = 5;
+    let b: i64 = 10;
+    let c: i32 = b;
+    println!("{}", a + c);
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> src/main.rs:5:18
+  |
+5 |     let c: i32 = b;
+  |            ---   ^ expected `i32`, found `i64`
+  |            |
+  |            expected due to this
+  |
+help: you can convert an `i64` to an `i32` and panic if the converted value doesn't fit
+  |
+5 |     let c: i32 = b.try_into().unwrap();
+  |                   ++++++++++++++++++++
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0308`.
+```
+
+Every numeric conversion in Rust is a decision you make explicitly, with `as` (silent truncation, covered next) or with `TryFrom`/`TryInto` (fallible, returns a `Result` so an out-of-range value is caught instead of truncated). There is no automatic promotion in either direction.
+
 ### Casting with `as`, Truncation, and Overflow
 
 `as` converts between numeric types. Casting to a smaller integer type **truncates**: it keeps only the low-order bits, so a value that does not fit silently becomes a different number instead of erroring.
@@ -124,7 +192,14 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 ```
 
 
-A release build (`cargo build --release`) turns overflow checks off by default and silently **wraps** instead of panicking — relying on that difference is a bug waiting to surface only in production. Say what you mean instead with the explicit methods: `wrapping_add` wraps on purpose, `checked_add` returns `Option<u8>`, and `saturating_add` clamps to the type's max value.
+A release build (`cargo build --release`) turns overflow checks off by default and silently **wraps** instead of panicking — relying on that difference is a bug waiting to surface only in production. Say what you mean instead with the explicit method families below, all defined for every integer type:
+
+| Family | On overflow | Return type |
+|---|---|---|
+| `checked_add`/`checked_sub`/`checked_mul` | returns `None` instead of panicking or wrapping | `Option<T>` |
+| `wrapping_add`/`wrapping_sub`/`wrapping_mul` | wraps around on purpose (same bits as a release-mode `+`) | `T` |
+| `saturating_add`/`saturating_sub`/`saturating_mul` | clamps to the type's `MIN`/`MAX` | `T` |
+| `overflowing_add`/`overflowing_sub`/`overflowing_mul` | wraps, and also tells you whether it did | `(T, bool)` |
 
 ```rust
 fn main() {
@@ -132,8 +207,17 @@ fn main() {
     println!("wrapping = {}", x.wrapping_add(10));  // 4
     println!("checked  = {:?}", x.checked_add(10)); // None
     println!("saturating = {}", x.saturating_add(10)); // 255
+    println!("overflowing = {:?}", x.overflowing_add(10)); // (4, true)
 }
 ```
+
+<Mermaid code={`flowchart TD
+    Q{"x + y might overflow -\nwhich do you want?"}
+    Q -->|"crash if it happens\n(a bug, catch it)"| Debug["plain + in a debug build\n(panics on overflow)"]
+    Q -->|"treat it as absent"| Checked["checked_add -> Option::None"]
+    Q -->|"wrap on purpose"| Wrapping["wrapping_add -> wraps"]
+    Q -->|"clamp to the edge"| Saturating["saturating_add -> MAX/MIN"]
+    Q -->|"wrap, but tell me if it did"| Overflowing["overflowing_add -> (value, bool)"]`} title="Choosing an overflow strategy" />
 
 export const dataTypesCode = `fn main() {
     // Scalar types
@@ -161,6 +245,36 @@ export const dataTypesCode = `fn main() {
 
 <Callout title="Rust is statically typed but infers most types">
 You get the safety of a fully typed language without the verbosity of annotating every variable. The compiler infers the type from context. Add an annotation only when inference is ambiguous — or to make the intent explicit for future readers.
+</Callout>
+
+## Mental Model
+
+Every number in Rust carries its width and signedness as part of its type, not as a runtime property you can query and branch on. That is why there is no implicit conversion: `i32` and `i64` are as different to the type checker as `i32` and `bool` are — they simply are not the same type, even though one can always represent every value the other can. Casting with `as` is you telling the compiler "I know this might lose information, do it anyway"; the `checked_`/`wrapping_`/`saturating_`/`overflowing_` families are you telling it exactly which of four defined behaviors you want when arithmetic — not a cast — produces a value that does not fit.
+
+## Trade-offs
+
+Requiring an explicit `usize` for indexing and an explicit conversion between `i32` and `i64` costs a few extra characters at nearly every array access and cross-type calculation. In exchange, a whole category of "it worked on my machine because the numbers happened to be small" bugs cannot compile — the type checker forces you to decide, at the point of conversion, whether an out-of-range value should panic, wrap, saturate, or be reported back as `None`, instead of that decision being made implicitly (and inconsistently) by whatever the CPU happens to do.
+
+## Common Misconceptions
+
+- **"`as` is a safe, general-purpose conversion."** `as` between integer types truncates silently on narrowing — it will never panic, which means it is exactly the wrong tool when an out-of-range value indicates a bug you want to catch. Prefer `try_into()` (which returns a `Result`) whenever the input could plausibly be out of range.
+- **"Debug and release builds behave the same way, just faster in release."** Integer overflow is one concrete counterexample: a debug build panics on overflow, a release build wraps silently by default. Code that "works" only because you always test in debug mode can misbehave the moment it ships in release.
+- **"`usize` is just `u32` on 64-bit machines, so I can use them interchangeably."** `usize` is defined as pointer-width — 64 bits on today's common desktop/server targets, but the compiler still treats it as a distinct type from `u32` and `u64`, and it can be 32 bits or 16 bits on other targets. Casting between them still needs `as` or `try_into()` regardless of which platform you are compiling for.
+
+## Reading AI-generated code
+
+AI-generated code frequently indexes a `Vec` or array with a loop variable declared as `i32` (a habit carried over from C-like languages), then adds an `as usize` cast at the point of use instead of declaring the loop variable as `usize` to begin with — or worse, casts a value that could be negative straight to `usize`, silently turning it into a huge positive number instead of a panic.
+
+<SpotTheBug code={`fn get_last_n(items: &[i32], n: i32) -> &[i32] {
+    let start = items.len() as i32 - n;
+    &items[start as usize..]
+}
+`}>
+If `n` is larger than `items.len()`, `items.len() as i32 - n` goes negative — and casting a negative `i32` to `usize` does not panic, it reinterprets the bits as a huge positive number (`-1i32 as usize` is `usize::MAX` on a 64-bit target). The subsequent slice access then panics far from the real bug, with a confusing "range end index out of range for slice" instead of a clear message about `n` being too large. The fix is to keep the length arithmetic in `usize` and use `checked_sub` to catch the underflow explicitly: `let start = items.len().saturating_sub(n as usize);`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`i32`, `i64`, and `usize` never convert into each other silently — every crossing needs an explicit `as` (fast, can truncate) or `try_into()` (checked, returns `Result`), and every overflow-prone arithmetic op has a `checked_`/`wrapping_`/`saturating_`/`overflowing_` variant that names exactly what should happen when it does not fit.
 </Callout>
 
 export const quizDataTypes = [
@@ -203,6 +317,28 @@ export const quizDataTypes = [
             "The variable is mutable"
         ],
         answer: 1
+    },
+    {
+        q: "Does this compile?\n```rust\nfn main() {\n    let v: [i32; 3] = [10, 20, 30];\n    let i: i32 = 1;\n    println!(\"{}\", v[i]);\n}\n```",
+        options: [
+            "Yes, it prints 20",
+            "No — error[E0277], slice indices must be usize",
+            "No — error[E0308], mismatched types",
+            "Yes, but it panics at runtime with an out-of-bounds index"
+        ],
+        answer: 1,
+        explain: "Indexing always requires usize. An i32 index fails to compile with error[E0277]: the type `[i32]` cannot be indexed by `i32` — fix it with `v[i as usize]`."
+    },
+    {
+        q: "What does this print?\n```rust\nfn main() {\n    let x: u8 = 250;\n    println!(\"{:?}\", x.checked_add(10));\n    println!(\"{}\", x.saturating_add(10));\n}\n```",
+        options: [
+            "None then 255",
+            "Some(4) then 4",
+            "It panics because 250 + 10 overflows a u8",
+            "260 then 260"
+        ],
+        answer: 0,
+        explain: "250 + 10 = 260 does not fit in a u8 (max 255). checked_add returns None on overflow; saturating_add clamps to u8::MAX, which is 255."
     }
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Scalar Types
 
@@ -28,6 +30,37 @@ Integer type ฝัง signedness และขนาดบิตไว้ใน�
 | `isize` | `usize` | ขนาด pointer |
 
 Integer type เริ่มต้นคือ `i32` ใช้ `usize` สำหรับ index เข้าถึง array และ slice
+
+### `usize` ไม่ใช่ตัวเลือก สำหรับ Indexing
+
+Index ของ array และ slice ต้องเป็น `usize` เท่านั้น — ไม่ใช่ `i32` ไม่ใช่ integer type อื่นใด นี่ไม่ใช่แค่ style ที่ชอบ คอมไพเลอร์ปฏิเสธ index type อื่นทันที
+
+```rust
+// @expect-error E0277
+fn main() {
+    let v: [i32; 3] = [10, 20, 30];
+    let i: i32 = 1;
+    println!("{}", v[i]);
+}
+```
+
+```text
+error[E0277]: the type `[i32]` cannot be indexed by `i32`
+   --> src/main.rs:5:22
+    |
+  5 |     println!("{}", v[i]);
+    |                      ^ slice indices are of type `usize` or ranges of `usize`
+    |
+    = help: the trait `SliceIndex<[i32]>` is not implemented for `i32`
+    = note: required for `[i32]` to implement `Index<i32>`
+    = note: required for `[i32; 3]` to implement `Index<i32>`
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0277`.
+```
+
+แก้ด้วย `v[i as usize]` `usize` ถูกนิยามว่า "กว้างเท่า pointer บน platform นี้" เพราะมันมีไว้ index หน่วยความจำและวัดขนาดโดยเฉพาะ (`.len()` ก็ return `usize` เช่นกัน) — มันไม่ได้มีไว้แทนปริมาณที่อาจติดลบได้อย่างมีเหตุผล ดังนั้น Rust จึงไม่อนุญาตให้อะไรมาแทนมันแบบเงียบๆ
 
 ### Floating-Point Numbers
 
@@ -94,6 +127,41 @@ fn main() {
 }
 ```
 
+### ไม่มี Implicit Numeric Conversion
+
+ต่างจาก C หรือ JavaScript, Rust ไม่เคยขยายหรือย่อ numeric type ให้คุณแบบเงียบๆ เลย — แม้แต่จาก type เล็กไป type ใหญ่กว่าที่เก็บทุกค่าที่เป็นไปได้ของ type เล็กได้แน่นอน `i32` กับ `i64` ผสมกันโดยไม่มี conversion ที่ชัดเจนไม่ได้:
+
+```rust
+// @expect-error E0308
+fn main() {
+    let a: i32 = 5;
+    let b: i64 = 10;
+    let c: i32 = b;
+    println!("{}", a + c);
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> src/main.rs:5:18
+  |
+5 |     let c: i32 = b;
+  |            ---   ^ expected `i32`, found `i64`
+  |            |
+  |            expected due to this
+  |
+help: you can convert an `i64` to an `i32` and panic if the converted value doesn't fit
+  |
+5 |     let c: i32 = b.try_into().unwrap();
+  |                   ++++++++++++++++++++
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0308`.
+```
+
+Numeric conversion ทุกครั้งใน Rust คือการตัดสินใจที่คุณทำอย่างชัดเจน ด้วย `as` (truncate แบบเงียบๆ อธิบายถัดไป) หรือด้วย `TryFrom`/`TryInto` (fallible, return `Result` ดังนั้นค่าที่ out-of-range จะถูกจับได้แทนที่จะถูก truncate) ไม่มี automatic promotion ในทิศทางไหนเลย
+
 ### Cast ด้วย `as`, Truncation และ Overflow
 
 `as` แปลงระหว่าง numeric type ต่างๆ การ cast ไปยัง integer type ที่เล็กกว่าจะ **truncate**: เก็บเฉพาะ bit ลำดับต่ำ ดังนั้นค่าที่ใส่ไม่พอดีจะกลายเป็นตัวเลขอื่นแบบเงียบๆ แทนที่จะ error
@@ -124,7 +192,14 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 ```
 
 
-release build (`cargo build --release`) ปิด overflow check เป็นค่าเริ่มต้นและ **wrap** แบบเงียบๆ แทนที่จะ panic — การพึ่งพาความแตกต่างนี้คือบั๊กที่รอวันโผล่ตอน production เท่านั้น ใช้ method ที่ชัดเจนแทนการพึ่ง behavior โดยนัย: `wrapping_add` wrap โดยตั้งใจ, `checked_add` return `Option<u8>`, และ `saturating_add` clamp ไปที่ค่าสูงสุดของ type
+release build (`cargo build --release`) ปิด overflow check เป็นค่าเริ่มต้นและ **wrap** แบบเงียบๆ แทนที่จะ panic — การพึ่งพาความแตกต่างนี้คือบั๊กที่รอวันโผล่ตอน production เท่านั้น ใช้ method family ที่ชัดเจนแทนด้านล่าง ซึ่งมีให้ทุก integer type:
+
+| Family | เมื่อ overflow | Return type |
+|---|---|---|
+| `checked_add`/`checked_sub`/`checked_mul` | return `None` แทนที่จะ panic หรือ wrap | `Option<T>` |
+| `wrapping_add`/`wrapping_sub`/`wrapping_mul` | wrap โดยตั้งใจ (bit เดียวกับ `+` แบบ release-mode) | `T` |
+| `saturating_add`/`saturating_sub`/`saturating_mul` | clamp ไปที่ `MIN`/`MAX` ของ type | `T` |
+| `overflowing_add`/`overflowing_sub`/`overflowing_mul` | wrap และบอกด้วยว่า wrap หรือไม่ | `(T, bool)` |
 
 ```rust
 fn main() {
@@ -132,8 +207,17 @@ fn main() {
     println!("wrapping = {}", x.wrapping_add(10));  // 4
     println!("checked  = {:?}", x.checked_add(10)); // None
     println!("saturating = {}", x.saturating_add(10)); // 255
+    println!("overflowing = {:?}", x.overflowing_add(10)); // (4, true)
 }
 ```
+
+<Mermaid code={`flowchart TD
+    Q{"x + y might overflow -\nwhich do you want?"}
+    Q -->|"crash if it happens\n(a bug, catch it)"| Debug["plain + in a debug build\n(panics on overflow)"]
+    Q -->|"treat it as absent"| Checked["checked_add -> Option::None"]
+    Q -->|"wrap on purpose"| Wrapping["wrapping_add -> wraps"]
+    Q -->|"clamp to the edge"| Saturating["saturating_add -> MAX/MIN"]
+    Q -->|"wrap, but tell me if it did"| Overflowing["overflowing_add -> (value, bool)"]`} title="เลือก overflow strategy" />
 
 export const dataTypesCode = `fn main() {
     // Scalar types
@@ -161,6 +245,36 @@ export const dataTypesCode = `fn main() {
 
 <Callout title="Rust เป็น statically typed แต่อนุมาน type ส่วนใหญ่ได้เอง">
 คุณได้รับความปลอดภัยของภาษาที่ typed อย่างสมบูรณ์โดยไม่ต้องเขียน annotation ทุกตัวแปร คอมไพเลอร์อนุมาน type จาก context ใส่ annotation เมื่อการอนุมานมีความคลุมเครือ หรือเพื่อทำให้ intent ชัดเจนสำหรับผู้อ่านในอนาคต
+</Callout>
+
+## Mental Model
+
+ตัวเลขทุกตัวใน Rust พก width และ signedness ไว้เป็นส่วนหนึ่งของ type ไม่ใช่ property ตอน runtime ที่คุณ query แล้วแยก branch ได้ นั่นคือเหตุผลที่ไม่มี implicit conversion: `i32` กับ `i64` ต่างกันสำหรับ type checker พอๆ กับ `i32` กับ `bool` — มันไม่ใช่ type เดียวกันเลย แม้ตัวหนึ่งจะเก็บทุกค่าของอีกตัวได้เสมอ การ cast ด้วย `as` คือคุณบอกคอมไพเลอร์ว่า "ฉันรู้ว่าอาจเสียข้อมูล ทำไปเลย"; ส่วน family `checked_`/`wrapping_`/`saturating_`/`overflowing_` คือคุณบอกมันตรงๆ ว่าต้องการ behavior ไหนในสี่แบบ เมื่อ arithmetic — ไม่ใช่ cast — ให้ค่าที่ไม่พอดี
+
+## Trade-offs
+
+การบังคับให้ต้องมี `usize` ชัดเจนสำหรับ indexing และ conversion ชัดเจนระหว่าง `i32` กับ `i64` มีต้นทุนเป็นตัวอักษรเพิ่มขึ้นเล็กน้อยแทบทุกครั้งที่เข้าถึง array หรือคำนวณข้าม type แลกกับการที่บั๊กหมวดหมู่ "มันทำงานบนเครื่องฉันเพราะตัวเลขบังเอิญเล็ก" ทั้งหมดคอมไพล์ไม่ผ่านเลย type checker บังคับให้คุณตัดสินใจ ณ จุด conversion ว่าค่าที่ out-of-range ควร panic, wrap, saturate หรือรายงานกลับเป็น `None` แทนที่การตัดสินใจนั้นจะถูกทำแบบ implicit (และไม่คงเส้นคงวา) โดย CPU
+
+## Common Misconceptions
+
+- **"`as` เป็น conversion ที่ปลอดภัยและใช้ได้ทั่วไป"** `as` ระหว่าง integer type truncate แบบเงียบๆ เมื่อ narrowing — มันจะไม่ panic เลย ซึ่งหมายความว่ามันเป็นเครื่องมือที่ผิดพอดีเมื่อค่า out-of-range บ่งบอกถึงบั๊กที่คุณอยากจับ ใช้ `try_into()` (return `Result`) แทนเมื่อ input อาจ out of range ได้
+- **"Debug กับ release build ทำงานเหมือนกัน แค่ release เร็วกว่า"** Integer overflow คือตัวอย่างที่ขัดแย้งชัดเจน: debug build panic เมื่อ overflow, release build wrap แบบเงียบๆ เป็นค่าเริ่มต้น โค้ดที่ "ทำงานได้" เพราะทดสอบใน debug mode ตลอดอาจพังทันทีที่ ship เป็น release
+- **"`usize` ก็แค่ `u32` บนเครื่อง 64-bit ใช้แทนกันได้"** `usize` นิยามว่ากว้างเท่า pointer — 64 bit บน target desktop/server ทั่วไปวันนี้ แต่คอมไพเลอร์ยังถือว่ามันเป็น type แยกจาก `u32` และ `u64` และมันอาจเป็น 32 bit หรือ 16 bit บน target อื่นได้ การ cast ระหว่างกันยังต้องใช้ `as` หรือ `try_into()` ไม่ว่าจะคอมไพล์บน platform ไหน
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI เขียนมักจะ index `Vec` หรือ array ด้วย loop variable ที่ประกาศเป็น `i32` (นิสัยที่ติดมาจากภาษาสไตล์ C) แล้วเติม cast `as usize` ตอนใช้งานแทนที่จะประกาศ loop variable เป็น `usize` ตั้งแต่แรก — หรือแย่กว่านั้นคือ cast ค่าที่อาจติดลบตรงไปเป็น `usize` เลย ซึ่งเปลี่ยนมันเป็นตัวเลขบวกมหาศาลแบบเงียบๆ แทนที่จะ panic
+
+<SpotTheBug code={`fn get_last_n(items: &[i32], n: i32) -> &[i32] {
+    let start = items.len() as i32 - n;
+    &items[start as usize..]
+}
+`}>
+ถ้า `n` มากกว่า `items.len()` แล้ว `items.len() as i32 - n` จะติดลบ — และการ cast `i32` ที่ติดลบไปเป็น `usize` ไม่ panic แต่ตีความ bit ใหม่เป็นตัวเลขบวกมหาศาล (`-1i32 as usize` คือ `usize::MAX` บน target 64-bit) การเข้าถึง slice ที่ตามมาจึง panic ห่างจากบั๊กจริงมาก ด้วยข้อความที่งงว่า "range end index out of range for slice" แทนที่จะบอกชัดว่า `n` ใหญ่เกินไป ทางแก้คือเก็บการคำนวณความยาวไว้ใน `usize` และใช้ `checked_sub` เพื่อจับ underflow อย่างชัดเจน: `let start = items.len().saturating_sub(n as usize);`
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`i32`, `i64` และ `usize` ไม่เคย convert เข้าหากันแบบเงียบๆ เลย — ทุกการข้าม type ต้องใช้ `as` ที่ชัดเจน (เร็ว, truncate ได้) หรือ `try_into()` (ตรวจสอบ, return `Result`) และทุก arithmetic op ที่เสี่ยง overflow มี variant `checked_`/`wrapping_`/`saturating_`/`overflowing_` ที่ระบุชัดว่าจะเกิดอะไรขึ้นเมื่อไม่พอดี
 </Callout>
 
 export const quizDataTypes = [
@@ -203,6 +317,28 @@ export const quizDataTypes = [
             "ตัวแปรนี้ mutable"
         ],
         answer: 1
+    },
+    {
+        q: "โค้ดนี้ compile ไหม?\n```rust\nfn main() {\n    let v: [i32; 3] = [10, 20, 30];\n    let i: i32 = 1;\n    println!(\"{}\", v[i]);\n}\n```",
+        options: [
+            "ผ่าน print 20",
+            "ไม่ผ่าน — error[E0277], slice index ต้องเป็น usize",
+            "ไม่ผ่าน — error[E0308], mismatched types",
+            "ผ่าน แต่ panic ตอน runtime เพราะ index เกินขอบเขต"
+        ],
+        answer: 1,
+        explain: "Indexing ต้องใช้ usize เสมอ index ที่เป็น i32 compile ไม่ผ่าน ด้วย error[E0277]: the type `[i32]` cannot be indexed by `i32` — แก้ด้วย `v[i as usize]`"
+    },
+    {
+        q: "โค้ดนี้ print อะไร?\n```rust\nfn main() {\n    let x: u8 = 250;\n    println!(\"{:?}\", x.checked_add(10));\n    println!(\"{}\", x.saturating_add(10));\n}\n```",
+        options: [
+            "None แล้ว 255",
+            "Some(4) แล้ว 4",
+            "panic เพราะ 250 + 10 overflow u8",
+            "260 แล้ว 260"
+        ],
+        answer: 0,
+        explain: "250 + 10 = 260 ไม่พอดีกับ u8 (max 255) checked_add return None เมื่อ overflow; saturating_add clamp ไปที่ u8::MAX ซึ่งคือ 255"
     }
 ];
 

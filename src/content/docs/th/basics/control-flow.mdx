@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## `if` แบบ Expression
 
@@ -23,6 +25,63 @@ fn main() {
 ```
 
 ไม่จำเป็นต้องมี parentheses รอบ condition และต้องมี curly brace รอบ body เสมอ
+
+## สิ่งที่คอมไพเลอร์บอก: Condition ต้องเป็น `bool`
+
+Rust ไม่มีแนวคิด "truthy" เลย — ไม่มีกฎภาษาไหนที่เปลี่ยนตัวเลขที่ไม่ใช่ศูนย์, string ที่ไม่ว่าง หรือ pointer ที่ไม่ null ให้เป็น `true` condition ของ `if` ต้องเป็น `bool` จริงๆ ไม่งั้นคอมไพเลอร์ปฏิเสธก่อนที่จะพิจารณาด้วยซ้ำว่า branch return อะไร:
+
+```rust
+// @expect-error E0308
+fn main() {
+    let x = 5;
+    if x {
+        println!("nonzero");
+    }
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> src/main.rs:4:8
+  |
+4 |     if x {
+  |        ^ expected `bool`, found integer
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0308`.
+```
+
+ทางแก้เสมอคือ comparison จริง เช่น `if x != 0` นี่คือ `E0308` ตัวเดียวกับที่คุณเจอมาแล้วสำหรับ assignment และ return ที่ mismatch — condition ของ `if` ก็แค่อีกจุดหนึ่งที่คอมไพเลอร์เช็ค type กับสิ่งที่คาดหวัง
+
+### Branch ทั้งสองต้องตรงกันเอง
+
+แยกจาก condition, body ของ `if` และ `else` คือสอง expression ที่ต้องผลิต type **เดียวกัน** เพราะ `if` ทั้งก้อนต้องแปลงเป็น type เดียวเมื่อถูกใช้เป็นค่า:
+
+```rust
+// @expect-error E0308
+fn main() {
+    let x = 5;
+    let y = if x > 0 { "positive" } else { 0 };
+    println!("{}", y);
+}
+```
+
+```text
+error[E0308]: `if` and `else` have incompatible types
+ --> src/main.rs:4:44
+  |
+4 |     let y = if x > 0 { "positive" } else { 0 };
+  |                        ----------          ^ expected `&str`, found integer
+  |                        |
+  |                        expected because of this
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0308`.
+```
+
+`if` ที่ใช้เป็น statement เท่านั้น (ค่าถูกทิ้ง) ไม่มีข้อจำกัดนี้ — แต่ละ branch เป็น `()` ได้อย่างอิสระจากกัน ซึ่งคือรูปแบบของตัวอย่างถัดไปพอดี
 
 ### `if` แบบ Statement ปกติ
 
@@ -58,6 +117,27 @@ fn main() {
 }
 ```
 
+### Label สำหรับ Loop ซ้อนกัน
+
+เมื่อ loop ซ้อนกัน `break` หรือ `continue` เปล่าจะมีผลต่อ loop ชั้นในสุดเท่านั้น **Label** (เขียน `'name:` ก่อน loop) ให้คุณเล็งไปที่ loop ชั้นนอกได้โดยตรง:
+
+```rust
+fn main() {
+    let mut found = None;
+    'outer: for i in 0..5 {
+        for j in 0..5 {
+            if i * j == 6 {
+                found = Some((i, j));
+                break 'outer;
+            }
+        }
+    }
+    println!("found = {:?}", found);
+}
+```
+
+`break 'outer;` ออกจากทั้งสอง loop ทันทีเมื่อเจอค่าที่ตรงกัน — ถ้าไม่มี label `break` เปล่าจะหยุดแค่ `for` ชั้นในเท่านั้น loop ชั้นนอกจะยังทำงานต่อ
+
 ### `while` — Loop ตามเงื่อนไข
 
 `while` วนซ้ำตราบเท่าที่ condition เป็น `true` ไม่สามารถ return ค่าผ่าน `break` ได้
@@ -72,6 +152,21 @@ fn main() {
     println!(); // newline
 }
 ```
+
+### `while let` — วนซ้ำตราบเท่าที่ Pattern ยัง Match
+
+`while let` รวม `while` กับ pattern matching เข้าด้วยกัน: วนซ้ำไปเรื่อยๆ ตราบเท่าที่ค่านั้น match กับ pattern ที่กำหนด และหยุดทันทีที่ไม่ match — รูปแบบที่พบบ่อยสำหรับการดึงข้อมูลออกจาก collection จนหมด:
+
+```rust
+fn main() {
+    let mut stack = vec![1, 2, 3];
+    while let Some(top) = stack.pop() {
+        println!("popped: {}", top);
+    }
+}
+```
+
+`.pop()` return `Option<i32>` — `Some(value)` ตราบเท่าที่ `Vec` ยังมี element เหลือ, `None` เมื่อว่างแล้ว loop condition *คือ* pattern match นั่นเอง: มันรัน body ตราบเท่าที่ pattern match กับ `Some(_)` และออกทันทีที่ `.pop()` return `None`
 
 ### `for` — วนผ่าน Collection และ Range
 
@@ -101,6 +196,72 @@ fn main() {
 ```
 
 ควรใช้ `for` แทน `while` ที่มี index manual เสมอเมื่อเป็นไปได้ เพราะปลอดภัยกว่าและแสดงเจตนาได้ชัดเจนกว่า
+
+## `match` บน Integer และ Range (ตัวอย่างเบื้องต้น)
+
+`match` เทียบค่ากับชุด pattern แล้วรัน arm แรกที่ตรง — pattern เป็นได้ทั้งเลขตรงๆ หรือ range แบบ inclusive พลังเต็มของ `match` (enum, struct, guard, binding) อยู่ในโมดูล Structs, Enums & Matching นี่แค่พอให้อ่าน dispatch logic ง่ายๆ ได้:
+
+```rust
+fn main() {
+    let score = 82;
+    let grade = match score {
+        90..=100 => "A",
+        80..=89 => "B",
+        70..=79 => "C",
+        _ => "F",
+    };
+    println!("grade = {}", grade);
+}
+```
+
+ต่างจาก chain ของ `if`/`else if`, `match` บนชุด pattern ที่ exhaustive จะถูกคอมไพเลอร์ตรวจสอบความครบถ้วนให้ — arm `_ => "F"` ท้ายสุดตรงนี้คือสิ่งที่ทำให้ match นี้ exhaustive โมดูลถัดไปจะพูดถึงว่าเกิดอะไรขึ้น (และคอมไพเลอร์บอกอะไร) เมื่อคุณไม่ใส่มัน
+
+## `let else` — Match Pattern หรือออกไปเลย
+
+`let else` bind pattern เหมือน `let` ปกติ แต่ถ้า pattern **ไม่** match block `else` จะรันแทน — และ block นั้นต้อง diverge (`return`, `break`, `continue`, หรือ `panic!`) เพราะส่วนที่เหลือของฟังก์ชันสมมติว่า pattern match สำเร็จแล้ว:
+
+```rust
+fn parse_or_default(input: &str) -> i32 {
+    let Ok(n) = input.parse::<i32>() else {
+        return 0;
+    };
+    n * 2
+}
+
+fn main() {
+    println!("{}", parse_or_default("21")); // 42
+    println!("{}", parse_or_default("nope")); // 0
+}
+```
+
+เทียบกับ `while let` ด้านบน: ทั้งคู่ดึงค่าออกจาก pattern แต่ `while let` วนซ้ำตราบเท่า pattern ยัง match ในขณะที่ `let else` รันครั้งเดียวและต้องการให้ pattern match ทันที พร้อม escape hatch ชัดเจนเมื่อไม่ match
+
+## Let Chains (พบครั้งแรก)
+
+ตั้งแต่ edition 2024 คุณรวม `let` pattern match หลายตัวกับ boolean condition ด้วย `&&` ได้โดยตรงภายใน `if` (หรือ `while`) — ไม่ต้อง nest `if let` เลย:
+
+```rust
+fn main() {
+    let a: Option<i32> = Some(5);
+    if let Some(x) = a && x > 0 {
+        println!("positive: {}", x);
+    } else {
+        println!("not positive");
+    }
+}
+```
+
+นี่เป็น feature เฉพาะ edition 2024 การคอมไพล์ `if let Some(x) = a && x > 0` ตัวเดียวกันเป๊ะภายใต้ edition 2021 ถูกปฏิเสธทันที ด้วยข้อความที่ระบุ edition requirement ตรงๆ:
+
+```text
+error: let chains are only allowed in Rust 2024 or later
+ --> src/main.rs:3:8
+  |
+3 |     if let Some(x) = a && x > 0 {
+  |        ^^^^^^^^^^^^^^^
+```
+
+ก่อนมี let chains logic เดียวกันต้องใช้ `if let` ซ้อนกันพร้อม condition เพิ่มข้างใน (`if let Some(x) = a { if x > 0 { ... } }`) หรือใช้ `matches!` ผสม — ทั้งคู่ nest ลึกกว่ารุ่น 2024 ด้านบนอย่างเห็นได้ชัด
 
 export const controlFlowCode = `fn main() {
     // if as an expression
@@ -146,6 +307,51 @@ export const controlFlowCode = `fn main() {
 ใน Rust `if` และ `loop` เป็น expression — ทั้งคู่ผลิตค่า การกำหนด `let x = if cond { a } else { b }` หรือ `let result = loop { break value }` เป็น Rust ที่ idiomatic ทั้งสอง arm ของ `if` expression และค่าที่ส่งให้ `break` ใน `loop` ต้องมี type เดียวกัน
 </Callout>
 
+<Mermaid code={`flowchart TD
+    Start{"what are you\nlooping over?"}
+    Start -->|"a collection or range"| For["for item in collection"]
+    Start -->|"a condition, no known count"| While["while condition"]
+    Start -->|"a pattern that may stop matching"| WhileLet["while let Some(x) = ..."]
+    Start -->|"unknown iterations,\nneed a value out of the loop"| Loop["loop { ... break value; }"]
+    For --> Body["loop body"]
+    While --> Body
+    WhileLet --> Body
+    Loop --> Body
+    Body -->|"nested loop, need to exit an outer one"| Label["label the outer loop:\n'outer: for/while/loop"]`} title="เลือก loop construct" />
+
+## Mental Model
+
+ทุก control-flow construct ในบทนี้จริงๆ กำลังตอบคำถามเดียว: "จาก condition หรือ pattern นี้ block โค้ดไหนจะรันต่อ และมันผลิตค่าที่ฉันสนใจไหม?" `if` และ `match` ตอบครั้งเดียว จาก condition หรือ pattern แล้วผลิตค่าออกมาตรงๆ ได้ `loop`, `while`, `for` ตอบซ้ำๆ — `loop` เท่านั้นที่ส่งค่ากลับออกมาได้ (ผ่าน `break value`) เพราะ `while` กับ `for` ถูกสร้างมาให้หยุดเมื่อ *condition* เป็นเท็จ ไม่ใช่เมื่อการคำนวณ *เสร็จ* ซึ่งเป็นเหตุผลที่ต่างกันในการหยุด
+
+## Trade-offs
+
+การทำให้ `if` และ `match` เป็น expression เต็มรูปแบบ (แทนที่จะเป็น statement เหมือน C หรือ Java) ตัดโค้ด boilerplate หมวด "ประกาศตัวแปรด้านบน กำหนดค่าในทุก branch ด้านล่าง" ออกไปทั้งหมด — แลกกับกฎที่เข้มงวดขึ้น: ทุก branch ต้องเห็นพ้อง type เดียวกัน ซึ่งคือสิ่งที่คอมไพเลอร์บังคับด้วย `E0308` เมื่อไม่ตรงกัน Let chains แลก `if let ... && condition` ที่แบนราบและ nest น้อยกว่า กับการเป็น feature เฉพาะ edition 2024 — โค้ดที่ต้องคอมไพล์บน edition เก่าด้วย (หรือ MSRV ที่มาก่อน 2024 stabilize) ยังใช้มันไม่ได้
+
+## Common Misconceptions
+
+- **"ค่าที่ไม่ใช่ bool ใช้เป็น condition ได้ เหมือน 0/1 ใน C หรือ truthy/falsy ใน Python และ JavaScript"** Rust ไม่มี truthiness coercion เลย — condition ของ `if` ต้องเป็น `bool` อยู่แล้ว จบ ซึ่งคือ `E0308` ที่แสดงด้านบนพอดี
+- **"`while let` กับ `let else` ทำสิ่งเดียวกัน"** `while let` วนซ้ำ body ตราบเท่า pattern ยัง match `let else` match pattern ครั้งเดียวและ diverge ทันที (`return`/`break`/`panic!`) ถ้าไม่ match — มันมีไว้สำหรับ "เอาค่านี้มา ไม่งั้นออกไปเลย" ไม่ใช่สำหรับ loop
+- **"Let chains เป็นแค่ syntax sugar ไม่มีข้อจำกัด edition จริง"** มันถูก gate ไว้ที่ edition 2024 โดยเฉพาะ — source เดียวกันเป๊ะคอมไพล์บน 2021 ได้ก็ต่อเมื่อเอา `&&` ที่ chain อยู่ใน `if let` ออกก่อน นี่คือขอบเขต compatibility จริง ไม่ใช่แค่ทางเลือกด้าน style
+
+## อ่านโค้ดที่ AI เขียน
+
+Loop ที่ AI เขียนบางครั้งไม่มี `break` ที่ไปถึงได้เลย — block `loop { ... }` ที่ทุก exit path ตั้งใจให้เป็น `return` แต่ branch หนึ่งถูก refactor แล้ว `return` กลายเป็นสิ่งที่ไม่ได้ออกจาก loop จริงๆ อย่างเงียบๆ ทิ้ง infinite loop ที่โผล่มาเฉพาะตอนโหลดจริงเท่านั้น
+
+<SpotTheBug code={`fn wait_for_ready(check: impl Fn() -> bool) {
+    loop {
+        if check() {
+            println!("ready!");
+        }
+    }
+}
+`}>
+`loop` นี้ไม่มี `break` เลยไม่ว่าที่ไหน — เมื่อ `check()` return `true` มัน print `"ready!"` แล้ววนกลับไปเช็คใหม่ทันที ตลอดไป print `"ready!"` ทุกรอบแทนที่จะหยุด ทางแก้คือใส่ `break` ใน branch ที่ตั้งใจให้จบการรอ: `if check() { println!("ready!"); break; }` ทุก `loop` ที่เขียนเองควรถูกตรวจว่ามี `break` ที่ไปถึงได้จริงในทุก path ที่เกี่ยวข้อง ไม่ใช่แค่มีอยู่ที่ไหนสักที่ใน source
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`if`/`match` เลือกค่าครั้งเดียวจาก condition หรือ pattern; `loop`/`while`/`for` วนซ้ำ block และมีแค่ `loop` เท่านั้นที่ส่งค่ากลับออกมาได้ผ่าน `break value` — และทุก condition ในบทนี้ต้องเป็น `bool` จริงๆ ไม่มี truthiness แบบ implicit เลยใน Rust
+</Callout>
+
 export const quizControlFlow = [
     {
         q: "สิ่งที่จำเป็นสำหรับการใช้ if ของ Rust เป็น expression ทางขวาของ let คืออะไร?",
@@ -186,6 +392,39 @@ export const quizControlFlow = [
             "การเรียก recursive function"
         ],
         answer: 2
+    },
+    {
+        q: "โค้ดนี้ compile ไหม?\n```rust\nfn main() {\n    let x = 5;\n    if x {\n        println!(\"nonzero\");\n    }\n}\n```",
+        options: [
+            "ผ่าน — print \"nonzero\" เพราะ 5 เป็น truthy",
+            "ไม่ผ่าน — error[E0308], expected bool, found integer",
+            "ไม่ผ่าน — error[E0384], cannot assign twice to immutable variable",
+            "ผ่าน แต่ไม่ print อะไรเพราะ 5 เป็น falsy"
+        ],
+        answer: 1,
+        explain: "Rust ไม่มี truthy/falsy coercion — condition ของ if ต้องเป็น bool จริงๆ ตัวเลขเปล่าจึงพังด้วย error[E0308]: expected `bool`, found integer"
+    },
+    {
+        q: "break 'outer; ทำอะไรใน loop ที่ซ้อนกันที่มี label 'outer: for ... { for ... { ... } }?",
+        options: [
+            "หยุดแค่ loop ชั้นในสุดเหมือน break เปล่า",
+            "ออกจากทั้ง loop ชั้นในและ loop ชั้นนอกที่มี label ทันที",
+            "เป็น syntax error — label ใช้ได้กับ continue เท่านั้น",
+            "restart loop ชั้นนอกใหม่ตั้งแต่ต้น"
+        ],
+        answer: 1,
+        explain: "break ที่มี label เล็งไปที่ loop ที่มี label นั้นตรงๆ ออกจากทุก loop ที่ซ้อนอยู่ข้างในในขั้นตอนเดียว — ต่างจาก break เปล่าที่หยุดแค่ loop ชั้นในสุด"
+    },
+    {
+        q: "block else ของ let else ต้องเป็นอย่างไร?\n```rust\nlet Ok(n) = input.parse::<i32>() else {\n    // ต้องมีอะไรตรงนี้?\n};\n```",
+        options: [
+            "ไม่ต้องมีอะไร — ปล่อยให้ไหลไปบรรทัดถัดไปได้เลย",
+            "ต้องผลิต type เดียวกับ n",
+            "ต้อง diverge: return, break, continue หรือ panic! เพราะส่วนที่เหลือของฟังก์ชันสมมติว่า pattern match แล้ว",
+            "ต้องเรียก unwrap() บนค่าเดิม"
+        ],
+        answer: 2,
+        explain: "let else ต้องการให้ else block ไม่มีทางไหลผ่านต่อได้เลย — มันต้อง diverge เพราะทุกบรรทัดหลัง let else สมมติว่า pattern match สำเร็จแล้ว"
     }
 ];
 

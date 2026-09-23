@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## ทำไมต้อง Rust?
 
@@ -63,6 +65,114 @@ export const basicsIndexCode = `fn main() {
 Rust บังคับใช้ memory safety ผ่านกฎ ownership ที่ compile time ไม่ใช่ garbage collector ผลลัพธ์คือโปรแกรมที่เร็วเทียบเท่า C ปลอดภัยเท่าภาษาระดับสูง และมี latency ที่คาดเดาได้เพราะไม่มี GC pause
 </Callout>
 
+## จาก Source สู่โปรแกรมที่รันได้
+
+ทุกบทในคอร์สนี้พึ่งพา loop เดียวกัน: คุณเขียน source, `rustc` (ผ่าน `cargo`) ตรวจสอบมัน และมีแค่โค้ดที่ผ่านทุกการตรวจเท่านั้นที่จะกลายเป็น binary ได้ ไม่มีขั้นตอน "linting" แยกต่างหากที่ข้ามได้ — type checking และ borrow checking เป็นส่วนบังคับของการคอมไพล์เอง
+
+<Mermaid code={`flowchart LR
+    S[".rs source"] --> P["rustc: parse + type-check"]
+    P --> B["rustc: borrow-check"]
+    B -->|"rejected"| E["compile error\n(no binary produced)"]
+    B -->|"accepted"| O["native binary"]
+    O --> R["cargo run / ./binary"]`} title="จาก source ไปสู่โปรแกรมที่รันได้" />
+
+## การจัดรูปแบบของ println!
+
+`println!` รองรับ format specifier หลายแบบนอกเหนือจาก `{}` ธรรมดาที่ใช้ด้านบน:
+
+- `{}` เรียก trait `Display` — สำหรับ output ที่มนุษย์อ่านง่าย เฉพาะ type ที่ implement `Display` เท่านั้นที่ใช้ตรงนี้ได้ (primitive ส่วนใหญ่ทำได้ แต่ struct ที่คุณสร้างเองไม่ได้ เว้นแต่จะ implement เอง)
+- `{:?}` เรียก trait `Debug` — สำหรับ output ที่ developer ใช้ debug `#[derive(Debug)]` สร้างสิ่งนี้ให้อัตโนมัติสำหรับ struct หรือ enum
+- `{:#?}` คือรูปแบบ "pretty" ของ `Debug` — หนึ่ง field ต่อหนึ่งบรรทัด มี indent
+- `{x}` คือ **captured identifier**: แทนที่จะเขียน `println!("{}", x)` คุณเขียน `println!("{x}")` ได้โดยตรงในวงเล็บปีกกา เมื่อ `x` เป็นตัวแปรที่อยู่ใน scope แล้ว
+- `{:>8.2}` รวม alignment (`>` right-align), width (`8`) และ precision (`.2` สองตำแหน่งทศนิยม) เข้าด้วยกัน — มีประโยชน์สำหรับการจัด output ตัวเลขให้เรียงคอลัมน์
+
+```rust
+#[derive(Debug)]
+struct Point { x: i32, y: i32 }
+
+fn main() {
+    let p = Point { x: 3, y: -4 };
+    println!("{:?}", p);
+    println!("{:#?}", p);
+
+    let name = "Rust";
+    println!("{name} has {} letters", name.len());
+
+    let pi = 3.14159;
+    println!("[{:>8.2}]", pi);
+}
+```
+
+## สิ่งที่คอมไพเลอร์บอก: `{}` ต้องการ `Display`
+
+`{}` ไม่ใช่ placeholder แบบ "print อะไรก็ได้" ทั่วไป — มันต้องการ type ของค่าที่ implement `std::fmt::Display` โดยเฉพาะ struct ธรรมดาไม่มี `Display` impl ให้โดยค่าเริ่มต้น:
+
+```rust
+// @expect-error E0277
+struct Point { x: i32, y: i32 }
+
+fn main() {
+    let p = Point { x: 1, y: 2 };
+    println!("{}", p);
+}
+```
+
+```text
+error[E0277]: `Point` doesn't implement `std::fmt::Display`
+ --> src/main.rs:6:20
+  |
+6 |     println!("{}", p);
+  |               --   ^ `Point` cannot be formatted with the default formatter
+  |               |
+  |               required by this formatting parameter
+  |
+help: the trait `std::fmt::Display` is not implemented for `Point`
+ --> src/main.rs:2:1
+  |
+2 | struct Point { x: i32, y: i32 }
+  | ^^^^^^^^^^^^
+  = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0277`.
+```
+
+คำแนะนำของคอมไพเลอร์เองคือทางแก้: เปลี่ยนไปใช้ `{:?}` และเพิ่ม `#[derive(Debug)]` ให้ `Point` `{:?}` โดยไม่ derive `Debug` ก็พังแบบเดียวกัน ด้วย error[E0277]: `Point` doesn't implement `Debug` แทน — `Debug` ต้องถูกขอ (ผ่าน `#[derive(Debug)]`) เหมือนกับที่ `Display` ต้อง implement ทุกประการ ไม่มีอันไหนได้มาฟรีๆ
+
+## Mental Model
+
+มองว่า `{}` และ `{:?}` เป็นคำถามสองคำถามที่แยกกันที่คุณถามค่าหนึ่งๆ: `{}` ถามว่า "ผู้ใช้อยากเห็นคุณแบบไหน?" (trait ที่คุณเลือกเปิดใช้เองอย่างตั้งใจ เพราะมันกลายเป็นส่วนหนึ่งของ public contract ของ type) ในขณะที่ `{:?}` ถามว่า "developer อยากเห็นคุณแบบไหนเพื่อ debug?" (trait ที่คุณ derive ได้ฟรีแทบทุกครั้ง) การเลือก `#[derive(Debug)]` เป็นค่าเริ่มต้นและ implement `Display` เฉพาะเมื่อต้องการ rendering ที่ผู้ใช้เห็นจริงๆ ช่วยให้ความแตกต่างนี้ชัดเจนอยู่เสมอ
+
+## Trade-offs
+
+ความเข้มงวดตั้งแต่แรกของ Rust — ทุกค่าต้องมี type ที่รู้จัก ทุก format placeholder ต้องตรงกับ trait ที่ค่านั้น implement จริง — แลก loop แบบ "รันแล้วดูเลย" ที่เร็วของภาษา scripting กับคอมไพเลอร์ที่จับบั๊กเรื่อง formatting ทั้งหมวดหมู่ได้ก่อนโปรแกรมจะเริ่มรันด้วยซ้ำ ต้นทุนนั้นมีจริง: `cargo build` ช้ากว่าการเปิด Python REPL และผู้เริ่มต้นใช้เวลามากกว่าในการทำให้คอมไพเลอร์พอใจตั้งแต่แรก ผลตอบแทนก็มีจริงเช่นกัน: Rust binary ที่คอมไพล์ผ่านจะไม่มีทาง crash จาก `TypeError: unsupported format string argument` ตอนตี 3 ใน production ได้ — บั๊กหมวดหมู่นั้นไปไม่ถึง binary ที่คอมไพล์แล้วเลย
+
+## Common Misconceptions
+
+- **"ถ้าคอมไพล์ผ่าน แปลว่าไม่มีบั๊ก"** borrow checker และ type checker คัดกรองเฉพาะบั๊กด้าน memory-safety และ type เท่านั้น — logic error (สูตรผิด, off-by-one ใน business logic) คอมไพล์ผ่านสบายๆ
+- **"ต้อง annotate type ของทุกตัวแปร"** ต้อง annotate แบบ `let x: i32 = 42;` เฉพาะเมื่อคอมไพเลอร์อนุมาน type จาก context หรือ literal suffix ไม่ได้เท่านั้น — `let` binding ส่วนใหญ่ในโค้ด Rust จริงไม่มี annotation เลย
+- **"`{:?}` กับ `{}` ใช้แทนกันได้ — ใช้อันไหนก็ได้ที่คอมไพล์ผ่าน"** ทั้งสองมีกลุ่มเป้าหมายต่างกัน การใช้ `{:?}` กับ type ที่มี `Display` impl ที่มีความหมายอยู่แล้ว (เช่น print `String` ด้วย `{:?}` แล้วได้ output ที่มี quote และ escape) เป็น smell เล็กๆ ที่ควรสังเกต
+
+## อ่านโค้ดที่ AI เขียน
+
+AI มักสร้าง `println!("{}", some_struct)` ให้ struct ที่เพิ่งประกาศ เพราะมัน "ดูเหมือน" placeholder ธรรมชาติ — โดยไม่ตรวจว่า `Display` มีให้ type นั้นหรือไม่
+
+<SpotTheBug code={`#[derive(Debug)]
+struct Order { id: u32, total: f64 }
+
+fn main() {
+    let order = Order { id: 42, total: 19.99 };
+    println!("Order: {}", order);
+}
+`}>
+`Order` derive `Debug` ไม่ใช่ `Display` — print ด้วย `{}` คอมไพล์ไม่ผ่าน ด้วย error[E0277]: `Order` doesn't implement `std::fmt::Display` เหมือนตัวอย่าง `Point` ด้านบนทุกประการ ทางแก้คือ `println!("Order: {:?}", order)` (หรือ `{:#?}` สำหรับมุมมองหลายบรรทัด) เว้นแต่ type นั้นต้องการ `Display` impl ที่เขียนเองเพื่อ output ที่ผู้ใช้เห็นจริงๆ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ทุกค่าไหลผ่าน pipeline เดียวกัน — parse, type-check, borrow-check แล้วคอมไพล์ — และ `{}` กับ `{:?}` ก็เป็นแค่คำถามว่าคุณกำลังขอให้ค่านั้นตอบสนอง trait ไหน ระหว่าง `Display` กับ `Debug`
+</Callout>
+
 export const quizBasicsIndex = [
     {
         q: "Rust รับประกัน memory safety อย่างไร?",
@@ -93,6 +203,28 @@ export const quizBasicsIndex = [
             "แทรก raw memory address"
         ],
         answer: 2
+    },
+    {
+        q: "โค้ดนี้ compile ไหม ถ้าไม่ผ่าน error code อะไร?\n```rust\nstruct Point { x: i32, y: i32 }\n\nfn main() {\n    let p = Point { x: 1, y: 2 };\n    println!(\"{}\", p);\n}\n```",
+        options: [
+            "ผ่าน — print \"Point\"",
+            "ไม่ผ่าน — error[E0277] เพราะ Point ไม่ implement Display",
+            "ไม่ผ่าน — error[E0308] เพราะ type mismatch",
+            "ผ่าน — print memory address ของ p"
+        ],
+        answer: 1,
+        explain: "`{}` ต้องการ trait Display Point ไม่มี Display impl (derive ให้แค่ Debug) จึงพังด้วย error[E0277]: `Point` doesn't implement `std::fmt::Display`"
+    },
+    {
+        q: "โค้ดนี้ print อะไร?\n```rust\nfn main() {\n    let pi = 3.14159;\n    println!(\"[{:>8.2}]\", pi);\n}\n```",
+        options: [
+            "[3.14159]",
+            "[    3.14]",
+            "[3.14    ]",
+            "compile ไม่ผ่าน"
+        ],
+        answer: 1,
+        explain: ":>8.2 หมายถึง right-align (>) ภายใน width 8 พร้อม precision 2 ตำแหน่ง — \"3.14\" มี 4 ตัวอักษร จึงเติม space 4 ตัวด้านซ้าย"
     }
 ];
 

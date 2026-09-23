@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Why Rust?
 
@@ -63,6 +65,114 @@ export const basicsIndexCode = `fn main() {
 Rust enforces memory safety through compile-time ownership rules — not a garbage collector. The result is programs that are as fast as C, as safe as high-level managed languages, and predictably low-latency because there is no GC pause.
 </Callout>
 
+## How Source Becomes a Running Program
+
+Every lesson in this course leans on one loop: you write source, `rustc` (via `cargo`) checks it, and only code that survives every check is allowed to become a binary. There is no separate "linting" step you can skip — type checking and borrow checking are mandatory parts of compilation itself.
+
+<Mermaid code={`flowchart LR
+    S[".rs source"] --> P["rustc: parse + type-check"]
+    P --> B["rustc: borrow-check"]
+    B -->|"rejected"| E["compile error\n(no binary produced)"]
+    B -->|"accepted"| O["native binary"]
+    O --> R["cargo run / ./binary"]`} title="From source to running program" />
+
+## println! Formatting
+
+`println!` supports several format specifiers beyond the plain `{}` used above:
+
+- `{}` calls the `Display` trait — for human-readable output. Only types that implement `Display` can go here (most primitives do; custom structs do not, unless you implement it yourself).
+- `{:?}` calls the `Debug` trait — for developer-facing output. `#[derive(Debug)]` generates this automatically for a struct or enum.
+- `{:#?}` is the "pretty" variant of `Debug` — one field per line, indented.
+- `{x}` is a **captured identifier**: instead of `println!("{}", x)`, you can write `println!("{x}")` directly inside the braces when `x` is a variable already in scope.
+- `{:>8.2}` combines alignment (`>` right-align), width (`8`), and precision (`.2`, two decimal places) — useful for lining up numeric output in columns.
+
+```rust
+#[derive(Debug)]
+struct Point { x: i32, y: i32 }
+
+fn main() {
+    let p = Point { x: 3, y: -4 };
+    println!("{:?}", p);
+    println!("{:#?}", p);
+
+    let name = "Rust";
+    println!("{name} has {} letters", name.len());
+
+    let pi = 3.14159;
+    println!("[{:>8.2}]", pi);
+}
+```
+
+## What the Compiler Says: `{}` Requires `Display`
+
+`{}` is not a generic "print anything" placeholder — it specifically requires the value's type to implement `std::fmt::Display`. A plain struct has no `Display` impl by default:
+
+```rust
+// @expect-error E0277
+struct Point { x: i32, y: i32 }
+
+fn main() {
+    let p = Point { x: 1, y: 2 };
+    println!("{}", p);
+}
+```
+
+```text
+error[E0277]: `Point` doesn't implement `std::fmt::Display`
+ --> src/main.rs:6:20
+  |
+6 |     println!("{}", p);
+  |               --   ^ `Point` cannot be formatted with the default formatter
+  |               |
+  |               required by this formatting parameter
+  |
+help: the trait `std::fmt::Display` is not implemented for `Point`
+ --> src/main.rs:2:1
+  |
+2 | struct Point { x: i32, y: i32 }
+  | ^^^^^^^^^^^^
+  = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0277`.
+```
+
+The compiler's own suggestion is the fix: switch to `{:?}` and add `#[derive(Debug)]` to `Point`. `{:?}` without deriving `Debug` fails the same way, with error[E0277]: `Point` doesn't implement `Debug` instead — `Debug` has to be requested (via `#[derive(Debug)]`) exactly like `Display` has to be implemented; neither is free.
+
+## Mental Model
+
+Think of `{}` and `{:?}` as two separate questions you are asking a value: `{}` asks "how would a user want to see you?" (a trait you opt into deliberately, because it becomes part of your type's public contract), while `{:?}` asks "how would a developer want to see you, for debugging?" (a trait you can almost always derive for free). Reaching for `#[derive(Debug)]` by default and only implementing `Display` when you actually want a user-facing rendering keeps that distinction honest.
+
+## Trade-offs
+
+Rust's upfront strictness — every value must have a known type, every format placeholder must match a trait the value actually implements — trades a faster "just run it and see" scripting loop for a compiler that catches an entire class of runtime formatting bugs before the program ever starts. The cost is real: `cargo build` is slower than starting a Python REPL, and beginners spend more time satisfying the compiler up front. The payoff is also real: a Rust binary that compiles cannot crash from `TypeError: unsupported format string argument` at 3am in production — that class of bug simply cannot reach a compiled binary.
+
+## Common Misconceptions
+
+- **"If it compiles, it has no bugs."** The borrow checker and type checker only rule out memory-safety and type bugs — logic errors (wrong formula, off-by-one in business logic) compile just fine.
+- **"You have to annotate the type of every variable."** Only `let x: i32 = 42;`-style annotations are needed when the compiler cannot infer the type from context or a literal suffix; most `let` bindings in real Rust code have no annotation at all.
+- **"`{:?}` and `{}` are interchangeable — just use whichever compiles."** They serve different audiences. Reaching for `{:?}` on a type that has a meaningful `Display` impl (like printing a `String` with `{:?}` and getting quoted, escaped output) is itself a minor smell worth noticing.
+
+## Reading AI-generated code
+
+AI assistants frequently generate `println!("{}", some_struct)` for a struct they just defined, because it "looks like" the natural placeholder — without checking whether `Display` exists for that type.
+
+<SpotTheBug code={`#[derive(Debug)]
+struct Order { id: u32, total: f64 }
+
+fn main() {
+    let order = Order { id: 42, total: 19.99 };
+    println!("Order: {}", order);
+}
+`}>
+`Order` derives `Debug`, not `Display` — printing it with `{}` fails to compile with error[E0277]: `Order` doesn't implement `std::fmt::Display` exactly like the `Point` example above. The fix is `println!("Order: {:?}", order)` (or `{:#?}` for a multi-line view), unless the type genuinely needs a hand-written `Display` impl for user-facing output.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Every value flows through the same pipeline — parsed, type-checked, borrow-checked, then compiled — and `{}` vs `{:?}` is really a question of which trait, `Display` or `Debug`, you are asking that value to satisfy.
+</Callout>
+
 export const quizBasicsIndex = [
     {
         q: "How does Rust guarantee memory safety?",
@@ -93,6 +203,28 @@ export const quizBasicsIndex = [
             "It inserts a raw memory address"
         ],
         answer: 2
+    },
+    {
+        q: "Does this compile, and if not, with what error code?\n```rust\nstruct Point { x: i32, y: i32 }\n\nfn main() {\n    let p = Point { x: 1, y: 2 };\n    println!(\"{}\", p);\n}\n```",
+        options: [
+            "Yes, it prints \"Point\"",
+            "No — error[E0277] because Point does not implement Display",
+            "No — error[E0308] because of a type mismatch",
+            "Yes, it prints the memory address of p"
+        ],
+        answer: 1,
+        explain: "`{}` requires the Display trait. Point has no Display impl (deriving only gives Debug), so this fails with error[E0277]: `Point` doesn't implement `std::fmt::Display`."
+    },
+    {
+        q: "What does this print?\n```rust\nfn main() {\n    let pi = 3.14159;\n    println!(\"[{:>8.2}]\", pi);\n}\n```",
+        options: [
+            "[3.14159]",
+            "[    3.14]",
+            "[3.14    ]",
+            "It fails to compile"
+        ],
+        answer: 1,
+        explain: ":>8.2 means right-align (>) within a width of 8, with 2 digits of precision — \"3.14\" is 4 characters, so 4 spaces of padding are added on the left."
     }
 ];
 

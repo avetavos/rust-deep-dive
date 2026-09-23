@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Declaring Functions
 
@@ -46,6 +48,39 @@ fn main() {
 
 Adding a semicolon to the last line of a block **converts it from an expression to a statement** — the block now returns the unit type `()` instead of the computed value.
 
+## What the Compiler Says: A Stray Semicolon Changes the Return Type
+
+Because the function body is itself a block, this rule applies to `fn` bodies too — and the compiler reports it as a type mismatch against `()`, not against whatever type you expected:
+
+```rust
+// @expect-error E0308
+fn square(n: i32) -> i32 {
+    n * n;
+}
+
+fn main() {
+    println!("{}", square(4));
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> src/main.rs:2:22
+  |
+2 | fn square(n: i32) -> i32 {
+  |    ------            ^^^ expected `i32`, found `()`
+  |    |
+  |    implicitly returns `()` as its body has no tail or `return` expression
+3 |     n * n;
+  |          - help: remove this semicolon to return this value
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0308`.
+```
+
+Notice the compiler's own diagnosis: with the semicolon present, the function body has no tail expression at all, so it implicitly returns `()` — the fix is deleting the semicolon, which the `help:` line points at directly. This is one of the most common first compiler errors a newcomer hits, and it is always this same one-character fix.
+
 ### The Trailing-Expression Return
 
 The last expression in a function body — written **without** a semicolon — is the return value. You can also use the `return` keyword for early returns, but idiomatic Rust prefers the trailing expression for the main return path.
@@ -60,7 +95,7 @@ fn max_of_two(a: i32, b: i32) -> i32 {
 }
 ```
 
-The `describe` function in the playground below returns `&'static str`: a reference to a string literal, which is baked into the binary and lives for the entire program, so the compiler gives it the special `'static` lifetime — you'll see `'static` and other lifetimes properly in the Traits & Generics module.
+The `describe` function in the playground below returns `&'static str`: a reference to a string literal, which is baked into the binary and lives for the entire program. `'static` means exactly this — **"valid for the entire program"** — and string literals always qualify; you'll see `'static` and other lifetimes properly in the Traits & Generics module.
 
 ### The Unit Type
 
@@ -72,6 +107,77 @@ fn greet(name: &str) {
     println!("Hello, {}!", name);
 }
 ```
+
+### `todo!` and `unimplemented!`
+
+While sketching out a function's shape before filling in the body, `todo!()` and `unimplemented!()` let the code compile (they type-check as *any* type, including `-> !`, covered next) while panicking loudly if that path is ever actually reached at runtime:
+
+```rust
+// @expect-panic
+fn compute_total(items: &[i32]) -> i32 {
+    if items.is_empty() {
+        return 0;
+    }
+    todo!("implement the real calculation")
+}
+
+fn main() {
+    println!("{}", compute_total(&[1, 2, 3]));
+}
+```
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:6:5:
+not yet implemented: implement the real calculation
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+This is strictly better than a bare `panic!("todo")`: `todo!` and `unimplemented!` both signal *intent* in the message and in the type checker's eyes (a reader — or a `grep`) can immediately tell "this path is unfinished" apart from "this path is a genuine runtime error."
+
+### The Never Type `!`
+
+A function that never returns at all — because it always panics, loops forever, or calls `std::process::exit` — can be annotated `-> !`, the **never type**. `!` is special: it coerces to any other type, which is exactly what lets a `fail(...)` branch stand in for a `String` branch inside an `if`/`else` or `match` whose other arms return a real value:
+
+```rust
+fn fail(msg: &str) -> ! {
+    panic!("{}", msg);
+}
+
+fn describe_or_fail(n: i32) -> &'static str {
+    if n >= 0 {
+        "non-negative"
+    } else {
+        fail("negative numbers are not supported")
+    }
+}
+```
+
+### Function Pointers
+
+A function's name, without calling it, can itself be passed around as a value of type `fn(ArgTypes) -> ReturnType` — a plain function pointer, distinct from (and simpler than) the closures covered in the Collections & Iterators module:
+
+```rust
+fn double(n: i32) -> i32 { n * 2 }
+fn triple(n: i32) -> i32 { n * 3 }
+
+fn apply(f: fn(i32) -> i32, value: i32) -> i32 {
+    f(value)
+}
+
+fn main() {
+    println!("{}", apply(double, 5)); // 10
+    println!("{}", apply(triple, 5)); // 15
+}
+```
+
+<Mermaid code={`flowchart TD
+    B["function body { ... }"] --> T{"last line has a ;?"}
+    T -->|"no"| E["tail expression\n-> its value is returned"]
+    T -->|"yes"| U["last line is a statement\n-> body returns ()"]
+    E --> M{"does the fn signature\nsay -> SomeType?"}
+    U --> M
+    M -->|"types match"| OK["compiles"]
+    M -->|"types don't match"| ERR["E0308: mismatched types"]`} title="How a function body's return type is decided" />
 
 export const functionsCode = `fn add(a: i32, b: i32) -> i32 {
     a + b   // trailing expression -- no semicolon -- is the return value
@@ -101,6 +207,36 @@ fn main() {
 
 <Callout title="The last expression (no semicolon) is the return value">
 Omitting the semicolon on the last line of a function body makes that expression the return value. Adding a semicolon turns it into a statement that returns `()`. This is not a gotcha — it is a deliberate design that makes closures, blocks, and functions all behave consistently as expressions.
+</Callout>
+
+## Mental Model
+
+Every block in Rust — a function body, an `if` branch, a `loop`, a bare `{ }` — follows the exact same rule: its value is its last expression, unless that expression is terminated by a semicolon, in which case the block's value is `()`. A function signature's `-> T` is simply the compiler's promise-check applied to the outermost block. Once you see functions this way, `if`-as-expression, block-scoped shadowing, and the semicolon rule all collapse into one idea instead of three separate ones to memorize.
+
+## Trade-offs
+
+Using a semicolon as the single character that decides "value" versus "no value" is extremely terse — you never write `return` for the common case — but it means a single stray or missing semicolon changes a function's meaning rather than merely its formatting, unlike languages where whitespace or semicolons are cosmetic. The payoff is that expressions compose uniformly: an `if`, a `match`, a `loop`, and a plain block are all interchangeable wherever a value is expected, with no special-casing needed for any of them.
+
+## Common Misconceptions
+
+- **"Semicolons in Rust are just statement terminators, like in C or JavaScript."** They usually are — but on the very last line of a block, a semicolon is also the switch that discards that line's value and makes the block return `()` instead.
+- **"`todo!()` is the same as leaving a `// TODO` comment."** A comment does not stop execution; `todo!()` (and `unimplemented!()`) type-checks as any type so the surrounding code compiles today, but panics the instant that exact line actually runs — which is the point: it is safe to ship code with unreachable `todo!()`s, unsafe to ship code that silently does the wrong thing.
+- **"A function pointer (`fn(i32) -> i32`) and a closure are the same thing."** A closure can capture variables from its environment; a plain `fn` pointer cannot capture anything — it is just the address of a standalone function. Every non-capturing closure can coerce to a function pointer, but the reverse is not true.
+
+## Reading AI-generated code
+
+AI assistants sometimes leave a stray value at the end of a function that was refactored from "return something" to "just print it," because the trailing line was not touched during the edit — the semicolon that should have been added to turn it back into a `()`-returning statement gets forgotten.
+
+<SpotTheBug code={`fn log_status(code: i32) {
+    println!("status: {}", code);
+    code
+}
+`}>
+`log_status` has no `-> i32` in its signature, so it is expected to return `()` — but the trailing `code` (no semicolon) makes it the tail expression, and `code` is an `i32`. This fails to compile with error[E0308]: mismatched types, expected `()`, found `i32`, and the compiler's own `help:` even offers "try adding a return type: `-> i32`" as one fix. The other fix — the one that matches the function's actual intent here — is simply adding a semicolon after `code` so the value is discarded.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A block's value is its last expression unless a semicolon turns that expression into a discarded statement — internalizing this one rule explains function returns, `if`-as-expression, and why a stray semicolon (or a missing one) shows up as `E0308` instead of a silent bug.
 </Callout>
 
 export const quizFunctions = [
@@ -143,6 +279,28 @@ export const quizFunctions = [
             "A zero-sized struct that cannot be used in expressions"
         ],
         answer: 2
+    },
+    {
+        q: "Does this compile, and if not, what error code?\n```rust\nfn square(n: i32) -> i32 {\n    n * n;\n}\n```",
+        options: [
+            "Yes, it returns n * n",
+            "No — error[E0308], expected i32, found () because of the trailing semicolon",
+            "No — error[E0384], cannot assign twice to immutable variable",
+            "Yes, it returns () and discards the computed value"
+        ],
+        answer: 1,
+        explain: "The semicolon after `n * n` turns it into a statement, so the function body has no tail expression and implicitly returns () — but the signature promises i32, producing error[E0308]."
+    },
+    {
+        q: "What does the never type ! mean when used as a function's return type, as in fn fail(msg: &str) -> !?",
+        options: [
+            "The function returns a boolean that is always false",
+            "The function is guaranteed to never be called",
+            "The function never returns normally (it always panics, loops forever, or exits) — ! coerces to any expected type",
+            "The function returns void, identical to leaving off -> entirely"
+        ],
+        answer: 2,
+        explain: "! marks a function that never produces a value at all, which is why a call to it can stand in for any other type in a branch — the compiler knows that branch will never actually need to produce that type's value."
     }
 ];
 

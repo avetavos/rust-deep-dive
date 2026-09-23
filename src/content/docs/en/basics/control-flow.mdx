@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## `if` as an Expression
 
@@ -23,6 +25,63 @@ fn main() {
 ```
 
 No parentheses are required around the condition, and curly braces around the body are mandatory.
+
+## What the Compiler Says: The Condition Must Be `bool`
+
+Rust has no notion of "truthy" values — no language rule turns a nonzero integer, a non-empty string, or a non-null pointer into `true`. The condition of an `if` must be a real `bool`, or the compiler rejects it before it ever considers what the branches return:
+
+```rust
+// @expect-error E0308
+fn main() {
+    let x = 5;
+    if x {
+        println!("nonzero");
+    }
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> src/main.rs:4:8
+  |
+4 |     if x {
+  |        ^ expected `bool`, found integer
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0308`.
+```
+
+The fix is always a real comparison, such as `if x != 0`. This is the same `E0308` you have already seen for mismatched assignments and returns — the condition of an `if` is just another place the compiler checks a type against what it expects.
+
+### And the Branches Must Match Each Other
+
+Separately from the condition, the `if` and `else` bodies are two expressions that must produce the **same type** as each other, because the whole `if` has to resolve to one type when it is used as a value:
+
+```rust
+// @expect-error E0308
+fn main() {
+    let x = 5;
+    let y = if x > 0 { "positive" } else { 0 };
+    println!("{}", y);
+}
+```
+
+```text
+error[E0308]: `if` and `else` have incompatible types
+ --> src/main.rs:4:44
+  |
+4 |     let y = if x > 0 { "positive" } else { 0 };
+  |                        ----------          ^ expected `&str`, found integer
+  |                        |
+  |                        expected because of this
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0308`.
+```
+
+An `if` used only as a statement (its value discarded) does not have this restriction — every branch is allowed to be `()` independently, which is exactly the shape of the next example.
 
 ### `if` in a Classic Statement Form
 
@@ -58,6 +117,27 @@ fn main() {
 }
 ```
 
+### Labels for Nested Loops
+
+When loops are nested, a bare `break` or `continue` only affects the innermost one. **Labels** (written `'name:` before the loop) let you target an outer loop directly:
+
+```rust
+fn main() {
+    let mut found = None;
+    'outer: for i in 0..5 {
+        for j in 0..5 {
+            if i * j == 6 {
+                found = Some((i, j));
+                break 'outer;
+            }
+        }
+    }
+    println!("found = {:?}", found);
+}
+```
+
+`break 'outer;` exits both loops immediately once a match is found — without a label, `break` alone would only stop the inner `for` and the outer loop would keep going.
+
 ### `while` — Condition-Based Loop
 
 `while` repeats as long as its condition is `true`. It cannot return a value via `break`.
@@ -72,6 +152,21 @@ fn main() {
     println!(); // newline
 }
 ```
+
+### `while let` — Loop While a Pattern Matches
+
+`while let` combines `while` with pattern matching: it keeps looping as long as the value matches the given pattern, and stops the moment it does not — a common shape for draining a collection:
+
+```rust
+fn main() {
+    let mut stack = vec![1, 2, 3];
+    while let Some(top) = stack.pop() {
+        println!("popped: {}", top);
+    }
+}
+```
+
+`.pop()` returns `Option<i32>` — `Some(value)` while the `Vec` still has elements, `None` once it is empty. The loop condition *is* the pattern match: it runs the body while the pattern matches `Some(_)`, and exits the instant `.pop()` returns `None`.
 
 ### `for` — Iterate Over Collections and Ranges
 
@@ -101,6 +196,72 @@ fn main() {
 ```
 
 Prefer `for` over `while` with a manual index whenever possible — it is safer and more expressive.
+
+## `match` on Integers and Ranges (a Teaser)
+
+`match` compares a value against a series of patterns and runs the arm for the first one that fits — patterns can be exact integers or inclusive ranges. The full power of `match` (enums, structs, guards, bindings) belongs to the Structs, Enums & Matching module; here is just enough to read simple dispatch logic:
+
+```rust
+fn main() {
+    let score = 82;
+    let grade = match score {
+        90..=100 => "A",
+        80..=89 => "B",
+        70..=79 => "C",
+        _ => "F",
+    };
+    println!("grade = {}", grade);
+}
+```
+
+Unlike a chain of `if`/`else if`, `match` on an exhaustive set of patterns is checked by the compiler for completeness — the trailing `_ => "F"` arm here is what makes this particular match exhaustive; the next module covers what happens (and what the compiler says) when you leave one out.
+
+## `let else` — Pattern Match or Bail Out
+
+`let else` binds a pattern like a normal `let`, but if the pattern does **not** match, its `else` block runs instead — and that block must diverge (`return`, `break`, `continue`, or `panic!`), because the rest of the function assumes the pattern succeeded:
+
+```rust
+fn parse_or_default(input: &str) -> i32 {
+    let Ok(n) = input.parse::<i32>() else {
+        return 0;
+    };
+    n * 2
+}
+
+fn main() {
+    println!("{}", parse_or_default("21")); // 42
+    println!("{}", parse_or_default("nope")); // 0
+}
+```
+
+Compare this to `while let` above: both extract a value from a pattern, but `while let` loops while the pattern keeps matching, while `let else` runs once and demands the pattern match immediately, with an explicit escape hatch when it does not.
+
+## Let Chains (First Sight)
+
+Starting in edition 2024, you can combine multiple `let` pattern matches and boolean conditions with `&&` directly inside an `if` (or `while`) — no nested `if let` needed:
+
+```rust
+fn main() {
+    let a: Option<i32> = Some(5);
+    if let Some(x) = a && x > 0 {
+        println!("positive: {}", x);
+    } else {
+        println!("not positive");
+    }
+}
+```
+
+This is a 2024-only feature. Compiling the exact same `if let Some(x) = a && x > 0` under edition 2021 is rejected outright, with a message naming the edition requirement directly:
+
+```text
+error: let chains are only allowed in Rust 2024 or later
+ --> src/main.rs:3:8
+  |
+3 |     if let Some(x) = a && x > 0 {
+  |        ^^^^^^^^^^^^^^^
+```
+
+Before let chains, the same logic needed a nested `if let` with the extra condition inside it (`if let Some(x) = a { if x > 0 { ... } }`) or a `matches!`-style combination — both noticeably more nested than the 2024 version above.
 
 export const controlFlowCode = `fn main() {
     // if as an expression
@@ -146,6 +307,51 @@ export const controlFlowCode = `fn main() {
 In Rust, `if` and `loop` are expressions — they produce a value. Assigning `let x = if cond { a } else { b }` or `let result = loop { break value }` is idiomatic Rust. Both arms of an `if` expression and the `break` value in a `loop` must be the same type.
 </Callout>
 
+<Mermaid code={`flowchart TD
+    Start{"what are you\nlooping over?"}
+    Start -->|"a collection or range"| For["for item in collection"]
+    Start -->|"a condition, no known count"| While["while condition"]
+    Start -->|"a pattern that may stop matching"| WhileLet["while let Some(x) = ..."]
+    Start -->|"unknown iterations,\nneed a value out of the loop"| Loop["loop { ... break value; }"]
+    For --> Body["loop body"]
+    While --> Body
+    WhileLet --> Body
+    Loop --> Body
+    Body -->|"nested loop, need to exit an outer one"| Label["label the outer loop:\n'outer: for/while/loop"]`} title="Choosing a loop construct" />
+
+## Mental Model
+
+Every control-flow construct in this lesson is really answering one question: "given this condition or pattern, which block of code runs next, and does it produce a value I care about?" `if` and `match` answer it once, from a condition or a pattern, and can produce a value directly. `loop`, `while`, and `for` answer it repeatedly — `loop` is the only one that can hand a value back out (via `break value`), because `while` and `for` are built to stop when their *condition* becomes false, not when a computation is *done*, and those are different reasons to stop.
+
+## Trade-offs
+
+Making `if` and `match` full expressions (instead of statements, like in C or Java) removes an entire category of "declare a variable above, assign it in every branch below" boilerplate — at the cost of a stricter rule: every branch must agree on a type, which is exactly what the compiler enforces with `E0308` when they do not. Let chains buy a flatter, less-nested `if let ... && condition` at the cost of being a 2024-only feature — code that must also compile on an older edition (or an MSRV predating 2024's stabilization) cannot use them yet.
+
+## Common Misconceptions
+
+- **"Any non-bool value can be used as a condition, like 0/1 in C or truthy/falsy values in Python and JavaScript."** Rust has no truthiness coercion at all — an `if` condition must already be a `bool`, full stop, which is exactly the `E0308` demonstrated above.
+- **"`while let` and `let else` do the same thing."** `while let` repeats its body for as long as a pattern keeps matching. `let else` matches a pattern exactly once and diverges immediately (`return`/`break`/`panic!`) if it does not — it is for "get this value or bail," not for looping.
+- **"Let chains are just syntax sugar with no real edition restriction."** They are gated to edition 2024 specifically — the exact same source compiles under 2021 only after removing the chained `&&` inside the `if let`, so this is a genuine compatibility boundary, not merely a style choice.
+
+## Reading AI-generated code
+
+AI-generated loops sometimes have no reachable `break` at all — a `loop { ... }` block where every exit path was meant to be an early `return`, but one branch was refactored and the `return` quietly turned into something that does not actually leave the loop, leaving an infinite loop that only shows up under real load.
+
+<SpotTheBug code={`fn wait_for_ready(check: impl Fn() -> bool) {
+    loop {
+        if check() {
+            println!("ready!");
+        }
+    }
+}
+`}>
+This `loop` has no `break` anywhere — once `check()` returns `true` it prints `"ready!"` and immediately loops right back around and checks again, forever, printing `"ready!"` on every single iteration instead of stopping. The fix is a `break` in the branch that was supposed to end the wait: `if check() { println!("ready!"); break; }`. Every hand-written `loop` should be checked for a `break` that is actually reachable on every relevant path, not just present somewhere in the source.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`if`/`match` pick a value once from a condition or pattern; `loop`/`while`/`for` repeat a block, and only `loop` can hand a value back out via `break value` — and every condition in this lesson must be a real `bool`, with no implicit truthiness anywhere in Rust.
+</Callout>
+
 export const quizControlFlow = [
     {
         q: "What is required for Rust's if to be used as an expression on the right side of let?",
@@ -186,6 +392,39 @@ export const quizControlFlow = [
             "A recursive function call"
         ],
         answer: 2
+    },
+    {
+        q: "Does this compile?\n```rust\nfn main() {\n    let x = 5;\n    if x {\n        println!(\"nonzero\");\n    }\n}\n```",
+        options: [
+            "Yes, prints \"nonzero\" because 5 is truthy",
+            "No — error[E0308], expected bool, found integer",
+            "No — error[E0384], cannot assign twice to immutable variable",
+            "Yes, but prints nothing because 5 is falsy"
+        ],
+        answer: 1,
+        explain: "Rust has no truthy/falsy coercion — an if condition must literally be a bool, so a bare integer fails with error[E0308]: expected `bool`, found integer."
+    },
+    {
+        q: "What does break 'outer; do inside a nested loop labeled 'outer: for ... { for ... { ... } }?",
+        options: [
+            "It only breaks the innermost loop, same as a plain break",
+            "It breaks out of both the inner loop and the labeled outer loop immediately",
+            "It is a syntax error — labels can only be used with continue",
+            "It restarts the outer loop from the beginning"
+        ],
+        answer: 1,
+        explain: "A labeled break targets the loop carrying that label directly, exiting every loop nested inside it in one step — unlike a bare break, which only stops the innermost loop."
+    },
+    {
+        q: "What is required for the else block of a let else statement?\n```rust\nlet Ok(n) = input.parse::<i32>() else {\n    // what must go here?\n};\n```",
+        options: [
+            "Nothing — it can simply fall through to the next line",
+            "It must produce the same type as n",
+            "It must diverge: return, break, continue, or panic!, since the rest of the function assumes the pattern matched",
+            "It must call unwrap() on the original value"
+        ],
+        answer: 2,
+        explain: "let else requires its else block to never fall through — it must diverge, because every line after the let else assumes the pattern already matched successfully."
     }
 ];
 

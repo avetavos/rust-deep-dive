@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## ตัวแปร Immutable โดยค่าเริ่มต้น
 
@@ -68,7 +70,36 @@ fn main() {
 }
 ```
 
-Shadowing ไม่เหมือน `mut` ด้วย `mut` คุณกำหนดค่าใหม่ให้ตัวแปรเดิม ด้วย shadowing คุณสร้างตัวแปรใหม่ที่มีชื่อเดียวกัน เมื่อ scope สิ้นสุด binding ด้านนอกจะกลับมามองเห็นได้อีกครั้ง
+Shadowing ไม่เหมือน `mut` ด้วย `mut` คุณกำหนดค่าใหม่ให้ตัวแปรเดิม — และค่าใหม่นั้น **ต้องมี type เดียวกัน** กับของเดิม เพราะ `mut` เปลี่ยนแค่ค่าที่เก็บใน binding ที่ตายตัวอันเดียว ด้วย shadowing คุณสร้างตัวแปรใหม่ที่มีชื่อเดียวกัน ดังนั้น type ของมันจึงเปลี่ยนไปเป็นคนละอย่างได้อย่างอิสระ อย่างที่ `word` (เป็น `&str`) กลายเป็น `word` (เป็น `usize`) ด้านบนแสดงให้เห็น เมื่อ scope สิ้นสุด binding ด้านนอกจะกลับมามองเห็นได้อีกครั้ง
+
+## สิ่งที่คอมไพเลอร์บอก: `mut` เปลี่ยน Type ไม่ได้
+
+เพราะ `mut` ใช้ binding เดิมซ้ำ การให้ค่าที่มี type ต่างไปคือ type error ไม่ใช่โอกาสในการ shadow:
+
+```rust
+// @expect-error E0308
+fn main() {
+    let mut x: i32 = 5;
+    x = "a";
+    println!("x = {}", x);
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> src/main.rs:4:9
+  |
+3 |     let mut x: i32 = 5;
+  |                --- expected due to this type
+4 |     x = "a";
+  |         ^^^ expected `i32`, found `&str`
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0308`.
+```
+
+นี่คือ `E0308: mismatched types` ตัวเดียวกับที่จะเจอทั่วทั้ง Rust ทุกครั้งที่ type ของค่าไม่ตรงกับสิ่งที่ context คาดหวัง — annotation, parameter, return type `mut` แค่ยกเลิกข้อจำกัด "assigned twice" จาก `E0384` เท่านั้น มันไม่ได้ยกเลิก type check
 
 ### Constants
 
@@ -90,6 +121,33 @@ fn main() {
 ```
 
 เครื่องหมาย underscore ใน `100_000` คือ **ตัวคั่นตัวเลข** (numeric separator) เป็นเพียงการแสดงผล คอมไพเลอร์ไม่สนใจตัวคั่นนี้ ใช้เพื่อให้ตัวเลขขนาดใหญ่อ่านได้ง่ายขึ้น
+
+### `static`
+
+`static` ก็ประกาศค่าที่มีอายุตลอดโปรแกรมเช่นกัน แต่ความหมายต่างจาก `const`: `static` มี **ที่อยู่หน่วยความจำเดียวที่ตายตัว** ตลอดการรันโปรแกรม ในขณะที่ `const` ไม่มีที่อยู่ที่รับประกันเลย — คอมไพเลอร์มีอิสระที่จะ inline ค่าของมันในทุกจุดที่ใช้ เสมือนคุณ paste literal นั้นด้วยมือ
+
+```rust
+static APP_NAME: &str = "rust-deep-dive";
+const MAX_RETRIES: u32 = 5;
+
+fn main() {
+    println!("{} allows {} retries", APP_NAME, MAX_RETRIES);
+}
+```
+
+| | `let` | `const` | `static` |
+|---|---|---|---|
+| Type annotation | ไม่บังคับ (อนุมานได้) | **บังคับ** | **บังคับ** |
+| ค่า | expression ใดก็ได้ ประเมินตอน runtime | constant expression ประเมินตอน compile time | constant expression ประเมินตอน compile time |
+| อายุ | จบเมื่อ scope จบ | inline ในทุกจุดที่ใช้ — ไม่มีที่อยู่เดียว | ที่อยู่หน่วยความจำเดียวตลอดโปรแกรม |
+| เปลี่ยนค่าได้ไหม | ด้วย `mut` | ไม่ได้เลย | `static mut` มีอยู่แต่ต้องใช้ `unsafe` แตะต้อง — ใช้ atomic หรือ `Mutex` แทน |
+
+<Mermaid code={`flowchart TD
+    L["let x = 5;"] -->|"scope ends"| D["dropped"]
+    C["const MAX: u32 = 100;"] -->|"used"| I["inlined at each call site\n(no fixed address)"]
+    S["static NAME: &str = ...;"] -->|"used"| A["same address\nfor the whole program"]`} title="let vs const vs static" />
+
+ในทางปฏิบัติ: ใช้ `let` สำหรับเกือบทุกอย่าง, `const` สำหรับค่าคงที่ที่ต้องการตั้งชื่อ (limit, default) และ `static` เฉพาะเมื่อต้องการที่อยู่เดียวที่แชร์กันจริงๆ — ที่พบบ่อยที่สุดคือสำหรับ FFI หรือ global ที่จะห่อด้วย atomic type
 
 export const variablesMutabilityCode = `fn main() {
     let x = 5;
@@ -114,6 +172,40 @@ export const variablesMutabilityCode = `fn main() {
 
 <Callout title="ตัวแปร immutable โดยค่าเริ่มต้น — เปิดใช้การเปลี่ยนค่าด้วย mut">
 การทำให้ immutable เป็นค่าเริ่มต้นบังคับให้คุณต้องระบุชัดเจนว่าข้อมูลใดเปลี่ยนแปลงได้ เมื่อเห็น `mut` คุณรู้ว่าตัวแปรนั้นถูกออกแบบมาเพื่อเปลี่ยนค่า เมื่อไม่เห็น `mut` คอมไพเลอร์รับประกันว่าไม่มีการเปลี่ยนค่าเกิดขึ้น
+</Callout>
+
+## Mental Model
+
+มองว่า `let` คือการตั้งชื่อให้ค่าหนึ่ง ไม่ใช่ memory cell ที่คุณเขียนทับได้ตามใจ `mut` อัปเกรดชื่อนั้นให้เขียนทับได้ด้วย — แต่ด้วยค่าที่มี type เดียวกันเป๊ะเท่านั้น เพราะคอมไพเลอร์กำหนด storage size และ layout ของ binding นั้นไปแล้ว Shadowing หลบคำถามนี้ไปเลย: มันไม่ใช้ storage เดิมซ้ำเลย มันสร้างชื่อใหม่ที่บังเอิญ print ออกมาเหมือนกันบนหน้าจอ ซึ่งเป็นเหตุผลที่มันเปลี่ยน type ได้
+
+## Trade-offs
+
+Immutable-by-default หมายความว่า binding ส่วนใหญ่ใน codebase ของ Rust มาพร้อมการรับประกันที่คอมไพเลอร์บังคับ: ไม่มีอะไรที่อยู่ถัดไปเปลี่ยนค่านี้ได้ นั่นทำให้การวิเคราะห์ฟังก์ชันแบบแยกเดี่ยวง่ายขึ้นมาก — ไม่ต้องตาม call site ทุกจุดเพื่อดูว่าค่าที่อ่านที่บรรทัด 40 ต่างจากตอนบรรทัด 10 หรือไม่ ต้นทุนคือความฝืด: คุณต้องเติม `mut` อย่างตั้งใจ และการลืมมันทำให้เกิด compile error แทนที่จะเป็น runtime surprise ซึ่งผู้เริ่มต้นบางคนรู้สึกว่าภาษา "ขวางทาง" ก่อนที่จะซึมซับว่าทางเลือกอื่นคือบั๊กที่หายากกว่ามาก
+
+## Common Misconceptions
+
+- **"Shadowing เป็นแค่ shorthand ของ mut"** ทั้งสองแก้ปัญหาต่างกัน `mut` เปลี่ยนค่าของ binding เดิมในที่เดิม (type เดียวกัน, storage เดียวกัน) Shadowing สร้าง binding ใหม่ทั้งหมด — เปลี่ยน type ได้ และ binding เก่ายังอยู่ (แค่เรียกชื่อไม่ได้แล้ว) จนกว่า scope ของมันจะจบ
+- **"`const` กับ `static` ใช้แทนกันได้สำหรับ global constant"** `const` ไม่มีที่อยู่หน่วยความจำที่รับประกัน — คอมไพเลอร์ inline มันได้และทำจริงในทุกจุดที่ใช้ `static` รับประกันที่อยู่เดียวตลอดโปรแกรม ใช้ `const` เว้นแต่ต้องการที่อยู่เดียวที่แชร์กันนั้นจริงๆ
+- **"หน่วยความจำของตัวแปร immutable เปลี่ยนแปลงไม่ได้เลย"** Immutability เกี่ยวกับ *binding* ไม่ใช่ byte จำเป็นเสมอไป — `String` ที่อยู่หลัง `let` แบบ immutable ยังเป็นเจ้าของ heap allocation ที่คอมไพเลอร์อาจใช้ซ้ำข้าม shadowed rebind ได้ในทางทฤษฎี สิ่งที่ `let` โดยไม่มี `mut` รับประกันจริงๆ คือ *คุณ* เขียนผ่านชื่อนั้นไม่ได้
+
+## อ่านโค้ดที่ AI เขียน
+
+AI มักเติม `mut` "เผื่อไว้" — ให้ loop counter ที่อ่านอย่างเดียว หรือค่าที่ถูก reassign แค่ครั้งเดียวใน branch ที่จริงๆ ใช้ `let` ใหม่ก็ได้ คอมไพเลอร์จะไม่หยุดคุณ (unused `mut` เป็นแค่ warning ไม่ใช่ error) ดังนั้นความรกแบบนี้รอดผ่าน code review ได้ถ้าไม่มีใครสังเกต
+
+<SpotTheBug code={`fn main() {
+    let mut total = 0;
+    for price in [10, 20, 30] {
+        println!("adding {price}");
+    }
+    total = 60;
+    println!("total = {total}");
+}
+`}>
+`total` ถูกประกาศเป็น `mut` แต่ loop `for` ไม่เคยอัปเดตมันเลย — มันถูก reassign แค่ครั้งเดียวหลังจากนั้น ซึ่งแค่ `let mut total = 0;` ตามด้วย `total = 60;` ก็ทำได้โดยไม่ต้องมี loop เลย (loop body ก็ไม่ได้ใช้ `total` ด้วยซ้ำ) การคอมไพล์โค้ดนี้จะได้ `warning: variable does not need to be mutable` ชี้ไปที่บรรทัด `let mut total` พร้อม help: remove this `mut` — ทางแก้จริงๆ ในกรณีนี้มักคือสะสมค่าจริงในลูป (`total += price;`) มากกว่าจะปิดปาก warning ด้วยการลบ `mut` ทิ้ง
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`mut` ให้ binding เดิมถือค่าใหม่ที่มี type เดียวกัน; shadowing ให้ binding ใหม่ทั้งหมด อาจมี type ต่างไปก็ได้ — ใช้ `mut` เมื่อคุณกำลังอัปเดตค่าที่วิ่งอยู่จริงๆ และใช้ shadowing เมื่อคุณกำลังแปลงค่าหนึ่งไปเป็นรูปถัดไป
 </Callout>
 
 export const quizVariablesMutability = [
@@ -146,6 +238,28 @@ export const quizVariablesMutability = [
             "lifetime parameter"
         ],
         answer: 1
+    },
+    {
+        q: "โค้ดนี้ compile ไหม?\n```rust\nfn main() {\n    let mut x: i32 = 5;\n    x = \"a\";\n    println!(\"x = {}\", x);\n}\n```",
+        options: [
+            "ผ่าน — mut อนุญาตให้กำหนดค่า type ใดก็ได้",
+            "ไม่ผ่าน — error[E0308], mismatched types: mut รักษา type เดิมไว้",
+            "ไม่ผ่าน — error[E0384], cannot assign twice to immutable variable",
+            "ผ่าน แต่ print ค่าขยะตอน runtime"
+        ],
+        answer: 1,
+        explain: "mut ยกเลิกแค่ข้อจำกัดเรื่อง reassign — ค่าใหม่ยังต้องมี type เดียวกับที่ binding ประกาศไว้ จึงพังด้วย error[E0308]: expected `i32`, found `&str`"
+    },
+    {
+        q: "ความแตกต่างหลักระหว่าง const กับ static คืออะไร?",
+        options: [
+            "const เปลี่ยนค่าได้ static เปลี่ยนไม่ได้",
+            "static ไม่ต้องมี type annotation ส่วน const ต้องมี",
+            "const ไม่มีที่อยู่หน่วยความจำที่รับประกัน (คอมไพเลอร์อาจ inline ได้); static มีที่อยู่เดียวที่ตายตัวตลอดโปรแกรม",
+            "ไม่มีความแตกต่าง — คอมไพล์ออกมาเหมือนกันทุกประการ"
+        ],
+        answer: 2,
+        explain: "ค่า const ถูก inline ในทุกจุดที่ใช้โดยไม่มีที่อยู่เดียว; static รับประกันที่อยู่เดียวตลอดอายุโปรแกรม"
     },
     {
         q: "underscore ใน 100_000 มีความหมายอย่างไรต่อคอมไพเลอร์ Rust?",

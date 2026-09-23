@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## การประกาศฟังก์ชัน
 
@@ -46,6 +48,39 @@ fn main() {
 
 การเพิ่ม semicolon ที่บรรทัดสุดท้ายของ block จะ **แปลง expression เป็น statement** — block จะ return unit type `()` แทนที่จะเป็นค่าที่คำนวณได้
 
+## สิ่งที่คอมไพเลอร์บอก: Semicolon เดียวเปลี่ยน Return Type
+
+เพราะ function body เองก็คือ block กฎนี้จึงใช้กับ `fn` body ด้วย — และคอมไพเลอร์รายงานเป็น type mismatch กับ `()` ไม่ใช่กับ type ที่คุณคาดหวัง:
+
+```rust
+// @expect-error E0308
+fn square(n: i32) -> i32 {
+    n * n;
+}
+
+fn main() {
+    println!("{}", square(4));
+}
+```
+
+```text
+error[E0308]: mismatched types
+ --> src/main.rs:2:22
+  |
+2 | fn square(n: i32) -> i32 {
+  |    ------            ^^^ expected `i32`, found `()`
+  |    |
+  |    implicitly returns `()` as its body has no tail or `return` expression
+3 |     n * n;
+  |          - help: remove this semicolon to return this value
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0308`.
+```
+
+สังเกตการวินิจฉัยของคอมไพเลอร์เอง: เมื่อมี semicolon อยู่ function body ไม่มี tail expression เลย จึง return `()` โดยอัตโนมัติ — ทางแก้คือลบ semicolon ทิ้ง ซึ่งบรรทัด `help:` ชี้ตรงไปที่จุดนั้นเลย นี่คือ compiler error แรกๆ ที่ผู้เริ่มต้นเจอบ่อยที่สุด และมันเป็นการแก้แบบ one-character fix เดียวกันเสมอ
+
 ### Trailing-Expression Return
 
 expression สุดท้ายใน function body ที่เขียน **โดยไม่มี** semicolon คือ return value คุณยังสามารถใช้ keyword `return` สำหรับ early return ได้ แต่ Rust ที่เป็น idiomatic นิยม trailing expression สำหรับ return path หลัก
@@ -71,7 +106,78 @@ fn greet(name: &str) {
 }
 ```
 
-ฟังก์ชัน `describe` ใน playground ด้านล่าง return `&'static str`: reference ไปยัง string literal ที่ถูกฝังไว้ใน binary และมีอายุตลอดทั้งโปรแกรม คอมไพเลอร์จึงให้ lifetime พิเศษ `'static` กับมัน — คุณจะได้เจอ `'static` และ lifetime อื่นๆ อย่างละเอียดในโมดูล Traits & Generics
+ฟังก์ชัน `describe` ใน playground ด้านล่าง return `&'static str`: reference ไปยัง string literal ที่ถูกฝังไว้ใน binary และมีอายุตลอดทั้งโปรแกรม `'static` หมายถึงสิ่งนี้ตรงๆ — **"valid ตลอดอายุโปรแกรม"** — และ string literal จะเข้าเงื่อนไขนี้เสมอ คุณจะได้เจอ `'static` และ lifetime อื่นๆ อย่างละเอียดในโมดูล Traits & Generics
+
+### `todo!` และ `unimplemented!`
+
+ระหว่างร่างโครงฟังก์ชันก่อนใส่ body จริง `todo!()` และ `unimplemented!()` ให้โค้ด compile ผ่านได้ (type-check เป็น type อะไรก็ได้ รวมถึง `-> !` ที่จะพูดถึงต่อไป) พร้อม panic เสียงดังถ้า path นั้นถูกเรียกจริงตอน runtime:
+
+```rust
+// @expect-panic
+fn compute_total(items: &[i32]) -> i32 {
+    if items.is_empty() {
+        return 0;
+    }
+    todo!("implement the real calculation")
+}
+
+fn main() {
+    println!("{}", compute_total(&[1, 2, 3]));
+}
+```
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:6:5:
+not yet implemented: implement the real calculation
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+นี่ดีกว่า `panic!("todo")` เปล่าๆ มาก: ทั้ง `todo!` และ `unimplemented!` สื่อ *เจตนา* ทั้งในข้อความและในสายตาของ type checker (ผู้อ่าน — หรือ `grep`) จะบอกได้ทันทีว่า "path นี้ยังไม่เสร็จ" ต่างจาก "path นี้คือ runtime error จริงๆ"
+
+### Never Type `!`
+
+ฟังก์ชันที่ไม่เคย return เลย — เพราะมัน panic เสมอ, loop ไม่รู้จบ หรือเรียก `std::process::exit` — annotate ได้ด้วย `-> !` ซึ่งคือ **never type** `!` พิเศษตรงที่มัน coerce ไปเป็น type อื่นใดก็ได้ ซึ่งเป็นสิ่งที่ทำให้ branch `fail(...)` แทนที่ branch ที่ return `String` ภายใน `if`/`else` หรือ `match` ที่ arm อื่น return ค่าจริงได้:
+
+```rust
+fn fail(msg: &str) -> ! {
+    panic!("{}", msg);
+}
+
+fn describe_or_fail(n: i32) -> &'static str {
+    if n >= 0 {
+        "non-negative"
+    } else {
+        fail("negative numbers are not supported")
+    }
+}
+```
+
+### Function Pointers
+
+ชื่อฟังก์ชัน โดยไม่เรียกมัน สามารถส่งต่อเป็นค่าของ type `fn(ArgTypes) -> ReturnType` ได้เอง — function pointer ธรรมดา ต่างจาก (และง่ายกว่า) closure ที่จะพูดถึงในโมดูล Collections & Iterators:
+
+```rust
+fn double(n: i32) -> i32 { n * 2 }
+fn triple(n: i32) -> i32 { n * 3 }
+
+fn apply(f: fn(i32) -> i32, value: i32) -> i32 {
+    f(value)
+}
+
+fn main() {
+    println!("{}", apply(double, 5)); // 10
+    println!("{}", apply(triple, 5)); // 15
+}
+```
+
+<Mermaid code={`flowchart TD
+    B["function body { ... }"] --> T{"last line has a ;?"}
+    T -->|"no"| E["tail expression\n-> its value is returned"]
+    T -->|"yes"| U["last line is a statement\n-> body returns ()"]
+    E --> M{"does the fn signature\nsay -> SomeType?"}
+    U --> M
+    M -->|"types match"| OK["compiles"]
+    M -->|"types don't match"| ERR["E0308: mismatched types"]`} title="function body จะ return type อะไรถูกตัดสินอย่างไร" />
 
 export const functionsCode = `fn add(a: i32, b: i32) -> i32 {
     a + b   // trailing expression -- no semicolon -- is the return value
@@ -101,6 +207,36 @@ fn main() {
 
 <Callout title="expression สุดท้าย (ไม่มี semicolon) คือ return value">
 การละ semicolon ที่บรรทัดสุดท้ายของ function body ทำให้ expression นั้นเป็น return value การใส่ semicolon จะเปลี่ยน expression นั้นเป็น statement ที่ return `()` นี่ไม่ใช่ gotcha แต่เป็นการออกแบบที่ตั้งใจทำให้ closure, block และ function ทำงานสอดคล้องกันในฐานะ expression
+</Callout>
+
+## Mental Model
+
+ทุก block ใน Rust — function body, `if` branch, `loop`, block เปล่า `{ }` — เป็นไปตามกฎเดียวกันเป๊ะ: ค่าของมันคือ expression สุดท้าย เว้นแต่ expression นั้นลงท้ายด้วย semicolon ซึ่งในกรณีนั้นค่าของ block คือ `()` `-> T` ใน function signature ก็แค่การตรวจสอบคำสัญญาของคอมไพเลอร์ที่ใช้กับ block นอกสุด เมื่อคุณมองฟังก์ชันแบบนี้ if-เป็น-expression, block-scoped shadowing และกฎ semicolon จะยุบรวมเป็นความคิดเดียวแทนที่จะเป็นสามเรื่องแยกที่ต้องจำ
+
+## Trade-offs
+
+การใช้ semicolon เป็นตัวอักษรตัวเดียวที่ตัดสิน "มีค่า" กับ "ไม่มีค่า" นั้นกระชับมาก — คุณไม่ต้องเขียน `return` สำหรับกรณีทั่วไป — แต่หมายความว่า semicolon ที่หลงหรือขาดหายไปตัวเดียวเปลี่ยนความหมายของฟังก์ชัน ไม่ใช่แค่ formatting ต่างจากภาษาที่ whitespace หรือ semicolon เป็นแค่ความสวยงาม ผลตอบแทนคือ expression ประกอบกันได้อย่างสม่ำเสมอ: `if`, `match`, `loop` และ block ธรรมดาใช้แทนกันได้ทุกที่ที่ต้องการค่า โดยไม่ต้อง special-case อันไหนเลย
+
+## Common Misconceptions
+
+- **"Semicolon ใน Rust เป็นแค่ตัวจบ statement เหมือน C หรือ JavaScript"** ส่วนใหญ่ก็ใช่ — แต่ที่บรรทัดสุดท้ายของ block semicolon ยังเป็นสวิตช์ที่ทิ้งค่าของบรรทัดนั้นและทำให้ block return `()` แทน
+- **"`todo!()` เหมือนกับปล่อย comment // TODO ไว้"** Comment ไม่หยุดการทำงาน; `todo!()` (และ `unimplemented!()`) type-check เป็น type อะไรก็ได้ ทำให้โค้ดรอบข้าง compile ผ่านวันนี้ แต่ panic ทันทีที่บรรทัดนั้นถูกรันจริง — นั่นคือประเด็น: ship โค้ดที่มี `todo!()` ที่ไม่ถูกเรียกถึงได้อย่างปลอดภัย แต่ ship โค้ดที่ทำสิ่งผิดแบบเงียบๆ ไม่ปลอดภัย
+- **"function pointer (`fn(i32) -> i32`) กับ closure คือสิ่งเดียวกัน"** closure capture ตัวแปรจาก environment ได้; `fn` pointer ธรรมดา capture อะไรไม่ได้เลย — มันคือแค่ address ของฟังก์ชันเดี่ยวๆ closure ที่ไม่ capture อะไรเลยทุกตัว coerce เป็น function pointer ได้ แต่กลับกันไม่ได้
+
+## อ่านโค้ดที่ AI เขียน
+
+AI บางครั้งทิ้งค่าค้างไว้ท้ายฟังก์ชันที่ถูก refactor จาก "return บางอย่าง" เป็น "แค่ print มัน" เพราะบรรทัดท้ายไม่ถูกแตะระหว่างแก้ไข — semicolon ที่ควรถูกเพิ่มเพื่อให้กลับเป็น statement ที่ return `()` ถูกลืมไป
+
+<SpotTheBug code={`fn log_status(code: i32) {
+    println!("status: {}", code);
+    code
+}
+`}>
+`log_status` ไม่มี `-> i32` ใน signature จึงคาดหวังให้ return `()` — แต่ `code` ที่ท้ายสุด (ไม่มี semicolon) ทำให้มันเป็น tail expression และ `code` เป็น `i32` โค้ดนี้ compile ไม่ผ่านด้วย error[E0308]: mismatched types, expected `()`, found `i32` และ `help:` ของคอมไพเลอร์เองยังเสนอ "try adding a return type: `-> i32`" เป็นทางแก้หนึ่ง ทางแก้อีกทาง — ที่ตรงกับเจตนาจริงของฟังก์ชันนี้ — คือแค่เพิ่ม semicolon หลัง `code` เพื่อทิ้งค่านั้นไป
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ค่าของ block คือ expression สุดท้าย เว้นแต่ semicolon จะเปลี่ยน expression นั้นเป็น statement ที่ถูกทิ้ง — การซึมซับกฎเดียวนี้อธิบาย function return, if-เป็น-expression และเหตุผลที่ semicolon ที่หลง (หรือขาดหาย) ปรากฏเป็น `E0308` แทนที่จะเป็นบั๊กเงียบๆ
 </Callout>
 
 export const quizFunctions = [
@@ -143,6 +279,28 @@ export const quizFunctions = [
             "zero-sized struct ที่ไม่สามารถใช้ใน expression ได้"
         ],
         answer: 2
+    },
+    {
+        q: "โค้ดนี้ compile ไหม ถ้าไม่ผ่าน error code อะไร?\n```rust\nfn square(n: i32) -> i32 {\n    n * n;\n}\n```",
+        options: [
+            "ผ่าน — return n * n",
+            "ไม่ผ่าน — error[E0308], expected i32, found () เพราะ semicolon ที่ท้าย",
+            "ไม่ผ่าน — error[E0384], cannot assign twice to immutable variable",
+            "ผ่าน — return () และทิ้งค่าที่คำนวณได้"
+        ],
+        answer: 1,
+        explain: "semicolon หลัง n * n เปลี่ยนมันเป็น statement ดังนั้น function body ไม่มี tail expression และ return () โดยอัตโนมัติ — แต่ signature สัญญาว่าจะ return i32 จึงเกิด error[E0308]"
+    },
+    {
+        q: "never type ! ในฐานะ return type ของฟังก์ชัน เช่น fn fail(msg: &str) -> ! หมายความว่าอะไร?",
+        options: [
+            "ฟังก์ชัน return boolean ที่เป็น false เสมอ",
+            "ฟังก์ชันรับประกันว่าจะไม่ถูกเรียกเลย",
+            "ฟังก์ชันไม่เคย return แบบปกติเลย (panic เสมอ, loop ไม่รู้จบ หรือ exit) — ! coerce ไปเป็น type ใดก็ได้ที่คาดหวัง",
+            "ฟังก์ชัน return void เหมือนกับไม่ใส่ -> เลย"
+        ],
+        answer: 2,
+        explain: "! ระบุฟังก์ชันที่ไม่เคยผลิตค่าเลย ซึ่งเป็นเหตุผลที่การเรียกมันแทนที่ type อื่นใน branch ได้ — คอมไพเลอร์รู้ว่า branch นั้นจะไม่ต้องการค่าของ type นั้นจริงๆ"
     }
 ];
 
