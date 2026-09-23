@@ -1,0 +1,339 @@
+---
+title: 'Worked Review 3: Worker Pool'
+description: 'A full review of a small, plausible, AI-generated threaded worker pool -- four planted bugs across Arc, Mutex, channels, and joins, with real tool output.'
+sidebar:
+  order: 7
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+The third full review moves into concurrency, where "it ran correctly" is even weaker evidence than usual — every bug in this program is invisible under normal load and only shows up under a panic, a slow consumer, or a timing assumption that happens to hold today.
+
+## The Program
+
+A worker pool that squares a batch of numbers across four threads.
+
+export const wr3BuggyCode = `use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
+/// The actual unit of work: square a number.
+fn process_job(job: u32) -> u32 {
+    job * job
+}
+
+/// Runs \`jobs\` across \`worker_count\` threads and returns every result.
+fn run_worker_pool(jobs: Vec<u32>, worker_count: usize) -> Vec<u32> {
+    let (job_tx, job_rx) = mpsc::channel::<u32>();
+    let job_rx = Arc::new(Mutex::new(job_rx));
+    let results = Arc::new(Mutex::new(Vec::new()));
+
+    for job in jobs {
+        job_tx.send(job).unwrap();
+    }
+    drop(job_tx); // closes the channel once every job has been sent
+
+    for _ in 0..worker_count {
+        let job_rx = Arc::clone(&job_rx);
+        let results = Arc::clone(&results);
+        thread::spawn(move || loop {
+            let job = { job_rx.lock().unwrap().recv() };
+            match job {
+                Ok(job) => {
+                    let mut guard = results.lock().unwrap();
+                    guard.push(process_job(job));
+                }
+                Err(_) => break, // channel closed -- no more jobs
+            }
+        });
+    }
+
+    // Give the workers time to finish before reading the results.
+    thread::sleep(Duration::from_millis(300));
+    let results = results.lock().unwrap();
+    results.clone()
+}
+
+fn main() {
+    let jobs: Vec<u32> = (1..=10).collect();
+    let mut results = run_worker_pool(jobs, 4);
+    results.sort_unstable();
+    println!("processed {} jobs", results.len());
+    println!("results: {results:?}");
+    println!("sum of squares: {}", results.iter().sum::<u32>());
+}`;
+
+<Playground code={wr3BuggyCode} />
+
+```text
+processed 10 jobs
+results: [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
+sum of squares: 385
+```
+
+Correct output, every time you run it in practice. Four separate problems are hiding behind that "in practice."
+
+## Findings
+
+<details>
+<summary>Bug 1: `Arc<Mutex<T>>` where `thread::scope` would remove the `Arc` entirely</summary>
+
+**Symptom:** none — the program is correct, just carrying ownership machinery (`Arc::clone` on every loop iteration, atomic reference counting on every access) that a scoped thread wouldn't need.
+
+**Why:** `thread::spawn` requires every captured value to be `'static`, because the spawned thread could in principle outlive the function that created it — which is exactly why `Arc` (shared ownership, no fixed lifetime) is needed here at all. `thread::scope` guarantees every thread spawned inside it is joined before the scope block ends, so a plain borrow (`&Mutex<T>`) can safely be shared with each worker instead.
+
+**Evidence:** no lint flags this — it's a legitimate, compiling, correct pattern; the question is only whether it's more machinery than the problem needs. Here, every worker thread's lifetime is naturally bounded by `run_worker_pool`'s own body, so it is.
+
+**Fix:** see the fixed version below — `thread::scope` replaces `thread::spawn`, `Arc<Mutex<T>>` becomes a plain `Mutex<T>` borrowed by reference into each worker closure.
+</details>
+
+<details>
+<summary>Bug 2: Mutex poisoning is never handled</summary>
+
+**Symptom:** none in this run — every job here is small enough that `process_job` never panics. The instant one job panics while a worker holds the `results` lock, every other thread's next `.lock().unwrap()` — including the main thread's, at the end of `run_worker_pool` — panics too, regardless of whether that thread did anything wrong.
+
+**Evidence** — a minimal repro: one worker panics on an overflow while holding the lock; the *next* `.lock()`, on an entirely unrelated thread, pays for it:
+
+```rust
+// @expect-panic
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn process_job(job: u32) -> u32 {
+    job * job // overflows for a large enough job
+}
+
+fn main() {
+    let results = Arc::new(Mutex::new(Vec::<u32>::new()));
+    let jobs = [100_000u32]; // large enough that job * job overflows a u32
+
+    let results_a = Arc::clone(&results);
+    let handle = thread::spawn(move || {
+        let mut guard = results_a.lock().unwrap();
+        guard.push(process_job(jobs[0])); // panics here, while the lock is held
+    });
+    let _ = handle.join();
+
+    // BUG: this lock panics too, even though this thread did nothing wrong
+    let guard = results.lock().unwrap();
+    println!("{:?}", *guard);
+}
+```
+
+```text
+thread '<unnamed>' (<id>) panicked at src/main.rs:12:9:
+attempt to multiply with overflow
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'main' (<id>) panicked at src/main.rs:19:26:
+called `Result::unwrap()` on an `Err` value: PoisonError { .. }
+```
+
+**Fix:** decide deliberately what a poisoned lock means for this program, rather than letting `.unwrap()` propagate it as a fresh, unrelated-looking panic. `Mutex::lock()` returns `LockResult<MutexGuard<T>>`; handling the poisoned case explicitly (recovering the guard with `.into_inner()`, or treating a poisoned pool as fatal and shutting down cleanly) is the fix — which one is correct depends on whether partial results are still usable for this specific program:
+
+```rust
+// @skip-verify fragment: illustrates handling the poisoned case explicitly, not a full runnable program
+match results.lock() {
+    Ok(guard) => guard,
+    Err(poisoned) => {
+        eprintln!("a worker panicked; recovering partial results");
+        poisoned.into_inner() // decide deliberately to keep going with what's there
+    }
+};
+```
+</details>
+
+<details>
+<summary>Bug 3: `mpsc::channel()` (unbounded) for job distribution</summary>
+
+**Symptom:** none with 10 jobs. The risk is proportional to how large and how bursty the real job source becomes — an unbounded channel fed by, say, a live event stream instead of a fixed `Vec<u32>` would buffer every unconsumed job in memory with no limit.
+
+**Evidence:** none — `mpsc::channel()` is entirely valid API, and nothing about this specific 10-job program is large enough to reveal a problem. This is a design question about the *real* job source this code will eventually face, not something a test or lint can answer about the code as written.
+
+**Fix:** `mpsc::sync_channel(capacity)` blocks the sender once the buffer is full, applying backpressure instead of buffering indefinitely — see the fixed version below.
+</details>
+
+<details>
+<summary>Bug 4: worker `JoinHandle`s are dropped, never joined</summary>
+
+**Symptom:** none in this run — the fixed 300ms sleep happens to be generous enough for four trivial squaring jobs to finish. Nothing about that sleep is guaranteed: a slower machine, heavier jobs, or a change in worker count could all make it too short, and there is no signal if it is — the code would just silently return fewer results than expected.
+
+There is a second, sharper cost that no amount of sleeping fixes: `thread::spawn` returns a `JoinHandle`, and calling `.join()` on it is the *only* way the spawning thread learns whether the spawned thread panicked. Here, every `JoinHandle` is discarded the moment the `for` loop that created it moves to the next iteration — if a worker panics, its `Result` is never inspected, so nothing about `run_worker_pool`'s return value or exit status reflects that a worker died. Combined with Bug 2, a single overflowing job would poison the shared lock (main thread also panics — loud), but a worker crashing for any reason that *doesn't* touch the shared lock would fail completely silently.
+
+**Evidence:** no lint flags this either — dropping a `JoinHandle` is legal, ordinary Rust; only reading what `.join()`'s return value is *for* reveals the gap.
+
+**Fix:** the same change that fixes Bug 1 fixes this one too — `thread::scope` joins every spawned thread automatically when the scope block ends, and propagates a panic from any of them into the caller instead of silently discarding it.
+</details>
+
+## The Fixed Version
+
+`thread::scope` in place of `thread::spawn` removes the need for `Arc` (Bug 1) and guarantees every worker is joined before `results` is read (Bug 4, and the sleep along with it); `mpsc::sync_channel` adds backpressure (Bug 3). Bug 2 (poisoning) is a policy decision this specific version still leaves as `.unwrap()` for brevity — see the finding above for how to handle it deliberately.
+
+export const wr3FixedCode = `use std::sync::mpsc;
+use std::sync::Mutex;
+use std::thread;
+
+/// The actual unit of work: square a number.
+fn process_job(job: u32) -> u32 {
+    job * job
+}
+
+/// Runs \`jobs\` across \`worker_count\` threads and returns every result.
+fn run_worker_pool(jobs: Vec<u32>, worker_count: usize) -> Vec<u32> {
+    let (job_tx, job_rx) = mpsc::sync_channel::<u32>(4); // bounded -- applies backpressure to the sender
+    let job_rx = Mutex::new(job_rx);
+    let results = Mutex::new(Vec::new());
+
+    thread::scope(|scope| {
+        for _ in 0..worker_count {
+            scope.spawn(|| loop {
+                let job = { job_rx.lock().unwrap().recv() };
+                match job {
+                    Ok(job) => {
+                        let mut guard = results.lock().unwrap();
+                        guard.push(process_job(job));
+                    }
+                    Err(_) => break, // channel closed -- no more jobs
+                }
+            });
+        }
+
+        for job in jobs {
+            job_tx.send(job).unwrap();
+        }
+        drop(job_tx); // closes the channel once every job has been sent
+    }); // thread::scope joins every worker here, automatically, before results is read
+
+    results.into_inner().unwrap()
+}
+
+fn main() {
+    let jobs: Vec<u32> = (1..=10).collect();
+    let mut results = run_worker_pool(jobs, 4);
+    results.sort_unstable();
+    println!("processed {} jobs", results.len());
+    println!("results: {results:?}");
+    println!("sum of squares: {}", results.iter().sum::<u32>());
+}`;
+
+<Playground code={wr3FixedCode} />
+
+```text
+processed 10 jobs
+results: [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
+sum of squares: 385
+```
+
+Same result, no sleep, no `Arc`, and no way for a worker to finish "too late" — the scope block does not return until every worker has, which is what actually guarantees `results` is complete when it's read, instead of a fixed delay hoping that's true.
+
+## What The Tools Caught
+
+None of the four bugs in this file are caught by any clippy lint — `cargo clippy -- -W clippy::all -W clippy::pedantic -W clippy::nursery` against the buggy version reports nothing about `Arc`, `Mutex`, poisoning, the channel, or the dropped `JoinHandle`s:
+
+```text
+$ cargo clippy --bin wr3_buggy -- -W clippy::all -W clippy::pedantic -W clippy::nursery
+warning: this function could have a `#[must_use]` attribute
+warning: this could be a `const fn`
+warning: `scratch` (bin "wr3_buggy") generated 1 warning
+```
+
+Two warnings, both unrelated style suggestions. The one piece of real evidence in this whole review is the poisoning repro's panic transcript — a concurrency design risk this specific, at this depth, is squarely in the "Tool: none — only a human" territory this module has been mapping throughout the catalog.
+
+## Mental Model
+
+Every bug in this file is a decision that was correct *for the load and failure conditions tried* and silently wrong outside them: `Arc` and `Mutex` are correct tools when threads genuinely outlive their spawning scope, an unbounded channel is fine when the producer is provably bounded, a fixed sleep is fine when you can bound the work's duration, and `.unwrap()` on a lock is fine exactly as long as nothing ever panics while holding it. Concurrent code multiplies this risk specifically because none of those four assumptions can be checked by running the program once on the happy path — every one of them is a claim about *worst-case* timing or failure, not about typical behavior.
+
+## Trade-offs
+
+`thread::scope` is not a strict improvement in every case — it requires the closure body (and everything it captures) to not outlive the scope, which is exactly what makes automatic joining and borrowed sharing possible, but also means it cannot express a genuine fire-and-forget background task that should keep running after the function that started it returns. `thread::spawn` remains the right tool for that specific shape of problem; the bug in this review was reaching for it here, where every worker's lifetime was in fact bounded by `run_worker_pool` the whole time.
+
+## Common Misconceptions
+
+- **"A spawned thread that panics crashes the whole program."** It does not — a panic in a non-main thread unwinds that thread and prints to stderr by default, but the rest of the program (including `main`) keeps running unless something else (like a poisoned lock) propagates the failure. This is exactly why `.join()`'s return value matters: it's the only structured signal that a spawned thread failed.
+- **"If the sleep is long enough, sleeping instead of joining is basically fine."** It converts a correctness bug into a timing bet — correct until the one run where a job takes longer, the machine is under load, or someone changes worker_count, at which point the failure is silent (fewer results than expected, no error) rather than loud.
+
+## Reading AI-generated code
+
+Sleep-instead-of-join and unbounded-by-default channels are both common enough in generated concurrent code that they're worth recognizing on sight, even outside a full worker pool.
+
+<SpotTheBug code={`use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
+fn main() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+
+    for i in 0..3 {
+        let log = Arc::clone(&log);
+        thread::spawn(move || {
+            log.lock().unwrap().push(format!("task {i} done"));
+        });
+    }
+
+    thread::sleep(Duration::from_millis(50));
+    let log = log.lock().unwrap();
+    println!("{} entries logged", log.len());
+}
+`}>
+This reliably prints `3 entries logged` on a normal machine under normal load -- three trivial threads finish well within 50ms. Nothing here guarantees that: there is no join anywhere, so the 50ms is a bet that every spawned thread finishes before `main` reads `log`, not a fact the program establishes. Under load, on a slower machine, or with heavier per-task work, this silently prints a number less than 3 with no error at all. The fix removes the bet: `let handles: Vec<_> = (0..3).map(|i| { let log = Arc::clone(&log); thread::spawn(move || log.lock().unwrap().push(format!("task {i} done"))) }).collect(); for h in handles { h.join().unwrap(); }` -- or, since every thread here is joined before `main` needs the result anyway, `thread::scope` removes the `Arc` too.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A sleep is a bet about timing, not a guarantee -- if code needs to know a thread has finished, .join() (or the automatic join thread::scope provides) is the only thing that actually establishes that, and a dropped JoinHandle is the only way a panic goes unnoticed.
+</Callout>
+
+export const quizWorkedReview3 = [
+    {
+        q: "Why does `thread::spawn` require captured values to be `'static`, and what does that force this program to do?",
+        options: [
+            "It doesn't require 'static -- this is a common misconception",
+            "A spawned thread could in principle outlive the function that spawned it, so anything it captures must not have a lifetime tied to that function -- forcing shared state into Arc (shared ownership with no fixed lifetime) rather than a plain borrow",
+            "'static only applies to string literals, not thread closures",
+            "It requires 'static purely for performance reasons, unrelated to safety",
+        ],
+        answer: 1,
+        explain: "thread::spawn's signature requires F: Send + 'static specifically because nothing bounds how long the spawned thread might run relative to its parent. thread::scope changes this by guaranteeing every scoped thread joins before the scope ends, so borrows work instead.",
+    },
+    {
+        q: "In the poisoning repro, why does the second `.lock()` call -- on the main thread, which never touched the overflowing job -- also panic?",
+        options: [
+            "It doesn't actually panic -- the example is incorrect",
+            "Because Mutex poisons itself when a thread panics while holding the lock; every subsequent .lock().unwrap() on that same Mutex then panics too, regardless of which thread calls it or whether that thread did anything wrong",
+            "Because the two threads are competing for the same CPU core",
+            "Because Vec<u32> cannot be shared between threads at all",
+        ],
+        answer: 1,
+        explain: "Mutex poisoning is deliberate: once a thread panics while holding the lock, Rust cannot guarantee the protected data is in a consistent state, so it poisons the Mutex. Every future .lock() returns Err(PoisonError) until something explicitly handles it -- .unwrap() just turns that into a second panic.",
+    },
+    {
+        q: "Why is dropping a `JoinHandle` without calling `.join()` a real risk, given that the buggy program's output looks completely correct?",
+        options: [
+            "It isn't a real risk -- dropping a JoinHandle is always perfectly safe",
+            ".join()'s return value (Ok or Err) is the only structured way the spawning thread learns whether a spawned thread panicked; a dropped handle means a worker's panic (for any reason unrelated to the shared lock) would go completely unnoticed, with no error and no signal in the output",
+            "Dropping a JoinHandle immediately kills the spawned thread",
+            "It causes a compile error in newer Rust editions",
+        ],
+        answer: 1,
+        explain: "A panic in a spawned thread does not crash the program or automatically propagate anywhere -- .join() returning Err is specifically how the parent finds out. Discarding the handle discards that signal, independent of whether this particular run happened to work.",
+    },
+    {
+        q: "What does replacing `thread::spawn` with `thread::scope` fix simultaneously in the fixed version, and what does it NOT fix on its own?",
+        options: [
+            "It fixes performance but introduces a new data race",
+            "It removes the need for Arc (borrows are safe since every thread joins before the scope ends) and guarantees every worker is joined automatically -- it does not, by itself, change how a poisoned Mutex is handled, which is still a separate policy decision",
+            "It automatically converts the unbounded channel into a bounded one",
+            "It makes process_job immune to integer overflow",
+        ],
+        answer: 1,
+        explain: "thread::scope's join guarantee is what makes both the Arc removal and the automatic-join fix possible at once, since they share the same root cause (thread::spawn's 'static requirement). The channel bound and the overflow/poisoning handling are separate, independent fixes applied alongside it.",
+    },
+];
+
+<Quiz client:visible id="reading-rust/worked-review-3" questions={quizWorkedReview3} />
+
+<ProgressTracker client:visible id="reading-rust/worked-review-3" />

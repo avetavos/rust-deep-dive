@@ -1,0 +1,280 @@
+---
+title: 'Reading Rust You Did Not Write'
+description: 'A repeatable process for reviewing Rust code you did not write, especially code an AI generated.'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+Every earlier module in this course was about writing Rust. This one is about **reading** it — specifically, reading Rust that compiles, that looks reasonable at a glance, and that an AI assistant (or a rushed teammate) produced without necessarily thinking hard about the tradeoffs. Rust's compiler rejects a huge class of bugs other languages let through, which creates a specific trap: code that compiles *feels* reviewed. It is not. The borrow checker proves your code has no data races and no dangling references. It proves nothing about whether the design is right, whether errors are handled sensibly, or whether a `.clone()` is covering up a design mistake instead of fixing one.
+
+This lesson is the process. The rest of the module — the bug catalog, the checklist, the tool ladder, the worked reviews — fills in the details.
+
+## Read the Types First
+
+Before reading a single line of logic, read the signatures. In Rust, the type signature of a function is a contract that tells you most of what you need to know about ownership before you've traced a single value:
+
+- `fn f(x: Foo)` — takes ownership. The caller loses `x` (unless `Foo: Copy`).
+- `fn f(x: &Foo)` — borrows immutably. The caller keeps `x` and can still read it.
+- `fn f(x: &mut Foo)` — borrows exclusively. The caller keeps `x` but cannot use it *through any other reference* while this borrow is alive.
+- `fn f() -> Foo` — the caller now owns a new `Foo`.
+- `fn f() -> &'a Foo` — the caller gets a reference that cannot outlive `'a`; something else still owns the data.
+
+For every function in the file you're reviewing, ask: **who owns this value, who is only borrowing it, and for how long?** A struct field of type `Rc<RefCell<T>>` or `Arc<Mutex<T>>` is a loud signal — it means "multiple owners" or "shared across threads" was a real requirement, or it means someone reached for the sledgehammer because the borrow checker complained once and this made the complaint go away. You cannot tell which without reading further, but you now know exactly what question to ask.
+
+```rust
+struct Order {
+    id: u32,
+    total_cents: u64,
+}
+
+// Takes ownership -- the caller's `Order` is gone after this call.
+fn archive(order: Order) -> String {
+    format!("archived order {}", order.id)
+}
+
+// Borrows -- the caller keeps `order` and can use it again afterward.
+fn total_dollars(order: &Order) -> f64 {
+    order.total_cents as f64 / 100.0
+}
+
+fn main() {
+    let order = Order { id: 42, total_cents: 2599 };
+    println!("{:.2}", total_dollars(&order)); // order still usable here
+    println!("{}", archive(order));
+    // order is gone now -- using it below would be a compile error
+}
+```
+
+Reading the two signatures tells you the ownership story before you read a single line of the function bodies: `total_dollars` only looks, `archive` consumes.
+
+## Distrust Every `clone()`, `unwrap()`, `unsafe`, and `'static`
+
+These four things are always *legal* and often *correct* — but each one is also the single most common way generated Rust papers over a problem instead of solving it. Treat every occurrence as a question, not a fact:
+
+- **`.clone()`** — is this clone paying for a genuine second owner, or is it here because the borrow checker complained and cloning was the fastest way to make the red squiggle disappear? A clone that's dropped almost immediately after being read once is nearly always the second kind.
+- **`.unwrap()` / `.expect(...)`** — is this value truly guaranteed to be `Some`/`Ok` at this point (parsing a compile-time string literal, indexing a `const`-sized array), or is it user input, a file read, a network response — something that can and will eventually be `None`/`Err` in production?
+- **`unsafe`** — does this block have a `// SAFETY:` comment explaining *why* the invariant the compiler can't check actually holds? No comment is itself a finding, independent of whether the code happens to be sound.
+- **`'static`** — is this genuinely "lives for the whole program" data (a string literal, a leaked allocation, a `const`), or is `'static` here because a lifetime error was annoying and `'static` was the bound that made the compiler stop complaining? The latter usually means the real fix — a borrow, or restructuring who owns what — got skipped.
+
+None of these four are bugs by themselves. All four are exactly where a reviewer's attention should go first, because the compiler enforces memory safety around them but not good design.
+
+## Follow the Error Path
+
+Rust makes error handling visible in the type signature (`Result<T, E>`), which means you can trace it mechanically:
+
+1. Find every `?`. Each one propagates an error upward — follow the chain to where it's finally handled (a `match`, an `if let Err`, or `main`'s exit code).
+2. Check what `E` actually is. `Box<dyn std::error::Error>` in a `main.rs` binary is a reasonable, idiomatic default. The same type as the public return type of a **library** function is a smell — callers can't `match` on the specific failure, only print it.
+3. Look for the drop points: an `unwrap()` or `expect()` sitting in the middle of an otherwise careful `?`-chain is a place where "handle the error" quietly became "panic instead."
+
+## Follow the Threads and Futures
+
+If the file has `thread::spawn`, `Arc`, `Mutex`, `async fn`, or `.await`, ownership questions get a second dimension: not just "who owns this," but "which thread or task can touch this, and when." Ask specifically:
+
+- Does a lock (`Mutex`/`RwLock` guard) stay alive across an `.await` point? That blocks every other task on that lock while this one is merely waiting, not working.
+- Is `Arc<Mutex<T>>` protecting something that a plain `thread::scope` borrow or an atomic integer would have handled with no lock at all?
+- Is `thread::sleep` used inside an `async fn`? It blocks the whole worker thread running the executor, not just the current task.
+
+## Count the Suppressions
+
+Every `#[allow(...)]`, every `let _ = fallible_call();`, and every `_ =>` catch-all match arm is the code telling the compiler "trust me, ignore this." Grep for all three before you start reading logic — a file with a handful of suppressions clustered in one function is a much stronger signal than any one of them read in isolation. A `_ =>` arm on an enum is the sharpest of the three: it silently keeps compiling if someone adds a new variant later and forgets to handle it, which is exactly the guarantee `match` normally gives you for free.
+
+<Mermaid code={`flowchart TD
+    A["Read the types: who owns, who borrows, how long?"] --> B["Distrust clone/unwrap/unsafe/'static"]
+    B --> C["Follow the error path: ? chains and Box<dyn Error>"]
+    C --> D["Follow threads and futures: locks across await?"]
+    D --> E["Count suppressions: #[allow], let _ =, wildcard _"]
+    E --> F[Form a verdict]`} title="A repeatable process for reading Rust you did not write" />
+
+## What the Compiler Says: A Reference That Does Not Live Long Enough
+
+"Who owns this, for how long" is not just a reading heuristic — the compiler enforces it directly the moment a reference would outlive the data it points to:
+
+```rust
+// @expect-error E0515
+fn borrow_local() -> &'static i32 {
+    let x = 42;
+    &x
+}
+
+fn main() {
+    println!("{}", borrow_local());
+}
+```
+
+```text
+error[E0515]: cannot return reference to local variable `x`
+ --> src/main.rs:3:5
+  |
+3 |     &x
+  |     ^^ returns a reference to data owned by the current function
+
+error: aborting due to 1 previous error
+```
+
+`x` is owned by `borrow_local` and dies when the function returns; a `&'static i32` promises to be valid for the entire program. No caller-side clone, no `unsafe` block, no clever lifetime annotation fixes this — the fix is a design change: return `i32` by value (it's `Copy`, so this is free), or restructure so the caller owns `x` and only lends it in.
+
+export const readingProcessCode = `struct Cart {
+    items: Vec<(String, u32)>, // (name, price in cents)
+}
+
+impl Cart {
+    fn total_cents(&self) -> u32 {
+        self.items.iter().map(|(_, price)| price).sum()
+    }
+
+    fn add(&mut self, name: &str, price_cents: u32) {
+        self.items.push((name.to_string(), price_cents));
+    }
+}
+
+fn print_receipt(cart: &Cart) {
+    for (name, price) in &cart.items {
+        println!("{name}: {price} cents");
+    }
+    println!("total: {} cents", cart.total_cents());
+}
+
+fn main() {
+    let mut cart = Cart { items: Vec::new() };
+    cart.add("coffee", 350);
+    cart.add("bagel", 275);
+    print_receipt(&cart); // borrows -- cart is still usable after this
+    cart.add("tip", 100);
+    print_receipt(&cart);
+}`;
+
+<Playground code={readingProcessCode} />
+
+Reading this top to bottom: `Cart` owns a `Vec`; `total_cents` and `print_receipt` only borrow (`&self`, `&Cart`), so `main` can keep using `cart` between calls; `add` borrows mutably to push a new item. Nothing here needs a clone, an `Rc`, or an `unwrap` — which is itself useful information: when you *do* see one of those four in real generated code, it's standing out against a baseline where plain ownership and borrowing were enough.
+
+<Callout title="Reading is a different skill from writing">
+You can write correct Rust without being able to quickly review someone else's. Reviewing is a checklist skill: read the types, distrust the four escape hatches, trace errors and concurrency, count the suppressions. The rest of this module turns that checklist into muscle memory against 24 real patterns AI assistants produce.
+</Callout>
+
+## Mental Model
+
+Reading Rust is reading a proof, not a story. The compiler has already checked "does this violate memory safety" and the answer is no by construction — that check is done, permanently, the moment the code compiles. What's left for a human reviewer is everything the type system doesn't check: is this the right design, does this error get handled or silently swallowed, is this lock held longer than it needs to be, does this clone exist because two owners were genuinely needed or because it was the path of least resistance. The four escape hatches — `clone`, `unwrap`, `unsafe`, `'static` — are exactly the places where a human judgment call replaced a compiler guarantee, which is why they are always the first place to look.
+
+## Trade-offs
+
+A strict, checklist-driven read (this lesson's process) is slower per file than skimming for obviously wrong logic, but it catches an entire class of bugs that "does this look right" skimming misses completely — because compiling, reasonable-looking Rust is precisely the case skimming is worst at. The cost is real: tracing every `?` chain and every lock's lifetime across a large file takes deliberate time. The alternative — trusting that "it compiles and the tests pass" is sufficient review — is cheaper per file and wrong exactly often enough to matter, since neither the compiler nor a shallow test suite checks design-level ownership or error-handling decisions.
+
+## Common Misconceptions
+
+- **"If it compiles and clippy is quiet, it's fine."** The compiler checks memory safety, not design. Clippy's default lints catch a subset of *style* smells. Neither one has an opinion on whether `Rc<RefCell<T>>` was the right call, whether an error should have been a panic, or whether a lock is held too long.
+- **"Rust code is safer, so it needs less review than the equivalent Python/JS."** It needs *different* review. Rust review time shifts away from "did this null-check happen" (the type system already forces that) and toward "is this ownership design right" and "is this error handled or silently discarded" — questions the compiler has no opinion on.
+- **"A clean `cargo test` run means the logic is correct."** It means the tests that exist pass. A test with no `assert!`/`assert_eq!` in its body, or a `#[should_panic]` with no `expected = "..."`, both show up as green in that same clean run — see the bug catalog for both.
+
+## Reading AI-generated code
+
+Generated Rust often reaches for the heaviest ownership tool available "just in case," even when the function's own signature shows a plain borrow would have worked.
+
+<SpotTheBug code={`struct Inventory {
+    items: Vec<String>,
+}
+
+fn item_count(inventory: Inventory) -> usize {
+    inventory.items.len()
+}
+
+fn main() {
+    let inventory = Inventory { items: vec!["bolt".to_string(), "nut".to_string()] };
+    println!("{}", item_count(inventory.clone_from_ref()));
+}
+
+trait CloneFromRef {
+    fn clone_from_ref(&self) -> Inventory;
+}
+
+impl CloneFromRef for Inventory {
+    fn clone_from_ref(&self) -> Inventory {
+        Inventory { items: self.items.clone() }
+    }
+}
+`}>
+This compiles and prints `2`, and it's a lot more code than the problem needed. `item_count` takes `Inventory` *by value* for no reason — it only calls `.len()` on the field, so `&Inventory` would do — and the call site works around that unnecessary ownership requirement by hand-rolling a whole `CloneFromRef` trait just to avoid moving `inventory` away from `main`. The actual fix deletes the trait entirely: change the signature to `fn item_count(inventory: &Inventory) -> usize` and call `item_count(&inventory)`. Whenever a caller is going out of its way to clone or copy something before a call, check the callee's signature first — often the borrow was available the whole time and the function just didn't ask for it.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Before judging any logic, read every signature for who owns what and for how long, then distrust `clone()`, `unwrap()`, `unsafe`, and `'static` until each one earns its place.
+</Callout>
+
+export const quizReadingRustIndex = [
+    {
+        q: "A function signature is `fn total(order: &Order) -> f64`. What does this tell you about ownership?",
+        options: [
+            "The function takes ownership of `order` and the caller cannot use it again",
+            "The function borrows `order` immutably; the caller keeps ownership and can use it again after the call",
+            "The function returns ownership of `order` back to itself",
+            "Nothing -- ownership can only be determined by reading the function body",
+        ],
+        answer: 1,
+        explain: "A `&Order` parameter is a borrow. The caller retains ownership of `order` and can keep using it after this call returns.",
+    },
+    {
+        q: "Why does this fail to compile?\n```rust\nfn borrow_local() -> &'static i32 {\n    let x = 42;\n    &x\n}\n```",
+        options: [
+            "error[E0308] -- mismatched types between i32 and &i32",
+            "error[E0515] -- cannot return reference to local variable `x`, which does not live long enough to be `'static`",
+            "error[E0502] -- cannot borrow `x` as immutable because it is also borrowed as mutable",
+            "It compiles fine -- `'static` extends any value's lifetime automatically",
+        ],
+        answer: 1,
+        explain: "`x` is owned by the function and dropped when it returns. A &'static i32 must remain valid for the whole program, which a local stack variable can never satisfy. The fix is to return i32 by value.",
+    },
+    {
+        q: "Which of the four things ('clone()', 'unwrap()', 'unsafe', \"'static\") should you always treat as a bug on sight?",
+        options: [
+            "unsafe, always",
+            "clone(), always, since a clone is always avoidable",
+            "None of them are bugs by themselves -- each is legal and sometimes correct, which is exactly why each deserves a specific question rather than a blanket ban",
+            "'static, always, because no real data actually lives for the whole program",
+        ],
+        answer: 2,
+        explain: "All four are legitimate tools with legitimate uses. The review skill is asking the right question of each occurrence (why is this clone here, is this unwrap truly infallible, does this unsafe block have a SAFETY comment, is this 'static genuine), not banning them outright.",
+    },
+    {
+        q: "In review, why is `Box<dyn std::error::Error>` treated differently as a library function's public return type than as `main`'s error type in a binary?",
+        options: [
+            "It isn't different -- both are always fine",
+            "Box<dyn Error> doesn't implement the Error trait itself, so it can never be used as an error type",
+            "As a library's public return type it erases the specific failure, so callers can only print the error and cannot match on which failure occurred; in a binary's main, nothing downstream needs to match on it, so the same erasure is harmless",
+            "Box<dyn Error> only works in async functions",
+        ],
+        answer: 2,
+        explain: "A library's callers may need to react differently to different failure modes, which requires a concrete, matchable error type. main's only consumer is the process exit code and stderr, where erasing the specific type costs nothing.",
+    },
+    {
+        q: "Holding a `Mutex` guard across an `.await` point is a problem specifically because:",
+        options: [
+            "It causes a compile error in every case",
+            "It blocks every other task waiting on that same lock for as long as this task is merely awaiting, not doing work with the lock",
+            "Mutex guards cannot be created inside async functions at all",
+            "It always causes a deadlock immediately",
+        ],
+        answer: 1,
+        explain: "An .await point can suspend the current task for an arbitrary amount of time. Any other task that needs the same lock is blocked for that entire suspension, not just for the brief moment the lock's data is actually being read or written.",
+    },
+    {
+        q: "Why is a `_ =>` catch-all arm on a match over an enum flagged as a review smell, even when the code behind it is currently correct?",
+        options: [
+            "`_ =>` arms are always slower to execute than listing every variant",
+            "It silently continues to compile if a new variant is added later and not explicitly handled, giving up the exhaustiveness guarantee `match` would otherwise provide",
+            "`_ =>` is not valid syntax in Rust 2024",
+            "It causes every match to become a runtime panic",
+        ],
+        answer: 1,
+        explain: "Rust's match is exhaustive by default specifically so that adding a new enum variant becomes a compile error everywhere it isn't handled. A `_ =>` arm opts out of that safety net for this match.",
+    },
+];
+
+<Quiz client:visible id="reading-rust/index" questions={quizReadingRustIndex} />
+
+<ProgressTracker client:visible id="reading-rust/index" />

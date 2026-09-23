@@ -1,0 +1,280 @@
+---
+title: 'อ่านโค้ด Rust ที่คุณไม่ได้เขียน'
+description: 'กระบวนการที่ทำซ้ำได้สำหรับรีวิวโค้ด Rust ที่คุณไม่ได้เขียนเอง โดยเฉพาะโค้ดที่ AI เขียนขึ้น'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+ทุกโมดูลก่อนหน้านี้ในคอร์สนี้เป็นเรื่องการ**เขียน** Rust ส่วนโมดูลนี้เป็นเรื่องการ**อ่าน** — โดยเฉพาะการอ่านโค้ด Rust ที่ compile ผ่าน ดูสมเหตุสมผลเมื่อมองผ่าน ๆ และถูกสร้างโดย AI assistant (หรือเพื่อนร่วมทีมที่เร่งรีบ) โดยไม่ได้คิดเรื่อง tradeoff ให้ลึกนัก compiler ของ Rust ปฏิเสธ bug หลายประเภทที่ภาษาอื่นปล่อยผ่าน ซึ่งสร้างกับดักเฉพาะตัว: โค้ดที่ compile ผ่าน "รู้สึก" เหมือนถูกรีวิวแล้ว แต่ไม่ใช่ borrow checker พิสูจน์ว่าโค้ดของคุณไม่มี data race และไม่มี dangling reference มันไม่ได้พิสูจน์อะไรเลยว่า design ถูกต้องหรือไม่ error ถูกจัดการอย่างสมเหตุสมผลหรือไม่ หรือ `.clone()` กำลังกลบข้อผิดพลาดของ design แทนที่จะแก้ไขมัน
+
+บทนี้คือกระบวนการนั้น ส่วนที่เหลือของโมดูล — bug catalog, checklist, tool ladder, worked review — จะเติมรายละเอียดให้ครบ
+
+## อ่าน Type ก่อนเสมอ
+
+ก่อนอ่าน logic แม้แต่บรรทัดเดียว ให้อ่าน signature ก่อน ใน Rust type signature ของฟังก์ชันคือสัญญาที่บอกสิ่งที่คุณต้องรู้เกี่ยวกับ ownership ได้เกือบทั้งหมดก่อนที่จะ trace ค่าใด ๆ:
+
+- `fn f(x: Foo)` — รับ ownership ผู้เรียกสูญเสีย `x` ไป (เว้นแต่ `Foo: Copy`)
+- `fn f(x: &Foo)` — ยืมแบบ immutable ผู้เรียกยังเก็บ `x` ไว้ และยังอ่านมันได้
+- `fn f(x: &mut Foo)` — ยืมแบบ exclusive ผู้เรียกยังเก็บ `x` ไว้ แต่ใช้มัน*ผ่าน reference อื่น*ไม่ได้ ตราบใดที่ borrow นี้ยังมีชีวิตอยู่
+- `fn f() -> Foo` — ผู้เรียกเป็นเจ้าของ `Foo` ใหม่แล้ว
+- `fn f() -> &'a Foo` — ผู้เรียกได้ reference ที่มีชีวิตอยู่ได้ไม่เกิน `'a` มีสิ่งอื่นเป็นเจ้าของข้อมูลจริง ๆ อยู่
+
+สำหรับทุกฟังก์ชันในไฟล์ที่คุณกำลังรีวิว ให้ถามว่า **ใครเป็นเจ้าของค่านี้ ใครแค่ยืมมัน และยืมนานแค่ไหน** field ของ struct ที่เป็น `Rc<RefCell<T>>` หรือ `Arc<Mutex<T>>` คือสัญญาณดัง ๆ — มันหมายความว่า "หลายเจ้าของ" หรือ "แชร์ข้าม thread" เป็นความต้องการจริง หรือมันหมายความว่ามีคนใช้ค้อนปอนด์เพราะ borrow checker บ่นครั้งหนึ่งแล้วสิ่งนี้ทำให้เสียงบ่นหายไป คุณบอกไม่ได้ว่าเป็นแบบไหนจนกว่าจะอ่านต่อ แต่ตอนนี้คุณรู้แล้วว่าต้องถามคำถามอะไรต่อ
+
+```rust
+struct Order {
+    id: u32,
+    total_cents: u64,
+}
+
+// Takes ownership -- the caller's `Order` is gone after this call.
+fn archive(order: Order) -> String {
+    format!("archived order {}", order.id)
+}
+
+// Borrows -- the caller keeps `order` and can use it again afterward.
+fn total_dollars(order: &Order) -> f64 {
+    order.total_cents as f64 / 100.0
+}
+
+fn main() {
+    let order = Order { id: 42, total_cents: 2599 };
+    println!("{:.2}", total_dollars(&order)); // order still usable here
+    println!("{}", archive(order));
+    // order is gone now -- using it below would be a compile error
+}
+```
+
+การอ่านสอง signature นี้บอกเรื่อง ownership ทั้งหมดก่อนที่คุณจะอ่าน body ของฟังก์ชันแม้แต่บรรทัดเดียว: `total_dollars` แค่มองดู, `archive` กิน (consume) เข้าไปเลย
+
+## อย่าไว้ใจ `clone()`, `unwrap()`, `unsafe`, และ `'static` ทุกครั้งที่เจอ
+
+สี่สิ่งนี้ถูกต้องตามกฎเสมอ และมักจะถูกต้องจริง ๆ ด้วย — แต่แต่ละอย่างก็เป็นวิธีที่พบบ่อยที่สุดที่โค้ดที่ AI สร้างใช้กลบปัญหาแทนที่จะแก้มัน ให้ปฏิบัติต่อทุกครั้งที่เจอเป็นคำถาม ไม่ใช่ข้อเท็จจริง:
+
+- **`.clone()`** — clone นี้จ่ายเงินเพื่อเจ้าของตัวที่สองจริง ๆ หรือมันอยู่ตรงนี้เพราะ borrow checker บ่นแล้ว clone คือทางที่เร็วที่สุดที่จะทำให้เส้นสีแดงหายไป? clone ที่ถูก drop เกือบจะทันทีหลังจากถูกอ่านครั้งเดียว มักจะเป็นแบบหลัง
+- **`.unwrap()` / `.expect(...)`** — ค่านี้รับประกันจริง ๆ ว่าเป็น `Some`/`Ok` ณ จุดนี้ (parse string literal ที่รู้ ณ compile time, index array ขนาด `const`) หรือมันคือ input จากผู้ใช้ การอ่านไฟล์ response จาก network — อะไรบางอย่างที่จะเป็น `None`/`Err` ได้จริงในระบบ production ในที่สุด?
+- **`unsafe`** — block นี้มี comment `// SAFETY:` อธิบายว่า*ทำไม*ข้อสมมติที่ compiler ตรวจไม่ได้จึงเป็นจริงหรือไม่? การไม่มี comment คือ finding ในตัวมันเอง ไม่ว่าโค้ดจะ sound หรือไม่ก็ตาม
+- **`'static`** — นี่คือข้อมูลที่ "มีชีวิตอยู่ตลอดทั้งโปรแกรม" จริง ๆ (string literal, allocation ที่ leak ไว้, `const`) หรือ `'static` อยู่ตรงนี้เพราะ lifetime error น่ารำคาญและ `'static` คือ bound ที่ทำให้ compiler เลิกบ่น? แบบหลังมักหมายความว่าทางแก้จริง — การยืม หรือการจัดโครงสร้างใหม่ว่าใครเป็นเจ้าของอะไร — ถูกข้ามไป
+
+ไม่มีสี่สิ่งนี้เป็น bug ในตัวมันเอง ทั้งสี่คือจุดที่ความสนใจของผู้รีวิวควรไปก่อนเป็นอันดับแรก เพราะ compiler บังคับเรื่อง memory safety รอบ ๆ มัน แต่ไม่บังคับเรื่อง design ที่ดี
+
+## Follow The Error Path
+
+Rust ทำให้ error handling มองเห็นได้ใน type signature (`Result<T, E>`) ซึ่งหมายความว่าคุณ trace มันได้แบบกลไก:
+
+1. หาทุก `?` แต่ละตัวส่ง error ขึ้นไปข้างบน — follow chain ไปจนถึงจุดที่มันถูกจัดการในที่สุด (`match`, `if let Err`, หรือ exit code ของ `main`)
+2. เช็คว่า `E` คืออะไรจริง ๆ `Box<dyn std::error::Error>` ใน `main.rs` ของ binary เป็นค่า default ที่สมเหตุสมผลและ idiomatic type เดียวกันเป็น public return type ของฟังก์ชันใน **library** คือกลิ่นไม่ดี — ผู้เรียกใช้ `match` กับ failure เฉพาะเจาะจงไม่ได้ ทำได้แค่ print มันออกมา
+3. หาจุดที่ error ถูกทิ้ง: `unwrap()` หรือ `expect()` ที่อยู่กลาง `?`-chain ที่ระมัดระวังดี คือจุดที่ "จัดการ error" กลายเป็น "panic แทน" อย่างเงียบ ๆ
+
+## Follow The Threads And Futures
+
+ถ้าไฟล์มี `thread::spawn`, `Arc`, `Mutex`, `async fn`, หรือ `.await` คำถามเรื่อง ownership จะมีมิติที่สอง: ไม่ใช่แค่ "ใครเป็นเจ้าของสิ่งนี้" แต่ "thread หรือ task ไหนแตะต้องสิ่งนี้ได้ และเมื่อไหร่" ให้ถามเจาะจงว่า:
+
+- lock (`Mutex`/`RwLock` guard) มีชีวิตอยู่ข้าม `.await` point หรือไม่? นั่นบล็อกทุก task อื่นที่รอ lock เดียวกันตราบเท่าที่ task นี้แค่กำลัง await อยู่ ไม่ได้ทำงานกับ lock จริง ๆ
+- `Arc<Mutex<T>>` กำลังปกป้องสิ่งที่ borrow แบบ `thread::scope` ธรรมดา หรือ atomic integer จัดการได้โดยไม่ต้องมี lock เลยหรือเปล่า?
+- `thread::sleep` ถูกใช้ข้างใน `async fn` หรือเปล่า? มันบล็อก worker thread ทั้งตัวที่รัน executor ไม่ใช่แค่ task ปัจจุบัน
+
+## นับ Suppression
+
+`#[allow(...)]` ทุกตัว, `let _ = fallible_call();` ทุกตัว, และ `_ =>` catch-all match arm ทุกตัว คือโค้ดที่บอก compiler ว่า "เชื่อฉันเถอะ ข้ามอันนี้ไป" grep หาทั้งสามอย่างก่อนเริ่มอ่าน logic — ไฟล์ที่มี suppression กระจุกตัวอยู่ในฟังก์ชันเดียวเป็นสัญญาณที่แรงกว่าการเห็นแต่ละอันแยกกันมาก `_ =>` arm บน enum คือคมที่สุดในสามอย่าง: มันยังคง compile ผ่านอย่างเงียบ ๆ ถ้ามีคนเพิ่ม variant ใหม่ทีหลังแล้วลืมจัดการ ซึ่งขัดกับการรับประกันที่ `match` ปกติให้คุณฟรี ๆ
+
+<Mermaid code={`flowchart TD
+    A["Read the types: who owns, who borrows, how long?"] --> B["Distrust clone/unwrap/unsafe/'static"]
+    B --> C["Follow the error path: ? chains and Box<dyn Error>"]
+    C --> D["Follow threads and futures: locks across await?"]
+    D --> E["Count suppressions: #[allow], let _ =, wildcard _"]
+    E --> F[Form a verdict]`} title="กระบวนการที่ทำซ้ำได้สำหรับอ่านโค้ด Rust ที่คุณไม่ได้เขียน" />
+
+## Compiler พูดว่าอย่างไร: Reference ที่มีชีวิตอยู่ไม่นานพอ
+
+"ใครเป็นเจ้าของสิ่งนี้ นานแค่ไหน" ไม่ใช่แค่ heuristic ในการอ่าน — compiler บังคับมันโดยตรงทันทีที่ reference จะมีชีวิตอยู่นานกว่าข้อมูลที่มันชี้ไป:
+
+```rust
+// @expect-error E0515
+fn borrow_local() -> &'static i32 {
+    let x = 42;
+    &x
+}
+
+fn main() {
+    println!("{}", borrow_local());
+}
+```
+
+```text
+error[E0515]: cannot return reference to local variable `x`
+ --> src/main.rs:3:5
+  |
+3 |     &x
+  |     ^^ returns a reference to data owned by the current function
+
+error: aborting due to 1 previous error
+```
+
+`x` เป็นเจ้าของโดย `borrow_local` และตายเมื่อฟังก์ชันคืนค่า ส่วน `&'static i32` สัญญาว่าจะ valid ตลอดทั้งโปรแกรม ไม่มี clone ฝั่งผู้เรียก, ไม่มี `unsafe` block, ไม่มี lifetime annotation ฉลาด ๆ ตัวไหนแก้ปัญหานี้ได้ — ทางแก้คือเปลี่ยน design: return `i32` โดย value (มันเป็น `Copy` ดังนั้นฟรี) หรือจัดโครงสร้างใหม่ให้ผู้เรียกเป็นเจ้าของ `x` เอง แล้วแค่ให้ยืมเข้ามา
+
+export const readingProcessCode = `struct Cart {
+    items: Vec<(String, u32)>, // (name, price in cents)
+}
+
+impl Cart {
+    fn total_cents(&self) -> u32 {
+        self.items.iter().map(|(_, price)| price).sum()
+    }
+
+    fn add(&mut self, name: &str, price_cents: u32) {
+        self.items.push((name.to_string(), price_cents));
+    }
+}
+
+fn print_receipt(cart: &Cart) {
+    for (name, price) in &cart.items {
+        println!("{name}: {price} cents");
+    }
+    println!("total: {} cents", cart.total_cents());
+}
+
+fn main() {
+    let mut cart = Cart { items: Vec::new() };
+    cart.add("coffee", 350);
+    cart.add("bagel", 275);
+    print_receipt(&cart); // borrows -- cart is still usable after this
+    cart.add("tip", 100);
+    print_receipt(&cart);
+}`;
+
+<Playground code={readingProcessCode} />
+
+อ่านโค้ดนี้จากบนลงล่าง: `Cart` เป็นเจ้าของ `Vec`; `total_cents` และ `print_receipt` แค่ยืม (`&self`, `&Cart`) ดังนั้น `main` ยังใช้ `cart` ต่อระหว่าง call ได้; `add` ยืมแบบ mutable เพื่อ push item ใหม่ ไม่มีจุดไหนต้องการ clone, `Rc`, หรือ `unwrap` เลย — ซึ่งเป็นข้อมูลที่มีประโยชน์ในตัวมันเอง: เมื่อคุณ*เห็น*หนึ่งในสี่สิ่งนั้นในโค้ดที่ AI สร้างจริง ๆ มันโดดเด่นออกมาจาก baseline ที่ plain ownership กับ borrowing ก็เพียงพอแล้ว
+
+<Callout title="การอ่านเป็นทักษะที่ต่างจากการเขียน">
+คุณเขียน Rust ที่ถูกต้องได้โดยไม่จำเป็นต้องรีวิวโค้ดคนอื่นได้เร็ว การรีวิวเป็นทักษะแบบ checklist: อ่าน type, อย่าไว้ใจสี่ทางออกฉุกเฉิน, trace error กับ concurrency, นับ suppression ส่วนที่เหลือของโมดูลนี้จะเปลี่ยน checklist นี้ให้เป็นความเคยชินผ่าน pattern จริง 24 แบบที่ AI assistant สร้างขึ้น
+</Callout>
+
+## Mental Model
+
+การอ่าน Rust คือการอ่านบทพิสูจน์ ไม่ใช่เรื่องเล่า compiler ได้ตรวจแล้วว่า "สิ่งนี้ละเมิด memory safety หรือไม่" และคำตอบคือไม่ โดยธรรมชาติ — การตรวจนั้นเสร็จแล้วอย่างถาวรตั้งแต่วินาทีที่โค้ด compile ผ่าน สิ่งที่เหลือให้ผู้รีวิวที่เป็นมนุษย์คือทุกอย่างที่ type system ไม่ตรวจ: นี่คือ design ที่ถูกต้องหรือไม่ error นี้ถูกจัดการหรือถูกกลืนอย่างเงียบ ๆ lock นี้ถูกถืออยู่นานกว่าที่ควรหรือไม่ clone นี้มีอยู่เพราะต้องการเจ้าของสองคนจริง ๆ หรือเพราะมันเป็นเส้นทางที่ต้านทานน้อยที่สุด สี่ทางออกฉุกเฉิน — `clone`, `unwrap`, `unsafe`, `'static` — คือจุดที่การตัดสินใจของมนุษย์เข้ามาแทนที่การรับประกันของ compiler พอดี ซึ่งเป็นเหตุผลว่าทำไมมันจึงเป็นจุดแรกที่ควรมอง
+
+## Trade-offs
+
+การอ่านแบบเข้มงวดตาม checklist (กระบวนการของบทนี้) ช้ากว่าการ skim หา logic ที่ผิดชัด ๆ ต่อไฟล์ แต่มันจับ bug ทั้งประเภทที่การ skim แบบ "ดูแล้วโอเคไหม" พลาดไปหมด — เพราะโค้ด Rust ที่ compile ผ่านและดูสมเหตุสมผล คือกรณีที่การ skim แย่ที่สุดพอดี ต้นทุนนั้นจริง: การ trace ทุก `?` chain และ lifetime ของทุก lock ในไฟล์ใหญ่ ใช้เวลาที่ตั้งใจจริง ทางเลือก — เชื่อว่า "compile ผ่านและ test ผ่านก็พอแล้ว" — ถูกกว่าต่อไฟล์ และผิดบ่อยพอที่จะสำคัญ เพราะทั้ง compiler และ test suite แบบผิวเผินไม่ได้ตรวจการตัดสินใจเรื่อง ownership design หรือ error handling ในระดับนั้น
+
+## Common Misconceptions
+
+- **"ถ้า compile ผ่านและ clippy เงียบ แปลว่าโอเค"** compiler ตรวจ memory safety ไม่ใช่ design lint เริ่มต้นของ clippy จับ style smell ได้บางส่วนเท่านั้น ทั้งสองอย่างไม่มีความเห็นว่า `Rc<RefCell<T>>` เป็นทางเลือกที่ถูกต้องหรือไม่ error ควรเป็น panic หรือไม่ หรือ lock ถูกถือนานเกินไปหรือไม่
+- **"โค้ด Rust ปลอดภัยกว่า จึงต้องการการรีวิวน้อยกว่า Python/JS ที่เทียบเท่ากัน"** มันต้องการการรีวิวที่*ต่างออกไป* เวลารีวิว Rust ย้ายจาก "มีการเช็ค null ตรงนี้ไหม" (type system บังคับให้อยู่แล้ว) ไปสู่ "ownership design ตรงนี้ถูกต้องไหม" และ "error นี้ถูกจัดการหรือถูกทิ้งอย่างเงียบ ๆ" — คำถามที่ compiler ไม่มีความเห็นเลย
+- **"cargo test ผ่านสะอาด แปลว่า logic ถูกต้อง"** มันแปลว่า test ที่มีอยู่ผ่าน test ที่ไม่มี `assert!`/`assert_eq!` ใน body เลย หรือ `#[should_panic]` ที่ไม่มี `expected = "..."` ทั้งคู่ขึ้นเป็นสีเขียวใน run เดียวกันนั้นได้เหมือนกัน — ดูได้ใน bug catalog
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ด Rust ที่ AI สร้างมักจะเอื้อมมือไปหยิบเครื่องมือ ownership ที่หนักที่สุดที่มี "เผื่อไว้ก่อน" แม้ว่า signature ของฟังก์ชันเองจะแสดงให้เห็นว่าแค่ borrow ธรรมดาก็ใช้ได้แล้ว
+
+<SpotTheBug code={`struct Inventory {
+    items: Vec<String>,
+}
+
+fn item_count(inventory: Inventory) -> usize {
+    inventory.items.len()
+}
+
+fn main() {
+    let inventory = Inventory { items: vec!["bolt".to_string(), "nut".to_string()] };
+    println!("{}", item_count(inventory.clone_from_ref()));
+}
+
+trait CloneFromRef {
+    fn clone_from_ref(&self) -> Inventory;
+}
+
+impl CloneFromRef for Inventory {
+    fn clone_from_ref(&self) -> Inventory {
+        Inventory { items: self.items.clone() }
+    }
+}
+`}>
+โค้ดนี้ compile ผ่านและ print `2` ออกมา แต่มันเป็นโค้ดที่มากเกินความจำเป็นของปัญหาไปเยอะ `item_count` รับ `Inventory` *โดย value* โดยไม่มีเหตุผล — มันแค่เรียก `.len()` บน field เท่านั้น ดังนั้น `&Inventory` ก็พอแล้ว — และจุดเรียกใช้ก็แก้ปัญหา ownership requirement ที่ไม่จำเป็นนี้ด้วยการเขียน trait `CloneFromRef` ทั้งตัวขึ้นมาเองแค่เพื่อไม่ให้ `inventory` ถูกย้ายออกจาก `main` ทางแก้จริงคือลบ trait นั้นทิ้งไปเลย: เปลี่ยน signature เป็น `fn item_count(inventory: &Inventory) -> usize` แล้วเรียก `item_count(&inventory)` เมื่อไหร่ก็ตามที่ผู้เรียกพยายามทำ clone หรือ copy อะไรบางอย่างก่อนเรียกใช้ ให้เช็ค signature ของ callee ก่อน — บ่อยครั้ง borrow มีให้ใช้อยู่แล้วตลอด แค่ฟังก์ชันไม่ได้ขอมันเท่านั้น
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ก่อนตัดสิน logic ใด ๆ ให้อ่านทุก signature ว่าใครเป็นเจ้าของอะไรและนานแค่ไหนก่อน แล้วอย่าไว้ใจ `clone()`, `unwrap()`, `unsafe`, และ `'static` จนกว่าแต่ละอันจะพิสูจน์ตัวเองได้
+</Callout>
+
+export const quizReadingRustIndex = [
+    {
+        q: "Function signature คือ `fn total(order: &Order) -> f64` สิ่งนี้บอกอะไรเกี่ยวกับ ownership?",
+        options: [
+            "ฟังก์ชันรับ ownership ของ `order` และผู้เรียกใช้มันอีกไม่ได้",
+            "ฟังก์ชันยืม `order` แบบ immutable ผู้เรียกยังเป็นเจ้าของและใช้มันต่อได้หลังเรียก",
+            "ฟังก์ชันคืน ownership ของ `order` กลับไปให้ตัวเอง",
+            "ไม่บอกอะไรเลย -- ownership บอกได้จากการอ่าน body ของฟังก์ชันเท่านั้น",
+        ],
+        answer: 1,
+        explain: "`&Order` parameter คือการยืม ผู้เรียกยังเป็นเจ้าของ `order` และใช้มันต่อได้หลังจาก call นี้คืนค่า",
+    },
+    {
+        q: "ทำไมโค้ดนี้ compile ไม่ผ่าน?\n```rust\nfn borrow_local() -> &'static i32 {\n    let x = 42;\n    &x\n}\n```",
+        options: [
+            "error[E0308] -- type ไม่ตรงกันระหว่าง i32 กับ &i32",
+            "error[E0515] -- ไม่สามารถ return reference ของ local variable `x` ซึ่งมีชีวิตไม่นานพอที่จะเป็น `'static`",
+            "error[E0502] -- ยืม `x` แบบ immutable ไม่ได้เพราะถูกยืมแบบ mutable อยู่แล้ว",
+            "compile ผ่านสบาย -- `'static` จะขยาย lifetime ของค่าใด ๆ ให้โดยอัตโนมัติ",
+        ],
+        answer: 1,
+        explain: "`x` เป็นเจ้าของโดยฟังก์ชันและถูก drop เมื่อฟังก์ชันคืนค่า ส่วน &'static i32 ต้อง valid ตลอดทั้งโปรแกรม ซึ่ง local stack variable ไม่มีทางทำได้ ทางแก้คือ return i32 โดย value",
+    },
+    {
+        q: "ในบรรดาสี่สิ่ง (`clone()`, `unwrap()`, `unsafe`, `'static`) อันไหนที่คุณควรมองว่าเป็น bug ทันทีที่เห็น?",
+        options: [
+            "unsafe เสมอ",
+            "clone() เสมอ เพราะ clone หลีกเลี่ยงได้เสมอ",
+            "ไม่มีอันไหนเป็น bug ในตัวมันเอง -- แต่ละอันถูกต้องตามกฎและบางครั้งก็ถูกต้องจริง ซึ่งเป็นเหตุผลว่าทำไมแต่ละอันจึงสมควรได้รับคำถามเฉพาะเจาะจงแทนการห้ามเหมารวม",
+            "'static เสมอ เพราะไม่มีข้อมูลจริงที่มีชีวิตอยู่ตลอดทั้งโปรแกรม",
+        ],
+        answer: 2,
+        explain: "ทั้งสี่เป็นเครื่องมือที่ชอบธรรมและมีการใช้งานที่ชอบธรรม ทักษะการรีวิวคือการถามคำถามที่ถูกต้องกับแต่ละครั้งที่เจอ (clone นี้อยู่ตรงนี้ทำไม, unwrap นี้ infallible จริงไหม, unsafe block นี้มี SAFETY comment ไหม, 'static นี้จริงไหม) ไม่ใช่การห้ามเหมารวม",
+    },
+    {
+        q: "ทำไม `Box<dyn std::error::Error>` ในการรีวิวจึงถูกมองต่างกันเมื่อเป็น public return type ของฟังก์ชันใน library เทียบกับเป็น error type ของ `main` ใน binary?",
+        options: [
+            "ไม่ต่างกันเลย -- ทั้งสองแบบโอเคเสมอ",
+            "Box<dyn Error> ไม่ได้ implement trait Error เอง จึงใช้เป็น error type ไม่ได้เลย",
+            "ในฐานะ public return type ของ library มันกลืน failure ที่เฉพาะเจาะจงไป ทำให้ผู้เรียกได้แค่ print error ออกมา match กับ failure ที่เกิดขึ้นไม่ได้ ส่วนใน main ของ binary ไม่มีอะไรข้างล่างที่ต้อง match กับมัน การกลืนแบบเดียวกันจึงไม่มีผลเสีย",
+            "Box<dyn Error> ใช้ได้เฉพาะใน async function เท่านั้น",
+        ],
+        answer: 2,
+        explain: "ผู้เรียก library อาจต้องตอบสนองต่างกันไปตาม failure mode ที่ต่างกัน ซึ่งต้องการ error type ที่ concrete และ match ได้ ผู้บริโภคเดียวของ main คือ exit code ของ process กับ stderr ซึ่งการกลืน type ที่เฉพาะเจาะจงไปไม่มีต้นทุนอะไรเลย",
+    },
+    {
+        q: "การถือ `Mutex` guard ข้าม `.await` point เป็นปัญหาโดยเฉพาะเพราะ:",
+        options: [
+            "มันทำให้ compile error เสมอในทุกกรณี",
+            "มันบล็อก task อื่นทุกตัวที่รอ lock เดียวกัน ตราบเท่าที่ task นี้แค่กำลัง await อยู่ ไม่ได้ทำงานกับ lock จริง ๆ",
+            "Mutex guard สร้างข้างใน async function ไม่ได้เลย",
+            "มันทำให้เกิด deadlock ทันทีเสมอ",
+        ],
+        answer: 1,
+        explain: ".await point suspend task ปัจจุบันได้นานเท่าไหร่ก็ได้ task อื่นที่ต้องการ lock เดียวกันจะถูกบล็อกตลอดช่วง suspend นั้น ไม่ใช่แค่ช่วงสั้น ๆ ที่ข้อมูลของ lock ถูกอ่านหรือเขียนจริง ๆ",
+    },
+    {
+        q: "ทำไม `_ =>` catch-all arm บน match ของ enum จึงถูก flag เป็นกลิ่นไม่ดีในการรีวิว แม้ว่าโค้ดข้างหลังมันจะถูกต้องอยู่ในตอนนี้?",
+        options: [
+            "`_ =>` arm ทำงานช้ากว่าการ list ทุก variant เสมอ",
+            "มันยังคง compile ผ่านอย่างเงียบ ๆ ถ้ามี variant ใหม่ถูกเพิ่มทีหลังแล้วไม่ถูกจัดการอย่างชัดเจน ซึ่งเสียการรับประกัน exhaustiveness ที่ `match` ปกติควรให้",
+            "`_ =>` ไม่ใช่ syntax ที่ถูกต้องใน Rust 2024",
+            "มันทำให้ทุก match กลายเป็น runtime panic",
+        ],
+        answer: 1,
+        explain: "match ของ Rust เป็น exhaustive โดย default เพื่อให้การเพิ่ม enum variant ใหม่กลายเป็น compile error ในทุกที่ที่ยังไม่ได้จัดการ `_ =>` arm คือการ opt-out จาก safety net นี้สำหรับ match นี้",
+    },
+];
+
+<Quiz client:visible id="reading-rust/index" questions={quizReadingRustIndex} />
+
+<ProgressTracker client:visible id="reading-rust/index" />

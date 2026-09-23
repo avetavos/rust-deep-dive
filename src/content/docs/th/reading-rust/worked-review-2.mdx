@@ -1,0 +1,441 @@
+---
+title: 'Worked Review 2: Inventory System'
+description: 'รีวิวเต็มของโปรแกรม inventory ที่ AI สร้างขึ้น น่าเชื่อถือ ขนาดเล็ก -- bug ที่ปลูกไว้สี่ตัวข้าม struct, enum, และ Option พร้อม output เครื่องมือจริง'
+sidebar:
+  order: 6
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+รีวิวเต็มบทที่สอง: โปรแกรมติดตาม inventory เล็ก ๆ ที่สร้างรอบ struct กับ enum กระบวนการเดียวกับก่อนหน้า — อ่านมันก่อน สร้างความเห็นของตัวเอง แล้วเทียบกับ findings ด้านล่าง
+
+## โปรแกรม
+
+export const wr2BuggyCode = `#[derive(Clone, Copy)]
+struct Item {
+    id: u32,
+    price: f64,
+    stock: u32,
+    barcode: [u8; 64],
+}
+
+enum Status {
+    InStock,
+    LowStock,
+    OutOfStock,
+    Discontinued,
+}
+
+fn status_label(status: Status) -> &'static str {
+    match status {
+        Status::InStock => "in stock",
+        _ => "unavailable",
+    }
+}
+
+fn find_item_by_price(items: &[Item], target_price: f64) -> Option<&Item> {
+    items.iter().find(|item| item.price == target_price)
+}
+
+fn total_value(items: &[Item]) -> f64 {
+    items.iter().map(|i| i.price * i.stock as f64).sum()
+}
+
+fn describe_cheapest(items: &[Item]) -> String {
+    let cheapest = items.iter().min_by(|a, b| a.price.partial_cmp(&b.price).unwrap());
+    if cheapest.is_some() {
+        format!("cheapest item id: {}", cheapest.unwrap().id)
+    } else {
+        "no items".to_string()
+    }
+}
+
+fn apply_discount(item: Item, percent: f64) -> Item {
+    let mut discounted = item;
+    discounted.price *= 1.0 - percent / 100.0;
+    discounted
+}
+
+fn main() {
+    let items = vec![
+        Item { id: 1, price: 9.99, stock: 10, barcode: [0; 64] },
+        Item { id: 2, price: 24.50, stock: 3, barcode: [0; 64] },
+        Item { id: 3, price: 4.25, stock: 0, barcode: [0; 64] },
+    ];
+
+    println!("{}", status_label(Status::InStock));
+    println!("{}", status_label(Status::LowStock));
+    println!("{}", status_label(Status::OutOfStock));
+    println!("{}", status_label(Status::Discontinued));
+
+    if let Some(found) = find_item_by_price(&items, 9.99) {
+        println!("found item {} at $9.99", found.id);
+    }
+
+    println!("total value: \${:.2}", total_value(&items));
+    println!("{}", describe_cheapest(&items));
+
+    let discounted = apply_discount(items[1], 10.0);
+    println!("discounted price: \${:.2}", discounted.price);
+    println!("original still: \${:.2}", items[1].price);
+    println!("size of Item: {} bytes", std::mem::size_of::<Item>());
+}`;
+
+<Playground code={wr2BuggyCode} />
+
+```text
+in stock
+unavailable
+unavailable
+unavailable
+found item 1 at $9.99
+total value: $173.40
+cheapest item id: 3
+discounted price: $22.05
+original still: $24.50
+size of Item: 80 bytes
+```
+
+สี่ bug และมีแค่หนึ่งตัวเท่านั้นที่มองเห็นได้ใน output นี้
+
+## Findings
+
+<details>
+<summary>Bug 1: `_ =>` รวมสถานะต่างกันสามแบบให้เหลือแบบเดียว</summary>
+
+**อาการ:** `LowStock`, `OutOfStock`, และ `Discontinued` ทั้งหมด print `"unavailable"` — มองเห็นได้ตรงนี้ใน output แต่อ่านผ่านง่ายว่าเป็น "fallback branch ทำงานตามที่ตั้งใจ" แทนที่จะเป็น "สามสถานะจริงที่ไม่มี label แยกกัน"
+
+**หลักฐาน:**
+
+```text
+warning: wildcard match will also match any future added variants
+  --> src/main.rs:19:9
+   |
+19 |         _ => "unavailable",
+   |         ^ help: try: `Status::LowStock | Status::OutOfStock | Status::Discontinued`
+```
+
+(`cargo clippy -- -W clippy::wildcard_enum_match_arm`)
+
+**ทางแก้:** list ทุก variant อย่างชัดเจน — compiler จะรับประกันว่า `Status` variant ที่ห้าในอนาคตจะ compile ไม่ผ่านตรงนี้จนกว่ามันจะได้ label ของตัวเอง แทนที่จะเข้าไปรวมกับ bucket "unavailable" อย่างเงียบ ๆ:
+
+```rust
+// @skip-verify fragment: Status is defined earlier in the full listing above
+fn status_label(status: Status) -> &'static str {
+    match status {
+        Status::InStock => "in stock",
+        Status::LowStock => "low stock",
+        Status::OutOfStock => "out of stock",
+        Status::Discontinued => "discontinued",
+    }
+}
+```
+</details>
+
+<details>
+<summary>Bug 2: `find_item_by_price` เปรียบเทียบ float ด้วย `==`</summary>
+
+**อาการ:** ไม่มีเลยใน run นี้ — `9.99` ใน search call และ `9.99` ใน price field ของ item เป็น literal เดียวกัน encode เหมือนกัน ดังนั้น `==` จึงบังเอิญสำเร็จ มันหยุดสำเร็จทันทีที่ฝั่งใดฝั่งหนึ่งเป็นผลจากการคำนวณ (ส่วนลด, การแปลงสกุลเงิน, ผลรวม) แทนที่จะเป็น literal ที่ตรงกัน
+
+**หลักฐาน:**
+
+```text
+warning: strict comparison of `f32` or `f64`
+  --> src/main.rs:24:30
+   |
+24 |     items.iter().find(|item| item.price == target_price)
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider comparing them within some margin of error: `(item.price - target_price).abs() < error_margin`
+```
+
+(`cargo clippy -- -W clippy::float_cmp`)
+
+**ทางแก้:** เปรียบเทียบภายใน tolerance แทนที่จะเป็นความเท่ากันแบบเป๊ะ:
+
+```rust
+// @skip-verify fragment: Item is defined earlier in the full listing above
+fn find_item_by_price(items: &[Item], target_price: f64) -> Option<&Item> {
+    items.iter().find(|item| (item.price - target_price).abs() < f64::EPSILON)
+}
+```
+
+ทางแก้ที่ทนทานกว่าในโลกจริงคือเก็บราคาเป็นจำนวนเต็มหน่วยเซนต์ (`u32`) แทนที่จะเป็น `f64` เลย ซึ่งหลีกเลี่ยงการเปรียบเทียบ float ไปทั้งหมด — คุ้มที่จะพิจารณาตรงนี้ แต่อยู่นอกขอบเขตของ fix เฉพาะนี้
+</details>
+
+<details>
+<summary>Bug 3: `is_some()` แล้ว `unwrap()` ใน `describe_cheapest`</summary>
+
+**อาการ:** ไม่มี — ถูกต้องทาง logic แค่ทำด้วยมือในสิ่งที่ `match`/`if let` ทำในขั้นตอนเดียวอยู่แล้ว และเลยเป็นแค่การแก้ไขหนึ่งครั้งห่างจาก bug (ไม่มีอะไรหยุด edit ในอนาคตจากการเปลี่ยนสิ่งที่ `cheapest` ถืออยู่ระหว่างการเช็ค `is_some()` กับการเรียก `unwrap()`)
+
+**หลักฐาน:**
+
+```text
+warning: called `unwrap` on `cheapest` after checking its variant with `is_some`
+  --> src/main.rs:34:41
+   |
+33 |     if cheapest.is_some() {
+   |     --------------------- help: try: `if let Some(<item>) = cheapest`
+34 |         format!("cheapest item id: {}", cheapest.unwrap().id)
+   |                                         ^^^^^^^^^^^^^^^^^
+```
+
+(`cargo clippy` — `unnecessary_unwrap` เปิดเป็น default)
+
+**ทางแก้:**
+
+```rust
+// @skip-verify fragment: Item is defined earlier in the full listing above
+fn describe_cheapest(items: &[Item]) -> String {
+    match items.iter().min_by(|a, b| a.price.partial_cmp(&b.price).unwrap()) {
+        Some(cheapest) => format!("cheapest item id: {}", cheapest.id),
+        None => "no items".to_string(),
+    }
+}
+```
+</details>
+
+<details>
+<summary>Bug 4: `#[derive(Copy)]` บน struct 80 ไบต์</summary>
+
+**อาการ:** `apply_discount(items[1], 10.0)` compile ผ่านและทำงานถูกต้อง — แต่ `items[1]` ถูกส่งแบบ*by value* และเพราะ `Item` เป็น `Copy` โค้ดนี้จึง copy ทั้ง 80 ไบต์อย่างเงียบ ๆ แทนที่จะ move หรือ borrow `items[1]` ยังใช้ได้สมบูรณ์ในบรรทัดถัดไป (`original still: $24.50`) เพราะไม่มีอะไรถูก move เลยพอดี — มีแค่ copy ธรรมดาเกิดขึ้นแบบมองไม่เห็น
+
+**หลักฐาน:** ไม่มี lint ตัวไหน flag สิ่งนี้เลย — มีแค่การวัดเท่านั้นที่เผยมัน:
+
+```text
+size of Item: 80 bytes
+```
+
+`#[derive(Copy)]` ถูกกฎตรงนี้ (ทุก field เป็น `Copy`-eligible... ยกเว้น `barcode: [u8; 64]` ซึ่งก็เป็น `Copy` เหมือนกัน เพราะ array ของ type ที่ `Copy` ก็ `Copy`) — ความถูกกฎไม่เคยเป็นประเด็นเลย มีแค่ว่าการ copy 80 ไบต์ทุกครั้งที่ใช้แบบ by-value เป็นต้นทุนที่ตั้งใจหรือไม่
+
+**ทางแก้:** ตัด `Copy` ออก (เก็บ `Clone` ไว้) และรับ `&Item` แบบ reference ในที่ที่ฟังก์ชันแค่ต้องการอ่านมัน clone แค่ในที่ที่ต้องการ copy แบบ mutable ที่เป็นอิสระจริง ๆ:
+
+```rust
+// @skip-verify fragment: Item is defined earlier in the full listing above
+fn apply_discount(item: &Item, percent: f64) -> Item {
+    let mut discounted = item.clone();
+    discounted.price *= 1.0 - percent / 100.0;
+    discounted
+}
+// call site: apply_discount(&items[1], 10.0)
+```
+
+การแก้นี้ทำให้ clone ชัดเจนและมองเห็นได้ที่ call site เดียวที่ต้องการ copy ที่เป็นอิสระจริง ๆ แทนที่จะปล่อยให้การใช้ `Item` แบบ by-value ในอนาคตทุกครั้ง copy 80 ไบต์อย่างเงียบ ๆ
+</details>
+
+## เวอร์ชันที่แก้แล้ว
+
+export const wr2FixedCode = `#[derive(Clone)]
+struct Item {
+    id: u32,
+    price: f64,
+    stock: u32,
+    barcode: [u8; 64],
+}
+
+enum Status {
+    InStock,
+    LowStock,
+    OutOfStock,
+    Discontinued,
+}
+
+fn status_label(status: Status) -> &'static str {
+    match status {
+        Status::InStock => "in stock",
+        Status::LowStock => "low stock",
+        Status::OutOfStock => "out of stock",
+        Status::Discontinued => "discontinued",
+    }
+}
+
+fn find_item_by_price(items: &[Item], target_price: f64) -> Option<&Item> {
+    items.iter().find(|item| (item.price - target_price).abs() < f64::EPSILON)
+}
+
+fn total_value(items: &[Item]) -> f64 {
+    items.iter().map(|i| i.price * i.stock as f64).sum()
+}
+
+fn describe_cheapest(items: &[Item]) -> String {
+    match items.iter().min_by(|a, b| a.price.partial_cmp(&b.price).unwrap()) {
+        Some(cheapest) => format!("cheapest item id: {}", cheapest.id),
+        None => "no items".to_string(),
+    }
+}
+
+fn apply_discount(item: &Item, percent: f64) -> Item {
+    let mut discounted = item.clone();
+    discounted.price *= 1.0 - percent / 100.0;
+    discounted
+}
+
+fn main() {
+    let items = vec![
+        Item { id: 1, price: 9.99, stock: 10, barcode: [0; 64] },
+        Item { id: 2, price: 24.50, stock: 3, barcode: [0; 64] },
+        Item { id: 3, price: 4.25, stock: 0, barcode: [0; 64] },
+    ];
+
+    println!("{}", status_label(Status::InStock));
+    println!("{}", status_label(Status::LowStock));
+    println!("{}", status_label(Status::OutOfStock));
+    println!("{}", status_label(Status::Discontinued));
+
+    if let Some(found) = find_item_by_price(&items, 9.99) {
+        println!("found item {} at $9.99", found.id);
+    }
+
+    println!("total value: \${:.2}", total_value(&items));
+    println!("{}", describe_cheapest(&items));
+
+    let discounted = apply_discount(&items[1], 10.0);
+    println!("discounted price: \${:.2}", discounted.price);
+    println!("original still: \${:.2}", items[1].price);
+    println!("size of Item: {} bytes", std::mem::size_of::<Item>());
+}`;
+
+<Playground code={wr2FixedCode} />
+
+```text
+in stock
+low stock
+out of stock
+discontinued
+found item 1 at $9.99
+total value: $173.40
+cheapest item id: 3
+discounted price: $22.05
+original still: $24.50
+size of Item: 80 bytes
+```
+
+ทุกสถานะตอนนี้มี label ของตัวเอง; ทุกอย่างอื่นเป็น output เดียวกันเป๊ะกับก่อนหน้า — bug 2 ถึง 4 ไม่เคยมองเห็นได้ใน run เฉพาะนี้เลย มีแค่ในความเสี่ยงที่มันมีภายใต้ input ต่างกันหรือ edit ในอนาคตต่างกัน
+
+## เครื่องมือจับอะไรได้บ้าง
+
+การรัน `cargo clippy` รวมจริงหนึ่งครั้งบนไฟล์ bug เดิม:
+
+```text
+$ cargo clippy --bin wr2_buggy -- -W clippy::wildcard_enum_match_arm -W clippy::float_cmp -W clippy::unnecessary_unwrap
+warning: wildcard match will also match any future added variants
+  --> src/bin/wr2_buggy.rs:19:9
+   |
+19 |         _ => "unavailable",
+   |         ^ help: try: `Status::LowStock | Status::OutOfStock | Status::Discontinued`
+
+warning: strict comparison of `f32` or `f64`
+  --> src/bin/wr2_buggy.rs:24:30
+   |
+24 |     items.iter().find(|item| item.price == target_price)
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: called `unwrap` on `cheapest` after checking its variant with `is_some`
+  --> src/bin/wr2_buggy.rs:34:41
+   |
+33 |     if cheapest.is_some() {
+   |     --------------------- help: try: `if let Some(<item>) = cheapest`
+34 |         format!("cheapest item id: {}", cheapest.unwrap().id)
+   |                                         ^^^^^^^^^^^^^^^^^
+
+warning: `scratch` (bin "wr2_buggy") generated 3 warnings
+```
+
+สามจากสี่ จากคำสั่งเดียว (`wildcard_enum_match_arm` กับ `float_cmp` ต้องการ `-W`; `unnecessary_unwrap` เปิดเป็น default) Bug 4 — struct `Copy` 80 ไบต์ — ไม่ trigger lint ไหนเลย `std::mem::size_of::<Item>()` ที่ print ตรง ๆ ใน output ของโปรแกรมเอง คือ signal เดียวที่บอกว่ามีอะไรคุ้มค่าที่จะมองอีกครั้ง
+
+## Mental Model
+
+Struct กับ enum encode รูปร่างครั้งเดียวแล้วถูก copy, match, และเปรียบเทียบทุกที่ที่ type นั้นถูกใช้ — ซึ่งหมายความว่าความผิดพลาดด้าน design ที่จุดนิยาม type (การ derive `Copy` บนสิ่งที่ใหญ่, การปล่อยให้ status ไม่มี label ครบทุก variant) ไม่ได้อยู่แค่ที่เดียว มันโผล่กลับมาที่ทุก call site ที่รับ struct แบบ by value และทุก `match` ที่หยิบ `_` แทนที่จะ list variant การรีวิว struct หรือ enum definition คุ้มค่าความสนใจเท่ากับการรีวิว public function signature ด้วยเหตุผลเดียวกัน: ทุกอย่างที่อยู่ปลายน้ำสืบทอดการตัดสินใจที่ทำไว้ตรงนั้น
+
+## Trade-offs
+
+การ list ทุก enum variant อย่างชัดเจน (แก้ Bug 1) เสียบรรทัดเพิ่มขึ้นสองสามบรรทัดวันนี้ และคุ้มค่าทันทีที่ `Status` variant ที่ห้าถูกเพิ่มเข้ามา — compiler บังคับให้ทุก `match` ที่ได้รับผลกระทบถูกอัปเดต แทนที่จะปล่อยให้มันตกลงไปที่ `_` อย่างเงียบ ๆ นั่นเป็นการแลกจริง ที่ตั้งใจ: verbose มากขึ้นตอนนี้ ปลอดภัยมากขึ้นเมื่อมีการเปลี่ยนแปลงทีหลัง การ redesign float-to-cents ที่กล่าวถึงใน fix ของ Bug 2 เป็นเวอร์ชันที่ทั่วถึงกว่าของการแลกเปลี่ยนแบบเดียวกัน — `u32` เซนต์เสียค่า refactor ครั้งเดียวและลบ bug ประเภทเปรียบเทียบ float ทั้งหมดออกไปถาวร แทนที่จะปะ call site เดียวด้วยการเปรียบเทียบ epsilon
+
+## Common Misconceptions
+
+- **"`_ =>` เป็นแค่เวอร์ชัน Rust ของ `default`/`else` -- ใช้มันได้เสมอโดยไม่มีปัญหา"** มัน compile เป็นแบบนั้นจริง แต่มันยัง opt-out จาก exhaustiveness checking ของ `match` เฉพาะตัวนั้น ซึ่งเป็นเหตุผลหลักที่ใช้ `match` แทน `if`/`else` chain ตั้งแต่แรก การแลกเปลี่ยนนี้ชอบธรรมสำหรับบาง match (ชุด case ที่เปิดกว้างจริง) และเป็นความเสี่ยงจริงสำหรับ match อื่น (enum เล็ก ๆ ปิดตัวอย่าง `Status`)
+- **"`#[derive(Copy)]` เกี่ยวกับ performance เท่านั้น ไม่เกี่ยวกับความถูกต้อง"** ในตัวอย่างนี้มันเกี่ยวทั้งคู่: การ copy 80 ไบต์อย่างเงียบ ๆ เป็นต้นทุนด้าน performance และความจริงที่ว่า `items[1]` ยังใช้ได้หลัง `apply_discount(items[1], ...)` — เพราะมันถูก copy ไม่ใช่ move — ก็สามารถกลบ bug ที่ผู้เรียก*ตั้งใจ*จะกิน original แต่บังเอิญยังมีมันอยู่ได้ด้วย
+
+## อ่านโค้ดที่ AI เขียน
+
+รูปร่างเดียวกันของ `_ =>` โผล่มาบ่อยมากใน match statement ที่ AI สร้างบน enum เล็ก ๆ ปิด มักเพราะผู้เขียน (มนุษย์หรือ AI) กำลังคิดถึงกรณี*ที่พบบ่อย* ไม่ใช่กรณี*ที่ครบถ้วน*
+
+<SpotTheBug code={`enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+fn is_horizontal(direction: Direction) -> bool {
+    match direction {
+        Direction::East => true,
+        Direction::West => true,
+        _ => false,
+    }
+}
+
+fn main() {
+    println!("{}", is_horizontal(Direction::East));
+    println!("{}", is_horizontal(Direction::North));
+}
+`}>
+โค้ดนี้ compile ผ่าน รันได้ และ print `true` แล้ว `false` -- ถูกต้องสมบูรณ์สำหรับ enum 4 variant ที่มีผลลัพธ์เป็นไปได้แค่ 4 แบบ arm `_ => false` ทำงานจริงตรงนี้ (ครอบคลุม `North` กับ `South`) ซึ่งเป็นเหตุผลพอดีที่ทำให้มันดูสมเหตุสมผล ความเสี่ยงโผล่มาทันทีที่ `Direction` ได้ variant ที่ห้า -- สมมติ `Direction::Northeast` -- ซึ่งจะรายงาน `is_horizontal(Direction::Northeast) == false` อย่างเงียบ ๆ โดยไม่มี compile error ที่ไหนเลย แม้ว่าคำตอบที่ถูกต้องสำหรับทิศทางแนวทแยงจะกำกวมจริง ๆ และสมควรได้รับการตัดสินใจจากมนุษย์ `Direction::North | Direction::South => false` compile เป็น behavior เดียวกันวันนี้ และบังคับการตัดสินใจในวันที่ variant ที่ห้าถูกเพิ่มเข้ามา
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Definition ของ struct หรือ enum ถูกรีวิวครั้งเดียวแต่ถูกสืบทอดทุกที่ที่ type นั้นถูกใช้ -- match arm ที่ไม่มี label หรือ Copy type ที่ใหญ่เกินไปเป็นความผิดพลาดเล็ก ๆ ที่จุดนิยาม และเป็นความผิดพลาดซ้ำ ๆ ที่ทุก call site
+</Callout>
+
+export const quizWorkedReview2 = [
+    {
+        q: "ใน output ของโปรแกรม bug `LowStock`, `OutOfStock`, และ `Discontinued` ทั้งหมด print \"unavailable\" ทำไมนี่ถึงเป็น bug แทนที่จะเป็น behavior ที่ตั้งใจ?",
+        options: [
+            "มันไม่ใช่ bug -- การรวมหลายสถานะให้เหลือ label เดียวถูกต้องเสมอ",
+            "`_ =>` arm ทำให้บอกไม่ได้ว่าสามสถานะที่แตกต่างและมีความหมายต่างกันจริงนี้ต่างกันยังไงใน output และ Status variant ที่ห้าในอนาคตจะเข้าไปรวมกับ bucket เดียวกันอย่างเงียบ ๆ โดยไม่มี compile error เลย",
+            "โปรแกรม panic จริง ๆ ตอน print สามสถานะนี้",
+            "Rust บังคับให้ match arm ทุกตัว return string เดียวกัน ดังนั้นนี่หลีกเลี่ยงไม่ได้",
+        ],
+        answer: 1,
+        explain: "สามสถานะนี้มีความหมายจริงต่างกัน (ต่ำชั่วคราว, หมดตอนนี้, เลิกผลิตถาวร) ที่ catch-all ทิ้งไป แย่กว่านั้น variant ใหม่ที่ถูกเพิ่มทีหลังสืบทอดการรวมแบบเงียบ ๆ เดียวกันโดยไม่มี signal ว่ามันต้องการ case ของตัวเอง",
+    },
+    {
+        q: "ทำไม `find_item_by_price(&items, 9.99)` ถึงทำงานถูกต้องในโปรแกรมนี้ ทั้ง ๆ ที่เปรียบเทียบ float ด้วย `==`?",
+        options: [
+            "operator == ของ Rust บน f64 คำนึงถึง rounding error ของ floating-point ให้อัตโนมัติเสมอ",
+            "ค่าค้นหา 9.99 กับ price ที่เก็บไว้ 9.99 ของ item เป็น literal เดียวกัน encode เหมือนกัน ดังนั้นความเท่ากันแบบเป๊ะจึงบังเอิญจริง -- สิ่งนี้จะไม่จริงถ้าค่าใดค่าหนึ่งมาจากการคำนวณเช่นส่วนลดหรือการแปลงสกุลเงิน",
+            "การเปรียบเทียบ f64 ด้วย == เป็น deprecated และโค้ดนี้ compile ไม่ผ่านจริง ๆ",
+            "clippy::float_cmp lint แก้สิ่งนี้ให้อัตโนมัติที่ compile time",
+        ],
+        answer: 1,
+        explain: "literal ที่เหมือนกันสองตัวให้ bit pattern เหมือนกัน ดังนั้น == จึงสำเร็จตรงนี้โดยโครงสร้าง bug แฝงอยู่: ราคาที่มาจาก arithmetic (ส่วนลด, ผลรวม, การแปลงสกุลเงิน) เป็นกรณีที่ floating-point rounding ทำให้ == ไม่น่าเชื่อถือพอดี",
+    },
+    {
+        q: "`std::mem::size_of::<Item>()` เผยอะไรเกี่ยวกับ Bug 4 และทำไมไม่มี clippy lint ตัวไหน flag มัน?",
+        options: [
+            "มันเผยว่า Item มีแค่ 8 ไบต์ ซึ่งเล็กเกินไปที่จะมีประโยชน์",
+            "มันเผยว่า Item มี 80 ไบต์ และเพราะมัน derive Copy การใช้แบบ by-value ทุกครั้ง (เช่น `apply_discount(items[1], 10.0)`) จึง copy ทั้ง 80 ไบต์อย่างเงียบ ๆ -- ไม่มี lint เพราะการ derive Copy บน type ที่ใหญ่แต่ถูกกฎเป็นการแลกเปลี่ยนด้าน design ไม่ใช่ syntax หรือ logic error",
+            "มันเผย memory leak ที่ Miri จะจับได้เหมือนกัน",
+            "มันเผยว่า struct compile ไม่ผ่านบน 32-bit target",
+        ],
+        answer: 1,
+        explain: "Copy ถูกกฎบน struct ใดก็ตามที่ทุก field เป็น Copy-eligible ไม่ว่าขนาดเท่าไหร่ -- ความถูกกฎไม่เคยเป็นปัญหาเลย มีแค่การวัดขนาดจริง (หรือรัน cargo bloat) เท่านั้นที่เผยต้นทุนจริงของการ copy มันโดยปริยายทุกครั้งที่ใช้แบบ by-value",
+    },
+    {
+        q: "ทำไม fix ของ `describe_cheapest` (ใช้ `match` แทน `is_some()` + `unwrap()`) ถึงสำคัญ ในเมื่อโค้ดเดิมไม่ได้ผิดจริง ๆ?",
+        options: [
+            "มันเปลี่ยน return type ของฟังก์ชัน",
+            "มันลบขั้นตอนที่ edit ในอนาคตต่อโค้ดระหว่างการเช็ค is_some() กับการเรียก unwrap() อาจทำให้ข้อสมมติที่ว่า cheapest ยังเป็น Some ผิดพลาด ทำให้ panic ซึ่ง match/if let ป้องกันได้โดยโครงสร้าง",
+            "มันทำให้ฟังก์ชันรันเร็วขึ้นอย่างวัดผลได้",
+            "มันจำเป็นเพราะ is_some() ไม่มีอยู่ใน Rust 2024",
+        ],
+        answer: 1,
+        explain: "is_some() แล้วตามด้วย unwrap() แยกกันพึ่งพาว่าไม่มีอะไรเปลี่ยน cheapest ระหว่างนั้น -- จริงวันนี้ แต่ compiler ไม่บังคับแบบที่ match หรือ if let Some(...) บังคับโดยโครงสร้าง ด้วยการ bind ค่าแค่ใน branch ที่รับประกันว่ามันมีอยู่เท่านั้น",
+    },
+];
+
+<Quiz client:visible id="reading-rust/worked-review-2" questions={quizWorkedReview2} />
+
+<ProgressTracker client:visible id="reading-rust/worked-review-2" />

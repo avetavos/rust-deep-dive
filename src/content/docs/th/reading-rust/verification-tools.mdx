@@ -1,0 +1,497 @@
+---
+title: 'Verification Ladder'
+description: 'เครื่องมือจริงทุกตัวที่จับ bug ของ Rust ที่ AI สร้าง รันจริงพร้อม transcript เป๊ะ ๆ -- และคำสั่งเดียวที่รันทั้งหมด'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+สองบทก่อนหน้าตั้งชื่อเครื่องมือเจาะจง (หรือ "ไม่มี") ให้กับแต่ละ pattern ใน 24 pattern บทนี้รันทุกเครื่องมือนั้นจริง — transcript ด้านล่างคัดลอกมาจากการรันจริงบน rustc/cargo 1.96.1 ไม่ได้สร้างขึ้นจากความจำ — และจัดมันเป็นบันได: แต่ละขั้นจับได้มากกว่าขั้นล่างมัน ด้วยต้นทุนที่สูงกว่าในการรัน
+
+## ขั้นที่ 1: `cargo check` / `cargo build`
+
+Compiler จับ type error, การละเมิด borrow checker, และ (ใน debug build) การละเมิด unsafe precondition ก่อนที่อะไรอื่นจะรันเลย มันยังรายงาน warning สำหรับ dead code และ binding ที่ไม่ได้ใช้ — signal ราคาถูกที่ไม่มีต้นทุนเพิ่มเติมนอกเหนือจาก build ที่คุณทำอยู่แล้ว:
+
+```rust
+fn main() {
+    let unused_value = 42;
+    println!("hello");
+}
+```
+
+```text
+warning: unused variable: `unused_value`
+ --> src/main.rs:2:9
+  |
+2 |     let unused_value = 42;
+  |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused_value`
+  |
+  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+```
+
+ขั้นนี้ขั้นเดียวก็จับ catalog pattern #7 (`impl Trait` เป็น field ของ struct, `error[E0562]`) และแบบ `HashMap`-key ของ #9 (`error[E0599]`) ได้แล้ว — ทั้งคู่เป็น compile error ดังนั้นจึงหลุดออกไปไม่ได้เลย
+
+## ขั้นที่ 2: `cargo clippy -- -D warnings`
+
+Lint แบบ default ของ clippy รันอัตโนมัติ; แต่ AI-smell lint ส่วนใหญ่ใน catalog นี้**ไม่ได้**อยู่ใน default set นั้น และต้องการ `-W` แบบชัดเจน นี่คือการรันจริงครั้งเดียวบน scratch file ที่มีกลิ่นไม่ดีหกแบบพร้อมกัน:
+
+```text
+warning: this argument is passed by value, but not consumed in the function body
+ --> src/bin/ai_smells.rs:6:20
+  |
+6 | fn print_name(cfg: Config) {
+  |                    ^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#needless_pass_by_value
+  = note: requested on the command line with `-W clippy::needless-pass-by-value`
+help: consider taking a reference instead
+  |
+6 | fn print_name(cfg: &Config) {
+  |                    +
+
+warning: the loop variable `i` is only used to index `items`
+  --> src/bin/ai_smells.rs:12:14
+   |
+12 |     for i in 0..items.len() {
+   |              ^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#needless_range_loop
+   = note: requested on the command line with `-W clippy::needless-range-loop`
+
+warning: manual implementation of `Option::map`
+  --> src/bin/ai_smells.rs:19:5
+   |
+19 | /     match x {
+20 | |         Some(v) => Some(v * 2),
+21 | |         None => None,
+22 | |     }
+   | |_____^ help: try: `x.map(|v| v * 2)`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#manual_map
+   = note: requested on the command line with `-W clippy::manual-map`
+
+warning: used `unwrap()` on a `Result` value
+  --> src/bin/ai_smells.rs:26:5
+   |
+26 |     raw.parse().unwrap()
+   |     ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#unwrap_used
+
+warning: this argument is passed by value, but not consumed in the function body
+  --> src/bin/ai_smells.rs:29:13
+   |
+29 | fn shout(s: String) -> String {
+   |             ^^^^^^ help: consider changing the type to: `&str`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#needless_pass_by_value
+
+warning: large size difference between variants
+  --> src/bin/ai_smells.rs:33:1
+   |
+33 | / enum Event {
+34 | |     Click { x: i32, y: i32 },
+   | |     ------------------------ the second-largest variant contains at least 8 bytes
+35 | |     Payload([u8; 512]),
+   | |     ------------------ the largest variant contains at least 512 bytes
+36 | | }
+   | |_^ the entire enum is at least 516 bytes
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#large_enum_variant
+   = note: requested on the command line with `-W clippy::large-enum-variant`
+
+warning: this argument is passed by value, but not consumed in the function body
+  --> src/bin/ai_smells.rs:38:14
+   |
+38 | fn handle(e: Event) {
+   |              ^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#needless_pass_by_value
+
+warning: redundant clone
+  --> src/bin/ai_smells.rs:48:19
+   |
+48 |     print_name(cfg.clone());
+   |                   ^^^^^^^^ help: remove this
+   |
+note: this value is dropped without further use
+  --> src/bin/ai_smells.rs:48:16
+   |
+48 |     print_name(cfg.clone());
+   |                ^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#redundant_clone
+   = note: requested on the command line with `-W clippy::redundant-clone`
+
+warning: `scratch` (bin "ai_smells") generated 8 warnings
+```
+
+แปด hit จากไฟล์ 50 บรรทัดไฟล์เดียว ชื่อ lint หกแบบต่างกัน และทุกอันต้องการ `-W` แบบชัดเจน — `clippy::all` ของคอร์สนี้ (default group จริง) เดี่ยว ๆ จะไม่รายงานอันไหนเลยสักอัน คำสั่งที่ใช้จริงคือ:
+
+```bash
+cargo clippy --bin ai_smells -- \
+  -W clippy::redundant_clone \
+  -W clippy::needless_range_loop \
+  -W clippy::manual_map \
+  -W clippy::large_enum_variant \
+  -W clippy::unwrap_used \
+  -W clippy::needless_pass_by_value
+```
+
+`clippy::await_holding_lock` คือ lint ตัวเดียวใน catalog นี้ที่ทำงาน**โดยไม่ต้อง**มี `-W` ชัดเจน — แต่เฉพาะใน crate ที่ depend on async runtime จริง เพราะ lint นี้ต้องการ `.await` point จริงเพื่อเช็ค:
+
+```text
+error: this `MutexGuard` is held across an await point
+ --> src/main.rs:4:9
+  |
+4 |     let mut guard = counter.lock().unwrap();
+  |         ^^^^^^^^^
+  |
+  = help: consider using an async-aware `Mutex` type or ensuring the `MutexGuard` is dropped before calling `await`
+```
+
+## ขั้นที่ 3: `cargo test` (และ `cargo test --doc`)
+
+การรัน test suite จับ behavioral bug จริง — แต่จับได้เฉพาะที่ test ที่มีอยู่จริง ๆ ทดสอบและ assert เท่านั้น panic จาก byte-slice บน input ไม่ใช่ ASCII (catalog #17) มองไม่เห็นจากขั้นนี้เว้นแต่ string ที่ไม่ใช่ ASCII จะปรากฏใน test case จริง ๆ:
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:3:25:
+end byte index 1 is not a char boundary; it is inside 'ส' (bytes 0..3 of string)
+```
+
+Doc-test เป็นอีก pass ที่แยกกันและลืมง่าย — `cargo test` เดี่ยว ๆ ไม่รันมันเว้นแต่คุณจะรัน `--doc` ด้วย (หรือไม่ใส่ flag อะไรเลย ซึ่งรันทั้งคู่):
+
+```text
+running 1 test
+test src/lib.rs - add_one (line 3) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+```
+
+ขั้นนี้ยังเป็นจุดที่ `#[should_panic]` ที่ไม่มี `expected = "..."` (#23) และ test ที่ไม่มี assertion (#24) เผยข้อจำกัดของตัวเองพอดี: ทั้งคู่ print `1 passed` ไม่ว่าโค้ดที่ทดสอบจะถูกต้องจริงหรือไม่ `cargo test` จำเป็นและไม่เพียงพอ — ดู transcript เต็มได้ใน [AI Bug Catalog](/rust/th/reading-rust/ai-bug-catalog/)
+
+## ขั้นที่ 4: `cargo fmt --check`
+
+การจัด format ไม่เกี่ยวกับความถูกต้อง แต่ diff จริงทำให้ PR ที่ format ไม่สม่ำเสมอรีวิวอย่างละเอียดไม่ได้ — CI ควร fail ก่อนที่จะให้สายตามนุษย์ต้องทำแบบนั้น:
+
+```text
+Diff in src/bin/p_fmtcheck.rs:1:
+ fn main() {
+-        let x=5;
+-    println!("{}",x);
++    let x = 5;
++    println!("{}", x);
+ }
+```
+
+## ขั้นที่ 5: `cargo audit` / `cargo deny`
+
+เครื่องมือสองตัวนี้เช็ค dependency tree ไม่ใช่โค้ดของคุณ: `cargo audit` เทียบ `Cargo.lock` กับ RustSec advisory database, `cargo deny` เพิ่มการบังคับ license policy กับ duplicate-version policy ด้วย ทั้งคู่ต้องติดตั้งก่อน (`cargo install cargo-audit --locked` / `cargo install cargo-deny --locked`) เพราะไม่ได้อยู่ใน toolchain default การรันที่สะอาดของแต่ละตัวหน้าตาแบบนี้ — ไม่มีอะไรเกิดขึ้นเลยจริง ๆ ซึ่งเป็นประเด็น:
+
+```text
+$ cargo audit
+    Fetching advisory database from `https://github.com/RustSec/advisory-db.git`
+      Loaded 1266 security advisories (from ~/.cargo/advisory-db)
+    Updating crates.io index
+    Scanning Cargo.lock for vulnerabilities (25 crate dependencies)
+```
+
+```text
+$ cargo deny check
+advisories ok, bans ok, licenses ok, sources ok
+```
+
+License check ของ `cargo deny` เป็น opt-in และเข้มงวดเป็น default — `cargo deny init` สร้าง `deny.toml` ที่มี license allowlist ว่างเปล่า ดังนั้นการรันครั้งแรกกับ dependency tree จริงจะ fail จนกว่าคุณจะ list license ที่โปรเจกต์ยอมรับอย่างชัดเจน (`"MIT"`, `"Apache-2.0"`, ฯลฯ):
+
+```text
+error[rejected]: failed to satisfy license requirements
+   ┌─ .../windows-sys-0.61.2/Cargo.toml:26:12
+   │
+26 │ license = "MIT OR Apache-2.0"
+   │            rejected: license is not explicitly allowed
+```
+
+ทั้งสองเครื่องมือไม่มีความเห็นต่อ pattern ทั้ง 24 ตัวใน catalog โดยตรงเลย — มันมีไว้จับปัญหาคนละประเภท (dependency ที่มี CVE ที่รู้จัก, license ที่เข้ากันไม่ได้ที่ถูกดึงเข้ามาแบบ transitive) ซึ่งเป็นความรับผิดชอบในการรีวิวที่จริงพอ ๆ กัน
+
+## ขั้นที่ 6: Miri
+
+Miri interpret โปรแกรมของคุณแทนที่จะ compile เป็น native code เช็คทุก memory access กับกฎ aliasing และ validity จริงของ Rust — มันจับ undefined behavior ที่ compile ผ่านสะอาด รัน "สำเร็จ" และให้ output ที่ดูสมเหตุสมผลภายใต้ `cargo run` ปกติ นี่ไม่ใช่สมมติฐาน:
+
+```rust
+fn main() {
+    let ptr: *const i32;
+    {
+        let x = 42;
+        ptr = &x as *const i32;
+    } // `x` is dropped here -- `ptr` now dangles
+    // SAFETY: this is deliberately wrong -- reading through `ptr` after `x` went out of scope.
+    let value = unsafe { *ptr };
+    println!("{value}");
+}
+```
+
+ภายใต้ debug build ปกติ โค้ดนี้ print `42` และ exit ด้วย status `0` — ช่องบน stack ที่ถูกปล่อยแล้วบังเอิญยังมี bit pattern เก่าอยู่ ดังนั้นจึงดูเหมือนไม่มีอะไรผิด:
+
+```text
+$ cargo run
+42
+```
+
+ภายใต้ Miri โปรแกรมเดียวกันถูก flag ทันที:
+
+```text
+$ cargo +nightly miri run
+error: Undefined Behavior: memory access failed: alloc206 has been freed, so this pointer is dangling
+ --> src/main.rs:8:26
+  |
+8 |     let value = unsafe { *ptr };
+  |                          ^^^^ Undefined Behavior occurred here
+  |
+  = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+help: alloc206 was allocated here:
+ --> src/main.rs:4:13
+  |
+4 |         let x = 42;
+  |             ^
+help: alloc206 was deallocated here:
+ --> src/main.rs:6:5
+  |
+6 |     } // `x` is dropped here -- `ptr` now dangles
+  |     ^
+```
+
+Miri ยังรันด้วย leak checking เปิดเป็น default ซึ่งเป็นวิธีที่ catalog pattern #5 (`mem::forget`) ถูกจับได้ — อันนั้นไม่ใช่ undefined behavior เลยด้วยซ้ำ (มันเป็น safe Rust เต็มตัว) แค่เป็น leak ที่ Miri บังเอิญเฝ้าดูด้วย:
+
+```text
+error: memory leaked: alloc382 (Rust heap, size: 24, align: 8), allocated here:
+ --> src/main.rs:4:16
+  |
+4 |     let data = Box::new(vec![1, 2, 3]);
+  |                ^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+Miri สำคัญเฉพาะกับโค้ดที่มี `unsafe` block หรือ raw pointer อยู่ในนั้น — `cargo +nightly miri run` (หรือ `cargo +nightly miri test`) บน project ที่ไม่มี `unsafe` เลยไม่มีอะไรใหม่ให้เช็คเกินไปกว่าที่ขั้นที่ 1 ตรวจไปแล้ว
+
+## ขั้นที่ 7: การบังคับใน CI, `cargo doc`, และ `cargo bloat`
+
+`cargo build` local ปฏิบัติกับทุก warning เป็นแค่ warning; `RUSTFLAGS="-D warnings" cargo check` (ตั้งค่านี้ใน CI ไม่ใช่ local เพราะมันทำให้การทำงานกับ change ที่ยังไม่เสร็จเจ็บปวด) เปลี่ยนทุกอันให้เป็น hard failure:
+
+```text
+$ RUSTFLAGS="-D warnings" cargo check
+error: unused variable: `unused_value`
+ --> src/main.rs:2:9
+  |
+2 |     let unused_value = 42;
+  |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused_value`
+  |
+  = note: `-D unused-variables` implied by `-D warnings`
+```
+
+`cargo doc` เตือนเรื่อง intra-doc link ที่เสีย — เป็นการเช็คความถูกต้องจริง แม้จะแคบ บน documentation ของคุณ ไม่ใช่แค่โค้ด:
+
+```text
+$ cargo doc --no-deps --lib
+warning: unresolved link to `NoSuchType`
+ --> src/lib.rs:1:11
+  |
+1 | /// See [`NoSuchType`] for details.
+  |           ^^^^^^^^^^ no item named `NoSuchType` in scope
+  |
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+  = note: `#[warn(rustdoc::broken_intra_doc_links)]` on by default
+```
+
+`cargo bloat` (`cargo install cargo-bloat --locked`) รายงานว่าฟังก์ชันและ crate ไหนมีส่วนต่อขนาด release binary จริง ๆ — มันไม่ได้จับ catalog pattern เจาะจงตัวไหน แต่มันเป็นเครื่องมือที่เปลี่ยน "ฉันสงสัยว่า struct `Copy` นี้ใหญ่เกินไป" (pattern #8) หรือ "dependency นี้หนักกว่าที่มันดู" จากการเดาให้กลายเป็นการวัด:
+
+```text
+$ cargo bloat --release -n 5
+ File  .text     Size Crate Name
+ 1.1%   2.5%   9.2KiB   std std::backtrace_rs::symbolize::gimli::resolve
+ 0.9%   2.1%   7.6KiB   std <std::backtrace_rs::symbolize::gimli::Context>::new
+ 0.8%   1.9%   6.9KiB   std <gimli::read::dwarf::Unit<...>>::new
+ 0.5%   1.1%   4.2KiB tokio <tokio::signal::unix::OsStorage as tokio::signal::registry::Storage>::for_each
+ 0.5%   1.0%   3.8KiB   std gimli::read::unit::parse_attribute::<...>
+```
+
+## ขั้นไหนจับ Pattern ไหน
+
+| # | Pattern | ขั้น |
+|---|---|---|
+| 1 | Clone-to-silence | 2 (`clippy::redundant_clone`, `-W`) |
+| 2 | `Rc<RefCell<T>>` เป็นตัวเลือกแรก | 7 (ไม่มี — มนุษย์เท่านั้น) |
+| 3 | Lifetime ประดับ / `'static` ปิดปาก | 2 สำหรับ lifetime ประดับ (`clippy::needless_lifetimes`, default); 7 สำหรับ `'static` ปิดปาก (มนุษย์เท่านั้น) |
+| 4 | `unsafe` ที่ไม่มี comment `SAFETY` | 2 (`clippy::undocumented_unsafe_blocks`, `-W`) |
+| 5 | `mem::forget` leak | 6 (Miri leak checker) |
+| 6 | Parameter แบบ owned/reference-to-owned | 2 (`clippy::ptr_arg` default; `clippy::needless_pass_by_value`, `-W`) |
+| 7 | `impl Trait` ใน field | 1 (`error[E0562]`, compile ไม่ผ่านเสมอ) |
+| 8 | `#[derive(Copy)]` บน struct ใหญ่ | 7 (ไม่มี — `cargo bloat`/`size_of` วัดได้เมื่อสงสัยแล้ว) |
+| 9 | `PartialEq` float key / comparison | 1 สำหรับ `HashMap` key (`error[E0599]`); 2 สำหรับการเปรียบเทียบ `==` (`clippy::float_cmp`, `-W`) |
+| 10 | `unwrap()` บน input ที่ fail ได้ | 2 (`clippy::unwrap_used`, `-W`) |
+| 11 | `_ =>` กลืน variant | 2 (`clippy::wildcard_enum_match_arm`, `-W`) |
+| 12 | `is_some()` + `unwrap()` | 2 (`clippy::unnecessary_unwrap`, default) |
+| 13 | `Box<dyn Error>` ใน library API | 7 (ไม่มี — มนุษย์เท่านั้น) |
+| 14 | `panic!` สำหรับเงื่อนไขที่กู้คืนได้ | 2 (`clippy::panic`, `-W`) |
+| 15 | Index loop แทน iterator | 2 (`clippy::needless_range_loop`, default) |
+| 16 | `collect()` ที่ไม่จำเป็น | 2 (`clippy::needless_collect`, `-W`) |
+| 17 | Byte-slice panic บนที่ไม่ใช่ ASCII | 3 (`cargo test`, เฉพาะถ้าถูกทดสอบ) |
+| 18 | `as` truncation | 2 (`clippy::cast_possible_truncation`, `-W`) |
+| 19 | `Arc<Mutex<T>>` เกินความจำเป็น | 7 (ไม่มี — มนุษย์เท่านั้น) |
+| 20 | `Mutex` ถูกถือข้าม `.await` | 2 (`clippy::await_holding_lock`, default เมื่อมี async runtime) |
+| 21 | `thread::sleep` ใน async | 7 (ไม่มี — มนุษย์เท่านั้น / สังเกตผ่าน timing) |
+| 22 | Channel ไม่มีขอบเขต | 7 (ไม่มี — มนุษย์เท่านั้น) |
+| 23 | `#[should_panic]` ไม่มี `expected` | 7 (ไม่มี — `cargo test` ผ่านทั้งสองแบบ) |
+| 24 | Test ที่ไม่มี assertion | 7 (ไม่มี — `cargo test` ผ่านทั้งสองแบบ) |
+
+สิบจาก 24 ไม่มีขั้นอัตโนมัติเลย นั่นแหละคือ headline จริงของตารางนี้ ไม่ใช่ชื่อเครื่องมือ
+
+## คำสั่งเดียวสำหรับ Ladder
+
+ไม่ใช่ทุกขั้นที่ควรอยู่ใน pre-commit hook (Miri กับ `cargo bloat` ช้าเกินไปที่จะรันทุกครั้งที่ save) แต่ทุกอย่างจนถึงขั้นที่ 4 ถูกพอที่จะเชื่อมเป็นคำสั่งเดียวก่อนเปิด PR:
+
+```bash
+cargo fmt --check && \
+cargo check --all-targets && \
+cargo clippy --all-targets -- -D warnings \
+  -W clippy::redundant_clone -W clippy::unwrap_used -W clippy::needless_pass_by_value \
+  -W clippy::wildcard_enum_match_arm -W clippy::needless_collect -W clippy::panic \
+  -W clippy::cast_possible_truncation -W clippy::undocumented_unsafe_blocks && \
+cargo test --all-targets && \
+cargo test --doc
+```
+
+export const ladderDemoCode = `fn total_len(items: &[String]) -> usize {
+    items.iter().map(|s| s.len()).sum()
+}
+
+fn main() {
+    let v = vec![String::from("a"), String::from("bb")];
+    println!("{}", total_len(&v));
+}`;
+
+<Playground code={ladderDemoCode} />
+
+โค้ดนี้ผ่านทุกขั้นจนถึงขั้นที่ 4 โดยไม่มี finding เลย — ไม่มี clone, ไม่มีกลิ่น owned-param, ไม่มี index loop, ไม่มีอะไรให้ format, ไม่มีอะไรให้ Miri flag ความเงียบนั้นเองก็ให้ข้อมูล: ไฟล์ที่สะอาดจริง ๆ ให้ ladder run ที่ว่างเปล่าจริง ๆ ซึ่งเป็นเหตุผลว่าทำไม run ที่เขียวทั้งหมดบนไฟล์ที่*ดูน่าสงสัย*ถึงคุ้มค่าที่จะมองอีกครั้ง แทนที่จะเชื่อโดยอัตโนมัติ
+
+<Callout title="Ladder เป็นตัวกรอง ไม่ใช่คำตัดสิน">
+การผ่านทุกขั้นแปลว่าโค้ดผ่านทุก automated check ที่มีอยู่วันนี้ — ไม่ใช่ว่ามันถูกต้อง สิบจาก 24 pattern ใน catalog ผ่านทุกขั้นด้านบนในขณะที่ยังเป็นปัญหาด้าน design จริง Ladder ทำให้สิ่งที่มนุษย์ต้องอ่านอย่างละเอียดแคบลง มันไม่ได้แทนที่การอ่าน
+</Callout>
+
+## Mental Model
+
+แต่ละขั้นถามคำถามคนละแบบด้วยต้นทุนคนละระดับ `cargo check` ถาม "นี่เป็น Rust ที่ valid ไหม" ในมิลลิวินาที `cargo clippy -- -D warnings` (พร้อม lint ที่ถูกต้อง) ถาม "สิ่งนี้ตรงกับรูปร่างที่รู้ว่าแย่สักสองสามโหลไหม" ในไม่กี่วินาที `cargo test` ถาม "สิ่งนี้ทำงานแบบที่ test *บางตัว*บอกไว้ไหม" ในเวลาที่ suite ใช้รัน Miri ถาม "สิ่งนี้ละเมิดกฎ memory แม้แต่กับ input เดียวที่ลองไหม" ด้วยต้นทุน 10-100 เท่าของการรัน native ยิ่งขึ้น ladder สูงขึ้น แต่ละขั้นจับสิ่งที่ขั้นล่างมันจับไม่ได้โดยโครงสร้าง — แต่ทุกขั้นหยุดที่ขอบของสิ่งที่มันถูกสร้างมาให้เช็ค และนอกขอบนั้น มีแค่มนุษย์เท่านั้นที่เฝ้าดู
+
+## Trade-offs
+
+การรัน ladder เต็ม (รวม Miri กับ `cargo bloat`) ทุก commit ไม่ใช่สิ่งที่ทีมส่วนใหญ่ทำ และด้วยเหตุผลที่ดี — Miri เดี่ยว ๆ อาจช้ากว่าการรัน native เป็นหลักสิบเท่า ซึ่งโอเคสำหรับ CI job นาน ๆ ครั้ง แต่เจ็บปวดสำหรับ pre-commit hook ที่ developer ต้องรอหลายสิบครั้งต่อวัน การแบ่งที่ codebase ส่วนใหญ่ลงเอย: ขั้นเร็ว (fmt, check, clippy, test) ทุก push; ขั้นช้า (Miri, audit, deny, bloat) ตามตารางเวลาหรือก่อน release ต้นทุนของการแบ่งนั้นก็จริงเหมือนกัน — `mem::forget` leak หรือ use-after-free ผ่าน `unsafe` อาจนั่งอยู่ใน `main` นานเท่าที่ Miri run ตามตารางครั้งถัดไปจะสังเกตเห็นมัน
+
+## Common Misconceptions
+
+- **"`cargo clippy` โดยไม่มี flag เหมือนกับการรัน lint ทั้งหมดของ clippy"** `cargo clippy` เดี่ยว ๆ รันแค่ default-warn lint group เท่านั้น ทุก lint ที่ quote ใน transcript ขั้นที่ 2 ของบทนี้ต้องการ `-W` ชัดเจน นี่เป็นการออกแบบ (หลายตัวมี false-positive rate สูงเกินกว่าจะบังคับให้ทุก crate) ไม่ใช่การมองข้าม
+- **"ถ้า `cargo test` เขียว แปลว่า logic ถูกต้อง"** มันแปลว่า assertion ที่มีอยู่และรันแล้วทุกอันเป็นจริง มันไม่บอกอะไรเลยเกี่ยวกับ assertion ที่ไม่มีใครเขียน (pattern #24) หรือ `#[should_panic]` ที่ถูกตอบสนองด้วย panic ผิดตัว (pattern #23) — ทั้งคู่เป็น catalog entry ที่ print `1 passed` ในขณะที่ผิด
+- **"Miri หา bug ที่ Rust ปกติมีไม่ได้"** Miri หา bug ที่มีอยู่ได้เพราะ `unsafe` code เท่านั้น (หรือสำหรับ leak checker คือ `mem::forget`/`Box::leak`) codebase ที่ไม่มี `unsafe` block เลยและไม่มี call ไปสองฟังก์ชันนั้นเลย ไม่มีอะไรใหม่ให้ Miri หาเกินไปกว่าที่ `cargo check` ตรวจไปแล้ว
+
+## อ่านโค้ดที่ AI เขียน
+
+ไฟล์ที่ผ่าน `cargo test` และรายงาน clippy warning ศูนย์ ยังคงมี bug จริงที่เงียบอยู่ได้ — วิธีที่เร็วที่สุดที่จะเห็นสิ่งนี้คือรัน ladder ด้านบนกับไฟล์หนึ่งแล้วดูว่าขั้นไหนเงียบ
+
+<SpotTheBug code={`pub fn split_first_word(input: &str) -> &str {
+    match input.find(' ') {
+        Some(idx) => &input[..idx],
+        None => input,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn splits_on_space() {
+        assert_eq!(split_first_word("hello world"), "hello");
+    }
+}
+
+fn main() {
+    println!("{}", split_first_word("hello world"));
+    println!("{}", split_first_word("привет мир"));
+}
+`}>
+`cargo test` ผ่าน (test ตัวเดียวที่มีเช็คแค่ input ASCII), `cargo clippy -- -D warnings` ไม่รายงานอะไรเลย (ไม่มี lint สำหรับ "byte index นี้อาจไม่ตกบน char boundary" -- บางครั้งมันตั้งใจ) และ `cargo check` compile ผ่านสะอาด ทุกขั้นจนถึง 4 เงียบหมด การรันมันคือสิ่งที่เผย bug จริง ๆ: `input.find(' ')` คืน index แบบ**ไบต์** และ `&input[..idx]` slice ที่ byte index นั้น -- สำหรับ `"привет мир"` มันบังเอิญตกบน boundary ที่ valid โดยบังเอิญ (ช่องว่างบังเอิญตกระหว่างตัวอักษรเต็ม ๆ พอดี) ดังนั้น call นี้เฉพาะเจาะจงไม่ panic แต่ไม่มีอะไรในฟังก์ชันรับประกันแบบนั้นสำหรับ input ที่ไม่ใช่ ASCII ใด ๆ โดยทั่วไปเลย ทางแก้ -- และเหตุผลว่าทำไมไม่มีขั้นไหนด้านบนจับความเสี่ยงทั่วไปนี้ได้ -- คืออันเดียวกับ pattern byte-slice ของ AI Bug Catalog: iterate ด้วย `char_indices()` และ split บน character boundary ไม่ใช่ byte offset ดิบจาก `.find()` บน input ที่มีหลายไบต์โดยไม่เช็คก่อน
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+รัน ladder ทุกครั้ง แต่ปฏิบัติกับ run ที่เขียวทั้งหมดว่า "ไม่มี automated check ตัวไหนเจอปัญหา" ไม่ใช่ "ไม่มีปัญหา" -- สิบจาก 24 pattern ใน catalog ผ่านทุกขั้นและยังเป็น bug จริงอยู่
+</Callout>
+
+export const quizVerificationTools = [
+    {
+        q: "ทำไมการรัน clippy รวมในบทนี้ถึงต้องการ flag `-W clippy::...` แยกกันหกตัวเพื่อเผย warning แปดตัว แทนที่จะเผยมันด้วย `cargo clippy` ธรรมดา?",
+        options: [
+            "เพราะ scratch file มี syntax error ที่บล็อก default lint ของ clippy ไม่ให้รัน",
+            "เพราะ AI-smell lint ส่วนใหญ่ใน catalog นี้ (redundant_clone, needless_pass_by_value, unwrap_used, และอื่น ๆ) ปิดเป็น default และต้องการ flag -W ชัดเจนเพื่อเปิด",
+            "เพราะ clippy เช็คแค่ lint เดียวต่อการเรียกหนึ่งครั้ง",
+            "เพราะ -D warnings ต้องรวมกับ -W อย่างน้อยหกตัวเสมอถึงจะมีผล",
+        ],
+        answer: 1,
+        explain: "cargo clippy ธรรมดารันแค่ default-warn lint group เท่านั้น lint เฉพาะหลายตัวที่ catalog นี้พึ่งพา (redundant_clone, unwrap_used, needless_pass_by_value, wildcard_enum_match_arm, cast_possible_truncation, undocumented_unsafe_blocks, panic, float_cmp, needless_collect) เป็น opt-in โดยการออกแบบ",
+    },
+    {
+        q: "ในตัวอย่าง use-after-free `cargo run` ปกติ print อะไร และทำไมมันไม่ได้แปลว่าโค้ดถูกต้อง?",
+        options: [
+            "มัน compile ไม่ผ่าน ดังนั้นไม่มีอะไร print",
+            "มัน print 42 -- stack memory ที่ถูกปล่อยแล้วบังเอิญยังมี bit pattern เก่าอยู่ แต่การอ่านผ่าน dangling pointer เป็น undefined behavior ไม่ว่าค่าที่ออกมาจะเป็นอะไรก็ตาม",
+            "มัน panic ทันทีด้วย message ชัดเจนว่า \"use after free\"",
+            "มัน print ตัวเลขสุ่มที่ต่างกันทุกครั้งที่รัน",
+        ],
+        answer: 1,
+        explain: "undefined behavior ไม่รับประกันว่าจะ crash หรือให้ผลที่ผิดชัดเจน -- มันแปลว่า compiler กับ runtime ไม่จำเป็นต้อง behave แบบคาดเดาได้อีกต่อไปเลย ที่นี่ bit pattern เก่าของช่องที่ถูกปล่อยแล้วบังเอิญยังอ่านได้ ดังนั้น run นี้เฉพาะเจาะจงถึงดูโอเค",
+    },
+    {
+        q: "`cargo +nightly miri run` รายงานอะไรสำหรับโปรแกรม use-after-free เดียวกันที่ `cargo run` ปกติรันโดยไม่มี error เลย?",
+        options: [
+            "warning สไตล์ clippy ที่แนะนำทางแก้",
+            "\"error: Undefined Behavior: memory access failed: ... has been freed, so this pointer is dangling\" -- hard error ไม่ใช่ warning เพราะ Miri interpret โปรแกรมตามกฎ memory-validity จริงของ Rust",
+            "output เดียวกันเป๊ะกับ cargo run ปกติ เพราะ Miri เช็คแค่ compile-time correctness เท่านั้น",
+            "performance warning เกี่ยวกับ pointer dereference ที่ช้า",
+        ],
+        answer: 1,
+        explain: "Miri จับ bug ประเภทเจาะจงนี้ -- การอ่านผ่าน pointer หลังจาก target ของมันถูก deallocate -- เพราะมัน track lifetime และ validity ของทุก allocation ระหว่าง interpret ซึ่งการรัน native ไม่มีกลไกเช็คแบบนี้เลย",
+    },
+    {
+        q: "ตามตาราง pattern-to-rung มีกี่ pattern จาก 24 pattern ใน AI Bug Catalog ที่ไม่มีเครื่องมืออัตโนมัติเลยไม่ว่าขั้นไหน?",
+        options: ["ศูนย์ -- ทุก pattern มีการเช็คอัตโนมัติบางแบบ", "ประมาณ 4", "ประมาณ 10", "ทั้ง 24"],
+        answer: 2,
+        explain: "ตาราง list ขั้นที่ 7 (\"ไม่มี -- มนุษย์เท่านั้น\") สำหรับประมาณสิบ pattern รวมถึง Rc<RefCell<T>> เป็นตัวเลือกแรก, Box<dyn Error> ใน library API, Arc<Mutex<T>> เกินความจำเป็น, thread::sleep ใน async, channel ไม่มีขอบเขต, should_panic ไม่มี expected, และ test ที่ไม่มี assertion",
+    },
+    {
+        q: "ทำไมบทนี้ถึงแนะนำให้รัน Miri กับ cargo bloat ตามตารางเวลาหรือก่อน release แทนที่จะอยู่ใน pre-commit hook คู่กับ cargo fmt และ cargo check?",
+        options: [
+            "เพราะ Miri กับ cargo bloat ต้องการ license แบบเสียเงิน",
+            "เพราะมันทำงานได้แค่บน Linux เท่านั้น",
+            "เพราะ Miri interpret โปรแกรมแทนที่จะ compile แบบ native ทำให้มันช้ากว่ามาก -- โอเคสำหรับ CI job นาน ๆ ครั้ง แต่เจ็บปวดสำหรับ hook ที่ developer ต้องรอหลายสิบครั้งต่อวัน",
+            "เพราะมัน automate ไม่ได้เลยและต้องรันด้วยมือทุกครั้ง",
+        ],
+        answer: 2,
+        explain: "ส่วน Trade-offs ของบทนี้บอกชัดว่า Miri อาจช้ากว่าการรัน native เป็นหลักสิบเท่า ขั้นเร็ว (fmt, check, clippy, test) เหมาะกับ workflow แบบ pre-commit หรือ per-push ขั้นช้าเหมาะกับตารางเวลาหรือ pre-release gate แทน",
+    },
+    {
+        q: "ในตัวอย่าง SpotTheBug ทำไม `cargo test` ถึงผ่าน แม้ว่า `split_first_word` จะมีความเสี่ยง byte-boundary จริงบน input ที่ไม่ใช่ ASCII?",
+        options: [
+            "cargo test ไม่รันกับฟังก์ชันที่ใช้ string slicing",
+            "test ตัวเดียวที่มีอยู่เช็คแค่ input ASCII (\"hello world\") และ call ที่ไม่ใช่ ASCII เฉพาะใน main บังเอิญไม่ panic โดยบังเอิญ -- ทั้งคู่ไม่ได้พิสูจน์ว่าฟังก์ชันปลอดภัยสำหรับ input ที่ไม่ใช่ ASCII ทั้งหมด",
+            "ฟังก์ชันนี้ไม่มี bug อะไรเลยจริง ๆ",
+            "cargo test ผ่านเสมอไม่ว่า test จะเช็คอะไรก็ตาม",
+        ],
+        answer: 1,
+        explain: "cargo test ที่เขียวพิสูจน์แค่ว่า assertion ที่มีอยู่และรันแล้วเป็นจริง ที่นี่ไม่มี test ที่มี input ไม่ใช่ ASCII เลย และ call ที่ไม่ใช่ ASCII ตัวเดียวใน main บังเอิญตกบน char boundary ที่ valid โดยบังเอิญ -- ความเสี่ยงพื้นฐาน (byte index จาก .find() ที่ slice โดยไม่เช็คว่ามันตกบน char boundary) ยังอยู่สำหรับ input อื่น",
+    },
+];
+
+<Quiz client:visible id="reading-rust/verification-tools" questions={quizVerificationTools} />
+
+<ProgressTracker client:visible id="reading-rust/verification-tools" />

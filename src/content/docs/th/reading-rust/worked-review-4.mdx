@@ -1,0 +1,370 @@
+---
+title: 'Worked Review 4: Library Crate + Tests'
+description: 'รีวิวเต็มของ library crate ที่ AI สร้างขึ้น น่าเชื่อถือ ขนาดเล็ก -- bug ที่ปลูกไว้สี่ตัวข้าม API design, Cargo.toml, และ test พร้อม output cargo จริง'
+sidebar:
+  order: 8
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+รีวิวเต็มบทสุดท้ายเป็น library crate ไม่ใช่ binary — บทนี้มี `Cargo.toml`, public API ที่โค้ดของคนอื่นจะเรียกใช้ และ test suite จริง เพราะ library crate ที่มี test รันข้างใน browser Playground ไม่ได้ (`cargo test` ต้องการการเรียก `cargo` จริง ไม่ใช่แค่ `rustc` บนไฟล์เดียว) ทุกอย่างตรงนี้คือ transcript จริงที่ capture มาจาก `cargo build`, `cargo test`, และ `cargo clippy` ที่รันใน scratch crate — quote มาตรงตัว ไม่ได้สร้างขึ้นมาใหม่
+
+## Crate
+
+Library เล็ก ๆ: ใช้ส่วนลดเป็นเปอร์เซ็นต์กับราคา
+
+```toml
+# Cargo.toml
+[package]
+name = "discount-lib"
+version = "0.1.0"
+
+[dependencies]
+```
+
+```rust
+// @skip-verify multi-file: real library crate with Cargo.toml + tests, verified via cargo build/test/clippy transcripts below
+use std::error::Error;
+
+/// Applies a percentage discount to a price given in cents.
+pub fn apply_discount(price_cents: u32, percent: u8) -> Result<u32, Box<dyn Error>> {
+    let discount = (price_cents as u64 * percent as u64) / 100;
+    let discount: u32 = discount.try_into()?;
+    Ok(price_cents - discount)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic]
+    fn rejects_bad_percent() {
+        apply_discount(1000, 150).unwrap();
+    }
+
+    #[test]
+    fn discount_reduces_price() {
+        apply_discount(1000, 10).unwrap();
+    }
+}
+```
+
+การรัน `cargo build` บน `Cargo.toml` กับ `src/lib.rs` เป๊ะนี้:
+
+```text
+$ cargo build
+warning: `package.edition` is unspecified, defaulting to `2015` while the latest is `2024`
+error[E0599]: no method named `try_into` found for type `u64` in the current scope
+  --> src/lib.rs:6:34
+   |
+6  |     let discount: u32 = discount.try_into()?;
+   |                                  ^^^^^^^^
+   |
+   = help: items from traits can only be used if the trait is in scope
+   = note: 'std::convert::TryInto' is included in the prelude starting in Edition 2021
+help: trait `TryInto` which provides `try_into` is implemented but not in scope; perhaps you want to import it
+   |
+1  + use std::convert::TryInto;
+   |
+
+error: could not compile `discount-lib` (lib) due to 1 previous error
+```
+
+โค้ดนี้ compile ไม่ผ่านเลยด้วยซ้ำ Bug 1 เป็น compile error — แต่คุ้มที่จะอ่านต่อไป เพราะมี bug จริงอีกสามตัวซ่อนอยู่หลังมัน และโผล่มาก็ต่อเมื่อ crate compile ผ่านจริง ๆ เท่านั้น
+
+## Findings
+
+<details>
+<summary>Bug 1: `Cargo.toml` ไม่มี `edition`</summary>
+
+**อาการ:** `cargo build` fail ทันที — `TryInto` (และเลย `.try_into()`) อยู่ใน standard prelude อัตโนมัติแค่ตั้งแต่ edition 2021 เท่านั้น ถ้าไม่มี `edition` ชัดเจน Cargo จะ default ไปที่ `2015` ซึ่ง trait ต้อง import อย่างชัดเจน
+
+**หลักฐาน:** transcript `cargo build` ด้านบน — สังเกตว่า warning โผล่มา*ก่อน*error และง่ายที่จะพลาดเมื่อ scroll ตรงไปหาตัวหนังสือสีแดง
+
+**ทางแก้:** ตั้ง edition ให้ชัดเจนให้ตรงกับที่เหลือของคอร์สนี้ (2024) — `cargo new` ทำแบบนี้อัตโนมัติ ซึ่งเป็นเหตุผลพอดีว่าทำไม `Cargo.toml` ที่แก้ด้วยมือหรือสร้างโดย AI ถึงเป็นจุดที่มักจะหายไป:
+
+```toml
+# Cargo.toml
+[package]
+name = "discount-lib"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+```
+</details>
+
+<details>
+<summary>Bug 2: `Box<dyn Error>` เป็น public error type ของ library นี้</summary>
+
+**อาการ:** เมื่อ Bug 1 ถูกแก้แล้วและ crate compile ผ่าน `apply_discount` ทำงาน — แต่ failure ที่เป็นไปได้เพียงอย่างเดียวของมัน (เปอร์เซ็นต์ที่ผิด) ถูกกลืนเข้า `Box<dyn Error>` ที่ opaque และ match ไม่ได้ ผู้เรียกที่อยากตอบสนอง "percent ผิด" ต่างจาก failure mode อื่นในอนาคตทำได้แค่ตรวจ string ของ message ที่ format แล้วเท่านั้น
+
+**หลักฐาน:** ไม่มี lint ตัวไหน trigger เลย — โค้ดนี้ compile ผ่านและทำงานถูกต้อง ต้นทุนโผล่มาแค่ในสิ่งที่ผู้เรียก library นี้ทำได้และทำไม่ได้กับ error
+
+**ทางแก้:** error enum ที่ concrete และ match ได้ — เหตุผลทั้งหมดที่ library ต่างจาก binary `main.rs` ได้ประโยชน์จากสิ่งนี้คือโค้ดของคนอื่นต้อง `match` กับ failure ไม่ใช่แค่ print มันออกมา:
+
+```rust
+// @skip-verify fragment: shown in full in the fixed version below
+#[derive(Debug, PartialEq)]
+pub enum DiscountError {
+    InvalidPercent(u8),
+}
+```
+</details>
+
+<details>
+<summary>Bug 3: `#[should_panic]` ไม่มี `expected = "..."` ทดสอบ input path ที่ไม่ได้ validate</summary>
+
+**อาการ:** `rejects_bad_percent` ผ่าน — แต่การอ่านฟังก์ชันที่มันทดสอบแสดงว่าไม่มีการ validate `percent` เลย `apply_discount(1000, 150)` คำนวณส่วนลด 1500 เซนต์บนราคา 1000 เซนต์ และ `1000u32 - 1500` underflow panic จาก arithmetic overflow ไม่ใช่จากการปฏิเสธที่ตั้งใจ
+
+**หลักฐาน** — panic จริง โดยถอด wrapper `#[should_panic]` ออกเพื่อดูว่าเกิดอะไรขึ้นจริง:
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:6:18:
+attempt to subtract with overflow
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+เมื่อใส่ `#[should_panic]` (ไม่มี `expected`) กลับเข้าไป `cargo test` รายงานว่านี่ผ่าน — เพราะ panic *อะไรก็ได้* ทำให้ `#[should_panic]` แบบไม่ระบุพอใจ:
+
+```text
+test tests::rejects_bad_percent - should panic ... ok
+```
+
+ชื่อของ test อ้างว่า "rejects bad percent" ฟังก์ชันไม่ได้ทำแบบนั้นเลย — มันไม่มี validation อะไรเลย และ test จะผ่านเหมือนเดิมแม้ panic จะมาจาก bug ที่ไม่เกี่ยวข้องกันเลยก็ตาม
+
+**ทางแก้:** validate input อย่างชัดเจน (นี่ก็เป็นทางแก้สำหรับ Bug 2 ด้วย — ฟังก์ชันที่ validate แล้วมี error จริงให้ return) แล้ว test กรณี `Err` ตรง ๆ แทนที่จะพึ่งพา panic:
+
+```rust
+// @skip-verify fragment: shown in full in the fixed version below
+#[test]
+fn rejects_bad_percent() {
+    assert_eq!(apply_discount(1000, 150), Err(DiscountError::InvalidPercent(150)));
+}
+```
+</details>
+
+<details>
+<summary>Bug 4: `discount_reduces_price` ไม่ assert อะไรเลย</summary>
+
+**อาการ:** `apply_discount(1000, 10).unwrap()` ถูกเรียกและผลลัพธ์ถูกทิ้งทันที — test ผ่านตราบใดที่ call ไม่ panic ไม่ว่า `900` (คำตอบที่ถูกต้องทาง math) หรือค่าอื่นใดจะออกมาก็ตาม
+
+**หลักฐาน:**
+
+```text
+test tests::discount_reduces_price ... ok
+```
+
+เขียว และไม่ให้ข้อมูลอะไรเลยว่า arithmetic ถูกต้องหรือไม่
+
+**ทางแก้:**
+
+```rust
+// @skip-verify fragment: shown in full in the fixed version below
+#[test]
+fn discount_reduces_price() {
+    assert_eq!(apply_discount(1000, 10), Ok(900));
+}
+```
+</details>
+
+## เวอร์ชันที่แก้แล้ว
+
+```toml
+# Cargo.toml
+[package]
+name = "discount-lib"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+```
+
+```rust
+use std::fmt;
+
+/// The specific ways applying a discount can fail.
+#[derive(Debug, PartialEq)]
+pub enum DiscountError {
+    InvalidPercent(u8),
+}
+
+impl fmt::Display for DiscountError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DiscountError::InvalidPercent(p) => write!(f, "invalid discount percent: {p}"),
+        }
+    }
+}
+
+impl std::error::Error for DiscountError {}
+
+/// Applies a percentage discount to a price given in cents.
+pub fn apply_discount(price_cents: u32, percent: u8) -> Result<u32, DiscountError> {
+    if percent > 100 {
+        return Err(DiscountError::InvalidPercent(percent));
+    }
+    let discount = (u64::from(price_cents) * u64::from(percent)) / 100;
+    let discount = u32::try_from(discount).expect("discount is always <= price_cents, which is a u32");
+    Ok(price_cents - discount)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_bad_percent() {
+        assert_eq!(apply_discount(1000, 150), Err(DiscountError::InvalidPercent(150)));
+    }
+
+    #[test]
+    fn discount_reduces_price() {
+        assert_eq!(apply_discount(1000, 10), Ok(900));
+    }
+}
+```
+
+## เครื่องมือจับอะไรได้บ้าง
+
+การรัน `cargo build`, `cargo test`, และ `cargo clippy` จริงบน crate ที่แก้แล้วเป๊ะนี้:
+
+```text
+$ cargo build
+   Compiling discount-lib v0.1.0 (discount-lib)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s
+```
+
+```text
+$ cargo test
+   Compiling discount-lib v0.1.0 (discount-lib)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src/lib.rs (target/debug/deps/discount_lib-...)
+
+running 2 tests
+test tests::discount_reduces_price ... ok
+test tests::rejects_bad_percent ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests discount_lib
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+```text
+$ cargo clippy -- -D warnings
+    Checking discount-lib v0.1.0 (discount-lib)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
+```
+
+เขียวทั้งหมด — และที่บอกอะไรได้เยอะคือ `cargo clippy -- -D warnings` ก็เงียบสนิทบนเวอร์ชัน bug **เดิม**ด้วยเหมือนกัน (เมื่อ compile error ของ Bug 1 ถูกแก้พอที่จะให้ clippy รันได้) ไม่มี Bug 2 ถึง 4 ตัวไหนเลยที่ lint จับได้ มีแค่ Bug 1 เท่านั้นที่เคยเป็น compiler error จริง crate นี้เป็นการสาธิตกระชับของประเด็นหลักของโมดูล: สองจากสี่ bug จริงตรงนี้อยู่ในดินแดน "เครื่องมือ: ไม่มี" เต็มตัว
+
+## Mental Model
+
+Library crate มีผู้ชมมากกว่า binary หนึ่งกลุ่ม: ใครก็ตามที่ depend on มัน ทุกการตัดสินใจในรีวิวนี้ — error type, test ที่ assert อะไรจริง ๆ, `Cargo.toml` ที่ประกาศว่าโค้ดเขียนขึ้นเทียบกับ language edition ไหน — ล้วนเป็น metadata *เกี่ยวกับ*โค้ดที่โค้ดเองไม่ได้บังคับ compiler บอกคุณไม่ได้ว่า error type ของคุณควรเจาะจงกว่านี้ ว่า test ของคุณลืมเช็คอะไรบางอย่าง หรือว่า `Cargo.toml` ของคุณขาด field ที่จะได้ประโยชน์ ทั้งสามอย่างต้องการให้ใครสักคนถามว่า "สิ่งนี้สัญญาอะไรกับคนที่ใช้มัน" ซึ่งเป็นคำถามเกี่ยวกับ intent ไม่ใช่ syntax
+
+## Trade-offs
+
+Error enum ที่ concrete (ทางแก้ของ Bug 2) เป็นโค้ดมากกว่า `Box<dyn Error>` สำหรับ library ที่มี failure mode เดียวในวันนี้ — ผลตอบแทนอยู่ที่สิ่งที่เกิดขึ้นเมื่อ library ได้ failure mode ที่สองทีหลัง ซึ่งตอนนั้นความสามารถ `match`-ได้จะมีค่า และ `Box<dyn Error>` จะกลายเป็นภาระที่ถอดออกจาก published API ยากและแพง สำหรับ binary ภายในที่ใช้ครั้งเดียวจริง ๆ `Box<dyn Error>` ยังคงเป็นตัวเลือกที่ถูกต้องและใช้ความพยายามน้อยกว่า — การแลกเปลี่ยนพลิกกลับตรงที่ขอบเขต library/binary พอดี ซึ่งเป็นเหตุผลว่าทำไมคอร์สนี้ถึงปฏิบัติกับทั้งสองต่างกัน แทนที่จะเลือกกฎเดียวสำหรับทั้งคู่
+
+## Common Misconceptions
+
+- **"Cargo ตั้งค่า edition default ที่สมเหตุสมผลเสมอ"** มันตั้ง default — `2015` — ที่เลือกเพื่อ backward compatibility กับ crate ที่ publish มากว่าทศวรรษแล้ว ไม่ใช่เพื่อความสมเหตุสมผลกับโค้ดใหม่ `cargo new` เขียน edition ปัจจุบันอย่างชัดเจนด้วยเหตุผลนี้พอดี `Cargo.toml` ที่เขียนด้วยมือหรือสร้างโดย AI ไม่มี guardrail แบบนั้น
+- **"`cargo test` เขียวบน library crate แปลว่า public API ของมัน design ดี"** มันแปลว่า test ที่มีอยู่ผ่าน ไม่มีอะไรเกี่ยวกับ `cargo test` ที่ผ่านที่ประเมินว่า error type เจาะจงเหมาะสมไหม ฟังก์ชัน public ตั้งชื่อและ document ดีไหม หรือ test assert สิ่งที่ถูกต้องจริงไหม — ทั้งหมดนี้คือ bug ทั้งสี่ตัวในรีวิวนี้พอดี
+
+## อ่านโค้ดที่ AI เขียน
+
+รูปร่างเดียวกัน — library function ที่กลืนข้อมูลที่มีประโยชน์ที่สุดของตัวเองเข้า error type ทั่วไป — พบบ่อยพอในโค้ดที่ AI สร้างจนคุ้มค่าที่จะเช็คแบบเดี่ยว ๆ อย่างรวดเร็ว
+
+<SpotTheBug code={`use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+struct ParseAgeError;
+
+impl fmt::Display for ParseAgeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid age")
+    }
+}
+
+impl Error for ParseAgeError {}
+
+pub fn parse_age(raw: &str) -> Result<u8, Box<dyn Error>> {
+    let age: u8 = raw.parse().map_err(|_| ParseAgeError)?;
+    if age > 150 {
+        return Err(Box::new(ParseAgeError));
+    }
+    Ok(age)
+}
+
+fn main() {
+    println!("{:?}", parse_age("42"));
+    println!("{:?}", parse_age("not a number"));
+    println!("{:?}", parse_age("200"));
+}
+`}>
+โค้ดนี้ compile ผ่านและรันได้ถูกต้อง -- ทั้งสอง failure mode จริง ("not a number" กับ "over 150") มี `ParseAgeError` type ที่นิยามไว้อย่างดีอยู่แล้ว ซึ่งรอบคอบกว่าการเอื้อมมือไปหยิบ string error เปล่า ๆ bug ที่เหลืออยู่ละเอียดกว่า: return type ของฟังก์ชันยังเป็น `Box<dyn Error>` ซึ่งทิ้งความจริงที่ว่า `ParseAgeError` ที่ match ได้และนิยามไว้ดีนั่งอยู่ตรงนั้นตลอดเวลา ผู้เรียก `parse_age` `match` ไม่ได้ว่า "นี่เป็น parse failure หรือ range failure" โดยไม่ downcast -- ทั้ง ๆ ที่สองกรณีแยกแยะได้อยู่แล้วข้างในฟังก์ชัน การเปลี่ยน return type เป็น `Result<u8, ParseAgeError>` (และให้ `ParseAgeError` มี field บอกว่าเป็นกรณีไหน ถ้าผู้เรียกต้องแยกแยะ) ไม่มีต้นทุนอะไรตรงนี้เลย และคืนความเจาะจงที่โค้ดมีอยู่แล้วภายในให้ผู้เรียกทุกคน
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Error type ของ library เป็นส่วนหนึ่งของ public API ของมัน ไม่ใช่รายละเอียด implementation -- Box&lt;dyn Error&gt; เป็น default ที่ถูกต้องสำหรับ main ของ binary และมักผิดสำหรับ library ที่ผู้เรียกต้องตอบสนองต่าง ๆ กันตาม failure ที่ต่างกัน
+</Callout>
+
+export const quizWorkedReview4 = [
+    {
+        q: "ทำไม `cargo build` ถึง fail บน crate bug เดิมด้วย `error[E0599]: no method named \`try_into\` found` ทั้ง ๆ ที่ `try_into()` เป็น standard library method จริง?",
+        options: [
+            "try_into() ถูกลบออกจาก standard library ในเวอร์ชันล่าสุด",
+            "Cargo.toml ไม่มี field `edition` ดังนั้น Cargo จึง default ไปที่ edition 2015 -- และ TryInto (ที่ให้ try_into) อยู่ใน prelude ของ Rust อัตโนมัติแค่ตั้งแต่ edition 2021 เท่านั้น",
+            "return type ของฟังก์ชันเข้ากันไม่ได้กับ try_into()",
+            "try_into() ต้องการ external crate ที่ไม่ได้ถูกเพิ่มเป็น dependency",
+        ],
+        answer: 1,
+        explain: "คำแนะนำของ compiler เองบอกตรง ๆ เลย: 'std::convert::TryInto' is included in the prelude starting in Edition 2021 ถ้าไม่มี field edition Cargo จะ default ไปที่ 2015 ซึ่ง TryInto ต้อง import อย่างชัดเจน",
+    },
+    {
+        q: "ในเวอร์ชัน bug ทำไม `#[should_panic]` ของ `rejects_bad_percent` ถึงผ่าน ทั้ง ๆ ที่ `apply_discount` ไม่มี validation logic สำหรับ `percent` เลย?",
+        options: [
+            "test แบบ should_panic ถูก skip เป็น default และไม่เคยรันจริง",
+            "`#[should_panic]` ที่ไม่มี expected string จะ pass บน panic อะไรก็ได้ -- ตรงนี้ apply_discount(1000, 150) panic จาก u32 subtraction underflow (ส่วนลดเกินราคา) ไม่ใช่จากการปฏิเสธเปอร์เซ็นต์ผิดที่ตั้งใจ",
+            "test นี้ fail จริง ๆ แต่ cargo test รายงานผิดว่าผ่าน",
+            "apply_discount return 0 อย่างเงียบ ๆ แทนที่จะ panic",
+        ],
+        answer: 1,
+        explain: "ฟังก์ชันคำนวณส่วนลดที่ใหญ่กว่าราคาเมื่อ percent เกิน 100 และการลบมัน underflow ที่ u32 ใน debug mode -- panic โดยบังเอิญ ไม่ใช่ validation `#[should_panic]` แบบไม่ระบุแยกแยะสิ่งนี้จากการปฏิเสธที่ตั้งใจซึ่งชื่อของมันบอกเป็นนัยไม่ได้",
+    },
+    {
+        q: "ทำไม `Box<dyn Error>` ถึงถูกมองว่าเป็น finding จริงใน library นี้ ในเมื่อโค้ด compile ผ่าน รันได้ และผ่านทุก test?",
+        options: [
+            "Box<dyn Error> ไม่ได้ implement trait Error จริง ๆ ดังนั้นนี่เป็น compile error แฝง",
+            "มันกลืน failure mode เดียวที่เจาะจงและรู้จักอยู่แล้ว (เปอร์เซ็นต์ผิด) เข้า type ที่ opaque ที่ผู้เรียก print ได้อย่างเดียว match ไม่ได้ -- ต้นทุนที่มองไม่เห็นใน test ของ crate นี้เอง แต่จริงสำหรับผู้เรียกปลายทางใด ๆ ที่ต้องตอบสนองต่อ failure เฉพาะนั้น",
+            "มันทำให้ฟังก์ชันช้าลงอย่างมีนัยสำคัญที่ runtime",
+            "มันเป็น syntax error ที่ clippy จับไม่ได้",
+        ],
+        answer: 1,
+        explain: "Box<dyn Error> compile ผ่านและรันได้ปกติ -- finding นี้เป็นต้นทุนด้าน API design ไม่ใช่ correctness bug: ผู้เรียก library เสียความสามารถ match กับ failure case เฉพาะเจาะจง ซึ่งสำคัญมากขึ้นเมื่อ public API ของ library ถูกใช้โดยโค้ดที่ผู้เขียน library ควบคุมไม่ได้",
+    },
+    {
+        q: "ความจริงที่ว่า `cargo clippy -- -D warnings` รายงาน warning ศูนย์บน crate bug (เมื่อมัน compile ผ่านแล้ว) แสดงอะไรเกี่ยวกับรีวิวนี้?",
+        options: [
+            "ว่า crate ไม่มี bug อะไรเลยจริง ๆ",
+            "ว่า clippy เสียและต้องติดตั้งใหม่",
+            "ว่าสองจากสี่ bug จริงในรีวิวนี้ (การเลือก API แบบ Box<dyn Error> และ test ที่ไม่มี assertion) อยู่นอกเหนือสิ่งที่ clippy lint ไหนเช็คได้เลย สอดคล้องกับ finding ที่กว้างกว่าของโมดูลนี้ว่าประมาณสิบจาก 24 pattern ใน catalog ไม่มีเครื่องมืออัตโนมัติเลยไม่ว่าขั้นไหน",
+            "ว่า -D warnings ทำงานได้แค่กับ binary เท่านั้น ไม่ใช่ library crate",
+        ],
+        answer: 2,
+        explain: "clippy run ที่เงียบไม่ได้แปลว่าไฟล์ไม่มี bug -- มันแปลว่าไม่มีอะไรใน lint set ของ clippy บังเอิญตรงกับปัญหาเฉพาะเหล่านี้ ทั้งการตัดสินใจด้าน error-type design และ assertion ที่หายไปต้องการมนุษย์อ่านโค้ดโดยคำนึงถึง intent ไม่ใช่ tool ที่จับคู่ pattern",
+    },
+];
+
+<Quiz client:visible id="reading-rust/worked-review-4" questions={quizWorkedReview4} />
+
+<ProgressTracker client:visible id="reading-rust/worked-review-4" />

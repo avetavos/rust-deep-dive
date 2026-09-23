@@ -1,0 +1,1541 @@
+---
+title: 'The AI Bug Catalog'
+description: '24 real patterns AI assistants produce in Rust: the snippet, the real symptom, the fix, and which tool actually catches it.'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+Every pattern below was written to look like ordinary, plausible AI-generated Rust — the kind that shows up in a real pull request. Each one follows the same four beats: the snippet, the real observed symptom (a compiler diagnostic, a runtime panic, a clippy lint, or wrong behavior — every one of them is a genuine, verified output, not a guess), the fix, and — critically — **which tool actually catches it**. That last column is the point of this whole catalog: some of these are caught automatically the moment you run `cargo clippy -- -D warnings`. Several of the worst ones are caught by nothing except a human who knows to look.
+
+## Ownership & Borrowing
+
+#### 1. Clone-to-silence
+
+AI-generated code often reaches for `.clone()` the instant the borrow checker complains, whether or not a second owner is actually needed.
+
+```rust
+#[derive(Clone)]
+struct Config {
+    name: String,
+}
+
+fn print_name(cfg: Config) {
+    println!("{}", cfg.name);
+}
+
+fn main() {
+    let cfg = Config { name: String::from("prod") };
+    print_name(cfg.clone());
+    print_name(cfg.clone()); // this is the last use of `cfg` -- no clone needed here
+}
+```
+
+This compiles and runs fine, which is exactly why it survives review. The second `.clone()` is pure waste: `cfg` is never used again after this line, so the value could simply be moved.
+
+```text
+error: redundant clone
+  --> src/main.rs:13:19
+   |
+13 |     print_name(cfg.clone());
+   |                   ^^^^^^^^ help: remove this
+   |
+note: this value is dropped without further use
+  --> src/main.rs:13:16
+   |
+13 |     print_name(cfg.clone());
+   |                ^^^
+```
+
+```rust
+#[derive(Clone)]
+struct Config {
+    name: String,
+}
+
+fn print_name(cfg: Config) {
+    println!("{}", cfg.name);
+}
+
+fn main() {
+    let cfg = Config { name: String::from("prod") };
+    print_name(cfg.clone()); // still needed: cfg is used again below (via a hypothetical caller)
+    print_name(cfg); // last use -- move instead of clone
+}
+```
+
+**Tool:** `clippy::redundant_clone` — real lint, but off by default; run with `cargo clippy -- -W clippy::redundant_clone`. **Lesson:** [Ownership & Moves](/rust/en/ownership-borrowing/ownership-moves/).
+
+export const cloneToSilenceCode = `#[derive(Clone)]
+struct Config {
+    name: String,
+}
+
+fn print_name(cfg: Config) {
+    println!("{}", cfg.name);
+}
+
+fn main() {
+    let cfg = Config { name: String::from("prod") };
+    print_name(cfg.clone());
+    print_name(cfg.clone()); // last use of cfg -- no clone needed
+}`;
+
+<Playground code={cloneToSilenceCode} />
+
+#### 2. `Rc<RefCell<T>>` as a first resort
+
+AI code often reaches for `Rc<RefCell<T>>` the moment two pieces of code need to touch the same value, without checking whether plain ownership, a `&mut` borrow, or restructuring would do.
+
+```rust
+// @expect-panic
+use std::cell::RefCell;
+use std::rc::Rc;
+
+struct Counter {
+    value: RefCell<i32>,
+}
+
+fn bump_twice(counter: &Rc<Counter>) {
+    let mut a = counter.value.borrow_mut();
+    let mut b = counter.value.borrow_mut(); // second exclusive borrow while `a` is still alive
+    *a += 1;
+    *b += 1;
+}
+
+fn main() {
+    let counter = Rc::new(Counter { value: RefCell::new(0) });
+    bump_twice(&counter);
+    println!("{}", counter.value.borrow());
+}
+```
+
+`RefCell` moves borrow checking from compile time to runtime — this compiles cleanly and then panics the moment it runs:
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:10:31:
+RefCell already borrowed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+```rust
+struct Counter {
+    value: i32, // plain field -- no Rc, no RefCell needed; nothing here is actually shared
+}
+
+fn bump_twice(counter: &mut Counter) {
+    counter.value += 1;
+    counter.value += 1;
+}
+
+fn main() {
+    let mut counter = Counter { value: 0 };
+    bump_twice(&mut counter);
+    println!("{}", counter.value);
+}
+```
+
+**Tool:** none — only a human. `RefCell` borrow violations are a runtime panic, not a compile error or a clippy lint; nothing short of running the code (or reviewing the borrow pattern by hand) surfaces this. **Lesson:** [Smart Pointers](/rust/en/ownership-borrowing/smart-pointers/).
+
+#### 3. Decorative lifetimes and `'static` used to silence the compiler
+
+Two faces of the same habit: writing an explicit lifetime that elision would have inferred anyway, or slapping `'static` on a bound to make an error disappear instead of fixing the real ownership issue.
+
+```rust
+fn first_word<'a>(s: &'a str) -> &'a str {
+    s.split_whitespace().next().unwrap_or("")
+}
+
+fn main() {
+    println!("{}", first_word("hello world"));
+}
+```
+
+The `'a` here is exactly what Rust's lifetime elision rules would produce automatically — it adds no information, only noise:
+
+```text
+warning: the following explicit lifetimes could be elided: 'a
+ --> src/main.rs:1:15
+  |
+1 | fn first_word<'a>(s: &'a str) -> &'a str {
+  |               ^^      ^^          ^^
+  |
+  = note: `#[warn(clippy::needless_lifetimes)]` on by default
+help: elide the lifetimes
+  |
+1 - fn first_word<'a>(s: &'a str) -> &'a str {
+1 + fn first_word(s: &str) -> &str {
+  |
+```
+
+```rust
+fn first_word(s: &str) -> &str {
+    s.split_whitespace().next().unwrap_or("")
+}
+
+fn main() {
+    println!("{}", first_word("hello world"));
+}
+```
+
+**Tool:** `clippy::needless_lifetimes` — on by default. The `'static`-to-silence variant (leaking or cloning to make an error disappear instead of restructuring ownership) is a design smell no lint catches. **Lesson:** [Lifetimes](/rust/en/traits-generics/lifetimes/).
+
+#### 4. `unsafe` with no `// SAFETY:` comment
+
+Generated code sometimes reaches for `unsafe` (usually for an unchecked indexing or pointer operation) without explaining why the invariant the compiler can't verify actually holds.
+
+```rust
+fn read_first(buf: &[u8]) -> u8 {
+    unsafe { *buf.get_unchecked(0) }
+}
+
+fn main() {
+    println!("{}", read_first(&[1, 2, 3]));
+}
+```
+
+This compiles and, for this input, runs fine — but there is nothing here for a reviewer (or a future editor) to check the safety of:
+
+```text
+error: unsafe block missing a safety comment
+ --> src/main.rs:2:5
+  |
+2 |     unsafe { *buf.get_unchecked(0) }
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: consider adding a safety comment on the preceding line
+```
+
+```rust
+fn read_first(buf: &[u8]) -> u8 {
+    debug_assert!(!buf.is_empty(), "read_first requires a non-empty slice");
+    // SAFETY: caller-checked non-empty via debug_assert above; index 0 is always in bounds.
+    unsafe { *buf.get_unchecked(0) }
+}
+
+fn main() {
+    println!("{}", read_first(&[1, 2, 3]));
+}
+```
+
+**Tool:** `clippy::undocumented_unsafe_blocks` — real lint, off by default; run with `cargo clippy -- -W clippy::undocumented_unsafe_blocks`. **Lesson:** [The Borrow Checker Model](/rust/en/runtime-internals/borrow-checker-model/).
+
+#### 5. `mem::forget` leaking memory
+
+`std::mem::forget` is memory-*safe* — that's exactly why it's easy for generated code to reach for it (to sidestep a `Drop` order problem, say) without registering that it leaks the value forever.
+
+```rust
+use std::mem;
+
+fn main() {
+    let data = Box::new(vec![1, 2, 3]);
+    mem::forget(data);
+    println!("done");
+}
+```
+
+The program compiles, runs, and prints `done` — nothing about a normal run reveals the leak. Miri's leak checker (on by default) does:
+
+```text
+done
+error: memory leaked: alloc382 (Rust heap, size: 24, align: 8), allocated here:
+ --> src/main.rs:4:16
+  |
+4 |     let data = Box::new(vec![1, 2, 3]);
+  |                ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: memory leaked: alloc290 (Rust heap, size: 12, align: 4), allocated here:
+ --> src/main.rs:4:25
+  |
+4 |     let data = Box::new(vec![1, 2, 3]);
+  |                         ^^^^^^^^^^^^^
+
+note: set `MIRIFLAGS=-Zmiri-ignore-leaks` to disable this check
+error: aborting due to 2 previous errors
+```
+
+```rust
+fn main() {
+    let data = Box::new(vec![1, 2, 3]);
+    // just let `data` drop normally at the end of scope -- no forget needed
+    println!("done, will drop: {data:?}");
+}
+```
+
+**Tool:** `cargo +nightly miri run` — Miri's leak checker catches this; ordinary `cargo build`/`cargo test`/clippy do not, since `mem::forget` is entirely safe Rust. **Lesson:** [Drop and RAII](/rust/en/runtime-internals/drop-and-raii/).
+
+export const derefForgetCode = `fn main() {
+    let data = Box::new(vec![1, 2, 3]);
+    std::mem::forget(data);
+    println!("done");
+}`;
+
+<Playground code={derefForgetCode} />
+
+## Types & Traits
+
+#### 6. Owned or reference-to-owned parameters instead of borrowed slices
+
+AI code frequently writes `String`, `&String`, or `&Vec<T>` as a parameter type where `&str` or `&[T]` would accept strictly more callers with no loss of functionality.
+
+```rust
+fn total_len(items: &Vec<String>) -> usize {
+    items.iter().map(|s| s.len()).sum()
+}
+
+fn shout(s: &String) -> String {
+    s.to_uppercase()
+}
+
+fn main() {
+    let v = vec![String::from("a"), String::from("bb")];
+    println!("{}", total_len(&v));
+    println!("{}", shout(&v[0]));
+}
+```
+
+```text
+error: writing `&Vec` instead of `&[_]` involves a new object where a slice will do
+ --> src/main.rs:1:21
+  |
+1 | fn total_len(items: &Vec<String>) -> usize {
+  |                     ^^^^^^^^^^^^
+  |
+help: change this to
+  |
+1 - fn total_len(items: &Vec<String>) -> usize {
+1 + fn total_len(items: &[String]) -> usize {
+  |
+
+error: writing `&String` instead of `&str` involves a new object where a slice will do
+ --> src/main.rs:5:13
+  |
+5 | fn shout(s: &String) -> String {
+  |             ^^^^^^^
+  |
+help: change this to
+  |
+5 - fn shout(s: &String) -> String {
+5 + fn shout(s: &str) -> String {
+  |
+```
+
+```rust
+fn total_len(items: &[String]) -> usize {
+    items.iter().map(|s| s.len()).sum()
+}
+
+fn shout(s: &str) -> String {
+    s.to_uppercase()
+}
+
+fn main() {
+    let v = vec![String::from("a"), String::from("bb")];
+    println!("{}", total_len(&v)); // &Vec<String> still coerces to &[String]
+    println!("{}", shout(&v[0])); // &String still coerces to &str
+}
+```
+
+A related, easily missed variant: an owned `String` parameter that the function only reads and never mutates or stores.
+
+```rust
+fn shout_owned(s: String) -> String {
+    s.to_uppercase()
+}
+```
+
+```text
+error: this argument is passed by value, but not consumed in the function body
+ --> src/main.rs:1:16
+  |
+1 | fn shout_owned(s: String) -> String {
+  |                ^^^^^^^^^ help: consider changing the type to: `&str`
+```
+
+**Tool:** `clippy::ptr_arg` (on by default) catches `&String`/`&Vec<T>`; `clippy::needless_pass_by_value` (off by default, `-W clippy::needless_pass_by_value`) catches the owned `String` case. **Lesson:** [Slices](/rust/en/ownership-borrowing/slices/).
+
+#### 7. `impl Trait` in a struct field
+
+`impl Trait` is only valid in function argument and return position — generated code sometimes tries to use it as a field type, presumably by analogy with return position.
+
+```rust
+// @expect-error E0562
+trait Shape {
+    fn area(&self) -> f64;
+}
+
+struct Circle {
+    radius: f64,
+}
+
+impl Shape for Circle {
+    fn area(&self) -> f64 {
+        std::f64::consts::PI * self.radius * self.radius
+    }
+}
+
+struct Scene {
+    shape: impl Shape,
+}
+
+fn main() {}
+```
+
+```text
+error[E0562]: `impl Trait` is not allowed in field types
+  --> src/main.rs:16:12
+   |
+16 |     shape: impl Shape,
+   |            ^^^^^^^^^^
+   |
+   = note: `impl Trait` is only allowed in arguments and return types of functions and methods
+```
+
+Two real fixes exist, and they are not interchangeable: generics fix it when `Scene` should hold exactly one concrete shape type per instantiation; `dyn Trait` fixes it when different `Scene` values need different concrete shapes.
+
+```rust
+trait Shape {
+    fn area(&self) -> f64;
+}
+
+struct Circle {
+    radius: f64,
+}
+
+impl Shape for Circle {
+    fn area(&self) -> f64 {
+        std::f64::consts::PI * self.radius * self.radius
+    }
+}
+
+struct Scene<S: Shape> {
+    shape: S, // one concrete shape type per Scene<S>
+}
+
+// or, if Scene needs to hold *different* shape types across instances:
+struct DynScene {
+    shape: Box<dyn Shape>,
+}
+
+fn main() {
+    let scene = Scene { shape: Circle { radius: 2.0 } };
+    println!("{}", scene.shape.area());
+}
+```
+
+**Tool:** rustc, `error[E0562]` — this never compiles, so it cannot ship silently. **Lesson:** [Generics](/rust/en/traits-generics/generics/).
+
+#### 8. `#[derive(Copy)]` on a large struct
+
+`Copy` is legal on any struct whose fields are all `Copy`, regardless of size — nothing stops generated code from deriving it on a struct that is genuinely large, silently turning every "borrow" the author intended into a full byte-for-byte copy.
+
+```rust
+#[derive(Clone, Copy)]
+struct Big {
+    data: [u64; 32],
+}
+
+fn consume(b: Big) -> u64 {
+    b.data.iter().sum()
+}
+
+fn main() {
+    let b = Big { data: [1; 32] };
+    println!("{}", consume(b)); // implicit copy, not a move -- `b` is still usable below
+    println!("{}", consume(b)); // second implicit copy
+    println!("{}", std::mem::size_of::<Big>());
+}
+```
+
+```text
+1
+1
+256
+```
+
+Every call to `consume` copies all 256 bytes of `Big`; because it's `Copy`, `b` is never "moved away," so the code compiles fine, runs fine, and quietly copies far more data than a reviewer skimming for `.clone()` calls would ever notice — `Copy` copies happen with no visible syntax at all.
+
+```rust
+#[derive(Clone)] // not Copy -- 256 bytes is too large to copy implicitly on every use
+struct Big {
+    data: [u64; 32],
+}
+
+fn consume(b: &Big) -> u64 { // borrow instead of taking by value
+    b.data.iter().sum()
+}
+
+fn main() {
+    let b = Big { data: [1; 32] };
+    println!("{}", consume(&b));
+    println!("{}", consume(&b));
+}
+```
+
+**Tool:** none — only a human (`std::mem::size_of` and `cargo bloat` can measure the cost once you suspect it, but no clippy lint flags "this `Copy` type is too big"). **Lesson:** [Structs](/rust/en/structs-enums-matching/structs/).
+
+export const bigCopyCode = `#[derive(Clone, Copy)]
+struct Big {
+    data: [u64; 32],
+}
+
+fn consume(b: Big) -> u64 {
+    b.data.iter().sum()
+}
+
+fn main() {
+    let b = Big { data: [1; 32] };
+    println!("{}", consume(b));
+    println!("{}", consume(b));
+    println!("{} bytes, copied on every call", std::mem::size_of::<Big>());
+}`;
+
+<Playground code={bigCopyCode} />
+
+#### 9. `PartialEq` on a float used as a key or for equality logic
+
+Floats implement `PartialEq` but deliberately not `Eq` (`NaN != NaN`), which generated code runs into two ways: trying to use a float-containing type as a `HashMap` key, or comparing floats with `==` where rounding error makes the comparison unreliable.
+
+```rust
+// @expect-error E0599
+use std::collections::HashMap;
+
+#[derive(PartialEq)]
+struct Price(f64);
+
+fn main() {
+    let mut m: HashMap<Price, &str> = HashMap::new();
+    m.insert(Price(9.99), "widget");
+    println!("{}", m.len());
+}
+```
+
+```text
+error[E0599]: the method `insert` exists for struct `HashMap<Price, &str>`, but its trait bounds were not satisfied
+ --> src/main.rs:8:7
+  |
+4 | struct Price(f64);
+  | ------------ doesn't satisfy `Price: Eq` or `Price: Hash`
+...
+8 |     m.insert(Price(9.99), "widget");
+  |       ^^^^^^
+  |
+  = note: the following trait bounds were not satisfied:
+          `Price: Eq`
+          `Price: Hash`
+```
+
+The direct-comparison variant compiles and is worse, because it fails silently on realistic input instead of refusing to compile:
+
+```rust
+fn main() {
+    let price = 19.99_f64;
+    let total = 0.0_f64 + 19.99;
+    if total == price {
+        println!("match");
+    } else {
+        println!("no match");
+    }
+}
+```
+
+```text
+error: strict comparison of `f32` or `f64`
+ --> src/main.rs:4:8
+  |
+4 |     if total == price {
+  |        ^^^^^^^^^^^^^^ help: consider comparing them within some margin of error: `(total - price).abs() < error_margin`
+```
+
+```rust
+use std::collections::HashMap;
+
+fn main() {
+    // key on cents (an integer) instead of dollars (a float)
+    let mut m: HashMap<u32, &str> = HashMap::new();
+    m.insert(999, "widget");
+    println!("{}", m.len());
+
+    let price = 19.99_f64;
+    let total = 0.0_f64 + 19.99;
+    if (total - price).abs() < f64::EPSILON {
+        println!("match");
+    } else {
+        println!("no match");
+    }
+}
+```
+
+**Tool:** `E0599` (rustc) for the `HashMap` key case — never compiles; `clippy::float_cmp` (off by default, `-W clippy::float_cmp`) for the direct `==` comparison, which compiles and can pass or fail unpredictably. **Lesson:** [HashMap](/rust/en/collections-iterators/hashmap/).
+
+## Errors & Panics
+
+#### 10. `unwrap()` on fallible input
+
+The single most common generated-code smell: reaching for `.unwrap()` on a `Result`/`Option` that comes from parsing, I/O, or any other source that is not actually guaranteed to succeed.
+
+```rust
+fn parse_port(raw: &str) -> u16 {
+    raw.parse().unwrap()
+}
+
+fn main() {
+    println!("{}", parse_port("8080"));
+}
+```
+
+This runs fine for `"8080"` and panics for anything else — `parse_port("not a number")` would produce a message like `called `Result::unwrap()` on an `Err` value: ParseIntError { kind: InvalidDigit }`. Clippy's restriction lint flags every `unwrap()` regardless of the input, which is exactly the point — it can't know which calls are "safe" any more than a reviewer skimming quickly can:
+
+```text
+error: used `unwrap()` on a `Result` value
+ --> src/main.rs:2:5
+  |
+2 |     raw.parse().unwrap()
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: if this value is an `Err`, it will panic
+  = help: consider using `expect()` to provide a better panic message
+```
+
+```rust
+fn parse_port(raw: &str) -> Result<u16, std::num::ParseIntError> {
+    raw.parse()
+}
+
+fn main() {
+    match parse_port("8080") {
+        Ok(port) => println!("{port}"),
+        Err(e) => eprintln!("invalid port: {e}"),
+    }
+}
+```
+
+**Tool:** `clippy::unwrap_used` — restriction lint, off by default; run with `cargo clippy -- -W clippy::unwrap_used`. **Lesson:** [Panics](/rust/en/error-handling/panic/).
+
+#### 11. `_ =>` swallowing an enum variant
+
+A catch-all match arm compiles cleanly today and silently keeps compiling after a new variant is added and never explicitly handled anywhere that used the wildcard.
+
+```rust
+enum Status {
+    Active,
+    Suspended,
+    Closed,
+}
+
+fn describe(s: Status) -> &'static str {
+    match s {
+        Status::Active => "active",
+        _ => "inactive",
+    }
+}
+
+fn main() {
+    println!("{}", describe(Status::Suspended));
+}
+```
+
+This prints `inactive` for `Suspended`, which happens to be correct here — but nothing stops a `Status::Pending` variant from being added next month and silently falling into the same `_` arm with no compile-time signal that `describe` needs a look:
+
+```text
+error: wildcard match will also match any future added variants
+  --> src/main.rs:10:9
+   |
+10 |         _ => "inactive",
+   |         ^ help: try: `Status::Suspended | Status::Closed`
+```
+
+```rust
+enum Status {
+    Active,
+    Suspended,
+    Closed,
+}
+
+fn describe(s: Status) -> &'static str {
+    match s {
+        Status::Active => "active",
+        Status::Suspended | Status::Closed => "inactive",
+    }
+}
+
+fn main() {
+    println!("{}", describe(Status::Suspended));
+}
+```
+
+Now adding `Status::Pending` produces a compile error in `describe` (and everywhere else the same pattern was used) instead of silent, possibly wrong, behavior.
+
+**Tool:** `clippy::wildcard_enum_match_arm` — restriction lint, off by default; run with `cargo clippy -- -W clippy::wildcard_enum_match_arm`. **Lesson:** [Pattern Matching](/rust/en/structs-enums-matching/pattern-matching/).
+
+export const wildcardMatchCode = `enum Status {
+    Active,
+    Suspended,
+    Closed,
+}
+
+fn describe(s: Status) -> &'static str {
+    match s {
+        Status::Active => "active",
+        _ => "inactive",
+    }
+}
+
+fn main() {
+    println!("{}", describe(Status::Suspended));
+    println!("{}", describe(Status::Closed));
+}`;
+
+<Playground code={wildcardMatchCode} />
+
+#### 12. `is_some()` followed by `unwrap()`
+
+Instead of `if let Some(x) = opt` or `match`, generated code sometimes checks `is_some()` and then calls `.unwrap()` in a separate step — correct, but doing by hand (and less safely under future edits) what pattern matching already does in one step.
+
+```rust
+fn describe(x: Option<i32>) -> String {
+    if x.is_some() {
+        format!("value: {}", x.unwrap())
+    } else {
+        "none".to_string()
+    }
+}
+
+fn main() {
+    println!("{}", describe(Some(5)));
+}
+```
+
+```text
+warning: called `unwrap` on `x` after checking its variant with `is_some`
+ --> src/main.rs:3:30
+  |
+2 |     if x.is_some() {
+  |     -------------- help: try: `if let Some(<item>) = x`
+3 |         format!("value: {}", x.unwrap())
+  |                              ^^^^^^^^^^
+  |
+  = note: `#[warn(clippy::unnecessary_unwrap)]` on by default
+```
+
+```rust
+fn describe(x: Option<i32>) -> String {
+    if let Some(v) = x {
+        format!("value: {v}")
+    } else {
+        "none".to_string()
+    }
+}
+
+fn main() {
+    println!("{}", describe(Some(5)));
+}
+```
+
+**Tool:** `clippy::unnecessary_unwrap` — on by default. **Lesson:** [Option](/rust/en/structs-enums-matching/option/).
+
+export const isSomeUnwrapCode = `fn describe(x: Option<i32>) -> String {
+    if x.is_some() {
+        format!("value: {}", x.unwrap())
+    } else {
+        "none".to_string()
+    }
+}
+
+fn main() {
+    println!("{}", describe(Some(5)));
+    println!("{}", describe(None));
+}`;
+
+<Playground code={isSomeUnwrapCode} />
+
+#### 13. `Box<dyn Error>` as a library's public error type
+
+Erasing every failure into `Box<dyn std::error::Error>` is idiomatic in a `main.rs` binary, where nothing downstream needs to `match` on the specific cause. In a library's public API it takes away the caller's ability to do exactly that.
+
+```rust
+use std::error::Error;
+
+pub fn load_user(id: u32) -> Result<String, Box<dyn Error>> {
+    if id == 0 {
+        return Err("invalid id".into());
+    }
+    Ok(format!("user-{id}"))
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    println!("{}", load_user(1)?);
+    Ok(())
+}
+```
+
+This compiles and runs correctly, so nothing about running it reveals the problem. The cost only shows up for a caller of `load_user` who wants to react differently to "invalid id" than to some other future failure mode — with `Box<dyn Error>`, the only option is downcasting or matching on the formatted message string.
+
+```rust
+use std::fmt;
+
+#[derive(Debug)]
+pub enum LoadUserError {
+    InvalidId(u32),
+}
+
+impl fmt::Display for LoadUserError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LoadUserError::InvalidId(id) => write!(f, "invalid id: {id}"),
+        }
+    }
+}
+
+impl std::error::Error for LoadUserError {}
+
+pub fn load_user(id: u32) -> Result<String, LoadUserError> {
+    if id == 0 {
+        return Err(LoadUserError::InvalidId(id));
+    }
+    Ok(format!("user-{id}"))
+}
+
+fn main() {
+    match load_user(0) {
+        Ok(name) => println!("{name}"),
+        Err(LoadUserError::InvalidId(id)) => eprintln!("rejecting id {id}"), // caller can match on the real cause
+    }
+}
+```
+
+**Tool:** none — only a human. This is an API design decision; both versions compile, both run, and no lint has an opinion on which return type belongs on a public library function. **Lesson:** [Custom Errors](/rust/en/error-handling/custom-errors/).
+
+#### 14. `panic!` for a recoverable condition
+
+Generated code sometimes reaches for `panic!` on a condition the caller could reasonably want to handle (bad input, a missing config value) instead of returning `Result`.
+
+```rust
+fn parse_config(raw: &str) -> u32 {
+    if raw.is_empty() {
+        panic!("config value missing");
+    }
+    raw.parse().unwrap_or(0)
+}
+
+fn main() {
+    println!("{}", parse_config("42"));
+}
+```
+
+```text
+error: `panic` should not be present in production code
+ --> src/main.rs:3:9
+  |
+3 |         panic!("config value missing");
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+```rust
+fn parse_config(raw: &str) -> Result<u32, &'static str> {
+    if raw.is_empty() {
+        return Err("config value missing");
+    }
+    Ok(raw.parse().unwrap_or(0))
+}
+
+fn main() {
+    match parse_config("42") {
+        Ok(v) => println!("{v}"),
+        Err(e) => eprintln!("error: {e}"),
+    }
+}
+```
+
+**Tool:** `clippy::panic` — restriction lint, off by default; run with `cargo clippy -- -W clippy::panic`. It flags every `panic!` call unconditionally, which is why it's a restriction lint and not a default: some panics genuinely are the right call (see the [Panics](/rust/en/error-handling/panic/) lesson's decision table), and the lint can't tell those apart from this one. **Lesson:** [Result](/rust/en/error-handling/result/).
+
+## Iterators & Collections
+
+#### 15. Index loop instead of an iterator
+
+A `for i in 0..len` loop that only ever uses `i` to index the same collection is, almost always, more naturally an iterator over the collection directly.
+
+```rust
+fn main() {
+    let items = [10, 20, 30];
+    let mut total = 0;
+    for i in 0..items.len() {
+        total += items[i];
+    }
+    println!("{total}");
+}
+```
+
+```text
+warning: the loop variable `i` is only used to index `items`
+ --> src/main.rs:4:14
+  |
+4 |     for i in 0..items.len() {
+  |              ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(clippy::needless_range_loop)]` on by default
+help: consider using an iterator
+  |
+4 -     for i in 0..items.len() {
+4 +     for <item> in &items {
+  |
+```
+
+```rust
+fn main() {
+    let items = [10, 20, 30];
+    let total: i32 = items.iter().sum();
+    println!("{total}");
+}
+```
+
+**Tool:** `clippy::needless_range_loop` — on by default. **Lesson:** [Iterators](/rust/en/collections-iterators/iterators/).
+
+export const rangeLoopCode = `fn main() {
+    let items = [10, 20, 30];
+    let mut total = 0;
+    for i in 0..items.len() {
+        total += items[i];
+    }
+    println!("{total}");
+}`;
+
+<Playground code={rangeLoopCode} />
+
+#### 16. `collect()` immediately re-consumed by another iterator method
+
+Collecting into a `Vec` only to immediately call `.contains(...)`, `.len()`, or another method that a plain iterator adapter could answer directly wastes an allocation and a full pass over the data.
+
+```rust
+fn main() {
+    let names = ["ann", "bob", "cy"];
+    let upper: Vec<String> = names.iter().map(|s| s.to_uppercase()).collect();
+    if upper.contains(&"BOB".to_string()) {
+        println!("found");
+    }
+}
+```
+
+```text
+error: avoid using `collect()` when not needed
+ --> src/main.rs:3:69
+  |
+3 |     let upper: Vec<String> = names.iter().map(|s| s.to_uppercase()).collect();
+  |                                                                     ^^^^^^^
+4 |     if upper.contains(&"BOB".to_string()) {
+  |        ---------------------------------- the iterator could be used here instead
+  |
+help: check if the original Iterator contains an element instead of collecting then checking
+  |
+3 ~
+4 ~     if names.iter().map(|s| s.to_uppercase()).any(|x| x == "BOB".to_string()) {
+  |
+```
+
+```rust
+fn main() {
+    let names = ["ann", "bob", "cy"];
+    if names.iter().map(|s| s.to_uppercase()).any(|x| x == "BOB") {
+        println!("found");
+    }
+}
+```
+
+**Tool:** `clippy::needless_collect` — off by default; run with `cargo clippy -- -W clippy::needless_collect`. **Lesson:** [Iterators](/rust/en/collections-iterators/iterators/).
+
+#### 17. Byte-slicing a string at a non-ASCII boundary
+
+`String`/`&str` indexing and slicing operate on **bytes**, not characters. Generated code that treats `&s[0..1]` as "the first character" works for ASCII and panics on anything else.
+
+```rust
+// @expect-panic
+fn main() {
+    let name = "สวัสดี";
+    println!("{}", &name[0..1]);
+}
+```
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:3:25:
+end byte index 1 is not a char boundary; it is inside 'ส' (bytes 0..3 of string)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+Rust's `char`s are up to 4 bytes; the Thai character `ส` alone takes 3 bytes, so byte index `1` lands inside it rather than on a boundary.
+
+```rust
+fn main() {
+    let name = "สวัสดี";
+    if let Some(first_char) = name.chars().next() {
+        println!("{first_char}");
+    }
+}
+```
+
+**Tool:** none at compile time — this is a runtime panic. `cargo test` with a non-ASCII input in the suite would catch it; no clippy lint flags byte-range slicing on a `&str` in general, since it's sometimes intentional (e.g. slicing at a byte offset already known to be a char boundary). **Lesson:** [Vec and String](/rust/en/collections-iterators/vec-string/).
+
+export const byteSliceCode = `// @expect-panic
+fn main() {
+    let name = "สวัสดี";
+    println!("{}", &name[0..1]);
+}`;
+
+<Playground code={byteSliceCode} />
+
+#### 18. `as` truncation on a narrowing numeric cast
+
+`as` between integer types never panics — it silently truncates. Generated code that uses `as` to "convert" a value that might not fit produces a wrong number instead of an error, in both debug and release builds.
+
+```rust
+fn main() {
+    let big: i32 = 300;
+    let small = big as u8;
+    println!("{small}");
+}
+```
+
+```text
+44
+```
+
+`300` doesn't fit in a `u8` (max `255`); `as` keeps only the low 8 bits of the bit pattern (`300 = 0b1_0010_1100`, and the low byte `0b0010_1100` is `44`), silently, in every build profile — this is unrelated to (and does not panic like) arithmetic overflow such as `250u8 + 10`.
+
+```text
+error: casting `i32` to `u8` may truncate the value
+ --> src/main.rs:3:17
+  |
+3 |     let small = big as u8;
+  |                 ^^^^^^^^^
+  |
+help: ... or use `try_from` and handle the error accordingly
+  |
+3 -     let small = big as u8;
+3 +     let small = u8::try_from(big);
+  |
+```
+
+```rust
+fn main() {
+    let big: i32 = 300;
+    match u8::try_from(big) {
+        Ok(small) => println!("{small}"),
+        Err(_) => eprintln!("{big} does not fit in a u8"),
+    }
+}
+```
+
+**Tool:** `clippy::cast_possible_truncation` — pedantic lint, off by default; run with `cargo clippy -- -W clippy::cast_possible_truncation`. **Lesson:** [Data Types](/rust/en/basics/data-types/).
+
+export const asTruncateCode = `fn main() {
+    let big: i32 = 300;
+    let small = big as u8;
+    println!("{small}");
+}`;
+
+<Playground code={asTruncateCode} />
+
+## Concurrency & Async
+
+#### 19. `Arc<Mutex<T>>` when `thread::scope` or an atomic would do
+
+`Arc<Mutex<T>>` is the correct tool when threads genuinely need to outlive the function that spawned them, or when the shared state is more than a single number. Generated code reaches for it as a default even when the threads are joined before the function returns (where `thread::scope` needs no `Arc` at all) or the shared state is a single counter (where an atomic needs no lock at all).
+
+```rust
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn main() {
+    let counter = Arc::new(Mutex::new(0));
+    let mut handles = vec![];
+    for _ in 0..4 {
+        let counter = Arc::clone(&counter);
+        handles.push(thread::spawn(move || {
+            let mut n = counter.lock().unwrap();
+            *n += 1;
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+    println!("{}", *counter.lock().unwrap());
+}
+```
+
+This compiles, runs, and prints `4` — completely correct, just carrying more machinery (an `Arc` for shared ownership across threads, a `Mutex` for exclusive access, a lock/unlock on every increment) than the problem needs, since all four threads are joined before `main` ever reads the value.
+
+```rust
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::thread;
+
+fn main() {
+    let counter = AtomicI32::new(0);
+    thread::scope(|s| {
+        for _ in 0..4 {
+            s.spawn(|| {
+                counter.fetch_add(1, Ordering::SeqCst); // no lock, no Arc -- just an atomic op
+            });
+        }
+    }); // thread::scope guarantees every spawned thread joins here
+    println!("{}", counter.load(Ordering::SeqCst));
+}
+```
+
+**Tool:** none — only a human. Both versions compile, run, and produce identical output; no lint flags "this lock is unnecessary," since deciding that requires understanding the actual data-sharing shape. **Lesson:** [Threads](/rust/en/concurrency-testing-cargo/threads/).
+
+export const arcMutexExcessCode = `use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn main() {
+    let counter = Arc::new(Mutex::new(0));
+    let mut handles = vec![];
+    for _ in 0..4 {
+        let counter = Arc::clone(&counter);
+        handles.push(thread::spawn(move || {
+            let mut n = counter.lock().unwrap();
+            *n += 1;
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+    println!("{}", *counter.lock().unwrap());
+}`;
+
+<Playground code={arcMutexExcessCode} />
+
+#### 20. Holding a `std::sync::Mutex` guard across an `.await` point
+
+A `std::sync::MutexGuard` held across `.await` blocks every other task waiting on that lock for the entire time this task is merely suspended — not just while it's actually touching the locked data. (This example needs the `tokio` crate, unavailable to the browser Playground and this course's local harness — the transcript below is from a real `cargo clippy` run against a scratch crate with `tokio = { version = "1", features = ["full"] }`.)
+
+```rust
+// @skip-verify crate: tokio
+use std::sync::Mutex;
+
+async fn increment(counter: &Mutex<i32>) {
+    let mut guard = counter.lock().unwrap();
+    *guard += 1;
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+}
+
+#[tokio::main]
+async fn main() {
+    let counter = Mutex::new(0);
+    increment(&counter).await;
+    println!("{}", *counter.lock().unwrap());
+}
+```
+
+```text
+error: this `MutexGuard` is held across an await point
+ --> src/main.rs:4:9
+  |
+4 |     let mut guard = counter.lock().unwrap();
+  |         ^^^^^^^^^
+  |
+  = help: consider using an async-aware `Mutex` type or ensuring the `MutexGuard` is dropped before calling `await`
+note: these are all the await points this lock is held through
+ --> src/main.rs:6:61
+  |
+6 |     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+  |                                                             ^^^^^
+```
+
+```rust
+// @skip-verify crate: tokio
+use std::sync::Mutex;
+
+async fn increment(counter: &Mutex<i32>) {
+    { // guard is dropped at the end of this block, before the .await
+        let mut guard = counter.lock().unwrap();
+        *guard += 1;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+}
+
+#[tokio::main]
+async fn main() {
+    let counter = Mutex::new(0);
+    increment(&counter).await;
+    println!("{}", *counter.lock().unwrap());
+}
+```
+
+**Tool:** `clippy::await_holding_lock` — on by default (requires an async runtime crate like `tokio` to trigger, since the lint only fires across a real `.await`). **Lesson:** [Async Intro](/rust/en/concurrency-testing-cargo/async-intro/).
+
+#### 21. `thread::sleep` inside an `async fn`
+
+`thread::sleep` blocks the entire OS thread it runs on — including the async executor's worker thread, and every other task that thread was scheduled to run. `tokio::time::sleep(...).await` yields the thread back to the executor instead; nothing in the type system distinguishes the two, so generated code can use the wrong one and still compile.
+
+```rust
+// @skip-verify crate: tokio
+use std::time::{Duration, Instant};
+
+async fn slow_task(id: u32) {
+    println!("task {id} start");
+    std::thread::sleep(Duration::from_millis(200)); // blocks the executor thread, not just this task
+    println!("task {id} done");
+}
+
+#[tokio::main]
+async fn main() {
+    let start = Instant::now();
+    tokio::join!(slow_task(1), slow_task(2));
+    println!("elapsed: {}ms", start.elapsed().as_millis());
+}
+```
+
+This compiles without warning and runs to completion, but the timing gives away what happened — the two tasks ran one after another, not concurrently:
+
+```text
+task 1 start
+task 1 done
+task 2 start
+task 2 done
+elapsed: 414ms
+```
+
+If `slow_task` had actually yielded during its wait, both 200ms sleeps would have overlapped and the total would be close to 200ms, not roughly double.
+
+```rust
+// @skip-verify crate: tokio
+use std::time::{Duration, Instant};
+
+async fn slow_task(id: u32) {
+    println!("task {id} start");
+    tokio::time::sleep(Duration::from_millis(200)).await; // yields the thread back to the executor
+    println!("task {id} done");
+}
+
+#[tokio::main]
+async fn main() {
+    let start = Instant::now();
+    tokio::join!(slow_task(1), slow_task(2));
+    println!("elapsed: {}ms", start.elapsed().as_millis());
+}
+```
+
+**Tool:** none — no clippy lint flags `thread::sleep` inside an `async fn`. The only way to catch it is by noticing the symptom (tasks that should overlap don't) or reviewing every blocking call inside `async fn` bodies by hand. **Lesson:** [Async Intro](/rust/en/concurrency-testing-cargo/async-intro/).
+
+#### 22. Unbounded channel with no backpressure
+
+`std::sync::mpsc::channel()` has no capacity limit — a producer that outpaces its consumer will keep allocating memory for buffered messages indefinitely. Generated code defaults to the unbounded channel constructor without considering whether the producer needs to be slowed down.
+
+```rust
+use std::sync::mpsc;
+use std::thread;
+
+fn main() {
+    let (tx, rx) = mpsc::channel::<u32>();
+    let producer = thread::spawn(move || {
+        for i in 0..1000 {
+            tx.send(i).unwrap(); // no backpressure -- producer never waits for the consumer
+        }
+    });
+    producer.join().unwrap();
+    let mut total = 0u64;
+    while let Ok(v) = rx.try_recv() {
+        total += v as u64;
+    }
+    println!("{total}");
+}
+```
+
+This compiles and runs correctly for `1000` messages — the bug is only a liability under a *much* faster or unbounded producer, where memory use grows without limit and nothing in the code signals that it's happening.
+
+```rust
+use std::sync::mpsc;
+use std::thread;
+
+fn main() {
+    let (tx, rx) = mpsc::sync_channel::<u32>(32); // bounded -- send() blocks once the buffer is full
+    let producer = thread::spawn(move || {
+        for i in 0..1000 {
+            tx.send(i).unwrap(); // now applies backpressure to the producer
+        }
+    });
+    let mut total = 0u64;
+    while let Ok(v) = rx.recv() {
+        total += v as u64;
+    }
+    producer.join().unwrap();
+    println!("{total}");
+}
+```
+
+**Tool:** none — only a human. `mpsc::channel()` is entirely valid API; only reasoning about the actual producer/consumer speed ratio reveals whether an unbounded queue is a real risk. **Lesson:** [Channels](/rust/en/concurrency-testing-cargo/channels/).
+
+export const unboundedChannelCode = `use std::sync::mpsc;
+use std::thread;
+
+fn main() {
+    let (tx, rx) = mpsc::channel::<u32>();
+    let producer = thread::spawn(move || {
+        for i in 0..1000 {
+            tx.send(i).unwrap();
+        }
+    });
+    producer.join().unwrap();
+    let mut total = 0u64;
+    while let Ok(v) = rx.try_recv() {
+        total += v as u64;
+    }
+    println!("{total}");
+}`;
+
+<Playground code={unboundedChannelCode} />
+
+## Cargo & Tests
+
+#### 23. `#[should_panic]` with no `expected = "..."`
+
+`#[should_panic]` alone passes on **any** panic, from any cause — including a completely unrelated bug that happens to also panic. It gives false confidence that a specific error path was tested.
+
+```rust
+pub fn withdraw(balance: u32, amount: u32) -> u32 {
+    balance - amount // BUG: no insufficient-funds check; relies on an accidental u32 underflow panic
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic] // no `expected = "..."` -- passes on ANY panic, not just the intended one
+    fn withdraw_too_much_panics() {
+        withdraw(5, 100); // intent: "insufficient funds" should panic with a clear message
+    }
+}
+```
+
+```text
+running 1 test
+test tests::withdraw_too_much_panics - should panic ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+`cargo test` is green. But `withdraw` never actually validates "insufficient funds" — it panics on `u32` subtraction underflow (`attempt to subtract with overflow`), a completely different, uninformative panic that happens to satisfy an unqualified `#[should_panic]` just as well as the intended validation would have.
+
+```rust
+pub fn withdraw(balance: u32, amount: u32) -> u32 {
+    if amount > balance {
+        panic!("insufficient funds: balance {balance}, requested {amount}");
+    }
+    balance - amount
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "insufficient funds")]
+    fn withdraw_too_much_panics() {
+        withdraw(5, 100);
+    }
+}
+```
+
+**Tool:** none — `cargo test` reports success either way; no clippy lint checks `#[should_panic]` usage. Only reading the test (or the fixed version's `expected = "..."` actually failing to match a wrong-reason panic) catches this. **Lesson:** [Cargo Tests](/rust/en/concurrency-testing-cargo/cargo-tests/).
+
+#### 24. A test with no assertion
+
+A test function that calls the code under test but never checks the result "passes" as long as the call doesn't panic — which tells you nothing about whether the output was correct.
+
+```rust
+pub fn total_price(unit_price: u32, quantity: u32) -> u32 {
+    unit_price * quantity
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn total_price_computes_total() {
+        // BUG: calls the function but never asserts on the result -- always "passes"
+        total_price(3, 4);
+    }
+}
+```
+
+```text
+running 1 test
+test tests::total_price_computes_total ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+Even a `total_price` that returned `0` for every input, or overflowed silently, would pass this exact test — nothing in it ever compares the actual output to an expected one.
+
+```rust
+pub fn total_price(unit_price: u32, quantity: u32) -> u32 {
+    unit_price * quantity
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn total_price_computes_total() {
+        assert_eq!(total_price(3, 4), 12);
+    }
+}
+```
+
+**Tool:** none — `cargo test` reports success either way; no clippy lint checks whether a `#[test]` function's body contains an assertion. This is purely a human-review finding: read every test body, not just its name. **Lesson:** [Cargo Tests](/rust/en/concurrency-testing-cargo/cargo-tests/).
+
+## Reading AI-generated code
+
+The most dangerous entries in this catalog are the ones in the "Tool: none" rows — every one of them compiles, most of them run correctly on the happy path, and `cargo test` is green either way. That combination is exactly what makes them survive a shallow review.
+
+<SpotTheBug code={`use std::sync::mpsc;
+use std::thread;
+
+fn produce_and_sum(count: u32) -> u64 {
+    let (tx, rx) = mpsc::channel::<u32>();
+    let producer = thread::spawn(move || {
+        for i in 0..count {
+            tx.send(i).unwrap();
+        }
+    });
+    producer.join().unwrap();
+    let mut total = 0u64;
+    while let Ok(v) = rx.try_recv() {
+        total += v as u64;
+    }
+    total
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn produce_and_sum_works() {
+        produce_and_sum(5);
+    }
+}
+
+fn main() {
+    println!("{}", produce_and_sum(5));
+}
+`}>
+Two separate catalog patterns stacked in one small file. First, `mpsc::channel` is unbounded (#22) — fine at `count = 5`, a real liability if `count` ever comes from untrusted input. Second, and more immediately damning: `produce_and_sum_works` (#24) calls the function and asserts nothing, so it would pass identically if `produce_and_sum` always returned `0`. Both compile clean, both run clean, and `cargo test` prints `1 passed` — the green checkmark here is not evidence the sum is computed correctly, only evidence that calling the function doesn't panic. The fix for the test is one line: `assert_eq!(produce_and_sum(5), 10);`. The fix for the channel is a design question — is an unbounded queue actually acceptable for this caller's `count`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Code that compiles and passes `cargo test` has cleared the bar the compiler and test runner can check — for the "Tool: none" patterns above, that bar is much lower than it looks, and only a human reading the actual logic clears the rest.
+</Callout>
+
+export const quizAiBugCatalog = [
+    {
+        q: "In the clone-to-silence example, why does clippy flag only the second `.clone()` call and not the first?",
+        options: [
+            "Clippy flags every clone() call, including the first one",
+            "The first clone is genuinely needed because `cfg` is used again afterward; the second is the last use of `cfg`, so a move would work instead",
+            "Clippy cannot detect clone() calls inside function arguments",
+            "The first call doesn't compile, so clippy never reaches it",
+        ],
+        answer: 1,
+        explain: "clippy::redundant_clone specifically flags a clone whose value is dropped without further use afterward -- exactly the second call here, since cfg is never touched again after it.",
+    },
+    {
+        q: "What actually happens at runtime in the `Rc<RefCell<T>>` example with two overlapping `borrow_mut()` calls?",
+        options: [
+            "It fails to compile with error[E0502]",
+            "It compiles, then panics at runtime with a message like \"RefCell already borrowed\"",
+            "It compiles and runs fine, silently using the same reference for both `a` and `b`",
+            "It causes undefined behavior that only Miri detects",
+        ],
+        answer: 1,
+        explain: "RefCell moves borrow-checking from compile time to runtime. A second exclusive borrow_mut() while the first guard is still alive panics as soon as the code actually runs -- it is not a compile error.",
+    },
+    {
+        q: "Why does `cargo +nightly miri run` report a memory leak for `mem::forget(Box::new(...))`, when the same program compiles and runs fine under a normal `cargo run`?",
+        options: [
+            "mem::forget is undefined behavior, which only Miri can execute at all",
+            "mem::forget is entirely safe, memory-safe Rust -- it just prevents the value's destructor (and therefore its deallocation) from ever running, which Miri's leak checker specifically watches for and ordinary execution does not report",
+            "Miri always reports every heap allocation as a leak",
+            "The program actually panics under Miri, and \"memory leaked\" is Miri's panic message",
+        ],
+        answer: 1,
+        explain: "mem::forget causes no unsafe behavior -- it just skips Drop, which normally frees the allocation. Miri's leak checker specifically looks for allocations still live when the program ends; a normal run has no equivalent check and simply exits.",
+    },
+    {
+        q: "What does this print, and why?\n```rust\nfn main() {\n    let big: i32 = 300;\n    let small = big as u8;\n    println!(\"{small}\");\n}\n```",
+        options: [
+            "It panics with \"attempt to convert with overflow\"",
+            "255, because `as` saturates to the target type's maximum value",
+            "44, because `as` truncates to the low 8 bits of 300's bit pattern with no panic in any build profile",
+            "It fails to compile because 300 doesn't fit in a u8",
+        ],
+        answer: 2,
+        explain: "`as` between integer types never panics -- it silently keeps only the bits that fit. 300 = 0b1_0010_1100; the low byte 0b0010_1100 is 44. This is unrelated to arithmetic-overflow panics from +, -, or *.",
+    },
+    {
+        q: "Why does `clippy::wildcard_enum_match_arm` flag a `_ =>` arm even when the match currently behaves correctly for every existing variant?",
+        options: [
+            "Because `_ =>` arms always execute slower than listing each variant",
+            "Because it silently continues to match (and possibly mishandle) any variant added to the enum in the future, with no compile error pointing back to this match",
+            "Because `_ =>` is deprecated syntax being removed in a future edition",
+            "Because it can only be used with enums that derive Copy",
+        ],
+        answer: 1,
+        explain: "The whole value of an exhaustive match is that adding a new variant becomes a compile error everywhere unhandled. A `_ =>` arm opts back out of that guarantee for this specific match.",
+    },
+    {
+        q: "In the `should_panic` example, why does `cargo test` report the test as passing even though `withdraw` never implements the \"insufficient funds\" check it claims to test?",
+        options: [
+            "cargo test doesn't actually run #[should_panic] tests",
+            "`#[should_panic]` with no `expected = \"...\"` string passes on any panic at all, and the buggy `withdraw` happens to panic anyway -- from an unrelated integer-underflow, not the missing validation",
+            "The test is ignored by default and never actually executes",
+            "withdraw(5, 100) doesn't actually panic in this version",
+        ],
+        answer: 1,
+        explain: "u32 subtraction underflow panics in debug builds regardless of any explicit check, so the test's #[should_panic] is satisfied by the wrong panic entirely. Only #[should_panic(expected = \"...\")] would catch the mismatch.",
+    },
+    {
+        q: "Why does clippy's `await_holding_lock` lint require an async runtime crate like tokio to actually fire, and not just `std::sync::Mutex` alone?",
+        options: [
+            "The lint is buggy and doesn't work without tokio",
+            "std::sync::Mutex doesn't exist without an async runtime",
+            "The lint specifically watches for a MutexGuard's scope crossing a real `.await` point -- without an async fn actually awaiting something, there is no await point for the guard to cross",
+            "tokio replaces std::sync::Mutex entirely, so the lint only understands tokio's Mutex type",
+        ],
+        answer: 2,
+        explain: "The hazard (and the lint) is specifically about a lock held across a suspension point. An async fn with no real .await, or no async code at all, has no such point for the lint to check.",
+    },
+    {
+        q: "Both the `Arc<Mutex<i32>>` counter and the `thread::scope` + atomic counter versions compile, run, and print the same result. What is the actual difference between them?",
+        options: [
+            "There is no real difference; they are two spellings of the same generated machine code",
+            "The Arc<Mutex<T>> version is always faster because it caches the lock",
+            "The atomic version avoids an Arc (since thread::scope guarantees every spawned thread joins before the scope ends, borrows suffice) and avoids a lock (a single integer increment doesn't need mutual exclusion beyond the atomic operation itself) -- less machinery for an identical guarantee",
+            "The Arc<Mutex<T>> version is not thread-safe",
+        ],
+        answer: 2,
+        explain: "Arc<Mutex<T>> is the right tool when threads must outlive the spawning function or the shared state is more than one primitive value. Here neither is true, so thread::scope (no Arc needed) plus an atomic (no lock needed) achieves the same result with less machinery.",
+    },
+    {
+        q: "Which of these 24 patterns compiles successfully every time, yet is only caught by `cargo +nightly miri run`, not by clippy or rustc's normal warnings?",
+        options: [
+            "Byte-slicing a string at a non-ASCII boundary",
+            "mem::forget leaking a Box",
+            "An unbounded mpsc channel",
+            "impl Trait in a struct field",
+        ],
+        answer: 1,
+        explain: "mem::forget is safe Rust with no compiler warning and no default clippy lint against it. Miri's default leak-checking is the tool that actually surfaces the leak, by tracking allocations that are still live when the program exits.",
+    },
+];
+
+<Quiz client:visible id="reading-rust/ai-bug-catalog" questions={quizAiBugCatalog} />
+
+<ProgressTracker client:visible id="reading-rust/ai-bug-catalog" />

@@ -1,0 +1,406 @@
+---
+title: 'Worked Review 1: CLI Text Processor'
+description: 'รีวิวเต็มของโปรแกรมนับคำที่ AI สร้างขึ้น น่าเชื่อถือ ขนาดเล็ก -- bug ที่ปลูกไว้สี่ตัว, output เครื่องมือจริง, และเวอร์ชันที่แก้แล้ว'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+นี่คือรีวิวเต็มบทแรกจากสี่บท แต่ละบทเป็นโปรแกรมเล็ก ๆ ที่สมบูรณ์ น่าเชื่อถือ พร้อม bug ที่ปลูกไว้หลายตัว รีวิวด้วยวิธีที่โมดูลนี้สอนมาตลอด: อ่าน type ก่อน รัน ladder แล้วค่อยตัดสินใจว่าจะแก้อะไร ลองรีวิวโปรแกรมด้วยตัวเองก่อนเปิด `<details>` block ไหนเลย
+
+## โปรแกรม
+
+ตัวนับความถี่คำเล็ก ๆ: นับว่าแต่ละคำปรากฏกี่ครั้งในข้อความ แล้ว print คำที่พบบ่อยที่สุดพร้อม preview สั้น ๆ ของแต่ละคำ
+
+export const wr1BuggyCode = `use std::collections::HashMap;
+
+/// Counts how many times each word appears in \`text\`.
+fn count_words(text: &str) -> HashMap<String, u32> {
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    let words: Vec<String> = text.split_whitespace().map(|w| w.to_string()).collect();
+    let words_for_counting = words.clone();
+    for word in words_for_counting {
+        let entry = counts.entry(word).or_insert(0);
+        *entry += 1;
+    }
+    counts
+}
+
+/// Returns how many whitespace-separated words are in \`text\`.
+fn total_words(text: &str) -> usize {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut total = 0;
+    for i in 0..words.len() {
+        let _ = words[i];
+        total += 1;
+    }
+    total
+}
+
+/// A short preview of a word, used in the report below.
+fn preview(word: &str) -> &str {
+    if word.len() >= 2 {
+        &word[0..2]
+    } else {
+        word
+    }
+}
+
+/// Parses the "how many rows to show" argument.
+fn parse_limit(raw: &str) -> usize {
+    raw.parse().unwrap()
+}
+
+fn main() {
+    let text = "the quick brown fox jumps over the lazy dog the fox runs the dog barks";
+    let counts = count_words(text);
+    let total = total_words(text);
+    let limit = parse_limit("3");
+
+    let mut entries: Vec<(&String, &u32)> = counts.iter().collect();
+    entries.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+
+    println!("total words: {total}");
+    println!("top {limit} words:");
+    for (word, count) in entries.iter().take(limit) {
+        println!("  {} ({}x)", preview(word), count);
+    }
+}`;
+
+<Playground code={wr1BuggyCode} />
+
+โค้ดนี้ compile ผ่าน รันได้ และ print รายงานที่ดูสมเหตุสมผล:
+
+```text
+total words: 15
+top 3 words:
+  th (4x)
+  do (2x)
+  fo (2x)
+```
+
+มัน (อย่างน้อย) bug ที่ปลูกไว้สี่ตัว ไม่มีตัวไหนมองเห็นได้จากการรันครั้งนี้เลย
+
+## Findings
+
+<details>
+<summary>Bug 1: clone ที่ไม่จำเป็นใน `count_words`</summary>
+
+**อาการ:** ไม่มีอะไรมองเห็นได้ที่ขนาด input นี้ — แค่งานที่เสียเปล่า
+
+**หลักฐาน:**
+
+```text
+warning: redundant clone
+ --> src/main.rs:7:35
+  |
+7 |     let words_for_counting = words.clone(); // unnecessary clone -- `words` is never read again
+  |                                   ^^^^^^^^ help: remove this
+  |
+note: this value is dropped without further use
+ --> src/main.rs:7:30
+  |
+7 |     let words_for_counting = words.clone();
+  |                              ^^^^^
+```
+
+(`cargo clippy -- -W clippy::redundant_clone`)
+
+**ทางแก้:** `words` ถูกสร้าง, clone แล้ว, แล้วมีแค่ตัว clone เท่านั้นที่ถูกใช้เลย — `Vec<String>` กลางไม่จำเป็นเลย iterate `text.split_whitespace()` ตรง ๆ แทนที่จะ collect ก่อน:
+
+```rust
+fn count_words(text: &str) -> std::collections::HashMap<String, u32> {
+    let mut counts = std::collections::HashMap::new();
+    for word in text.split_whitespace() {
+        *counts.entry(word.to_string()).or_insert(0) += 1;
+    }
+    counts
+}
+```
+</details>
+
+<details>
+<summary>Bug 2: index loop ใน `total_words`</summary>
+
+**อาการ:** ไม่มีอะไรมองเห็นได้ — loop variable ถูกใช้แค่ index `Vec` เดียวกันที่มันมาจาก
+
+**หลักฐาน:**
+
+```text
+warning: the loop variable `i` is only used to index `words`
+ --> src/main.rs:19:14
+  |
+19 |     for i in 0..words.len() {
+   |              ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(clippy::needless_range_loop)]` (implied by -W here, on by default in the full course lint set)
+help: consider using an iterator
+```
+
+(`cargo clippy` — `needless_range_loop` เปิดเป็น default)
+
+**ทางแก้:** ทั้งฟังก์ชันย่อลงเหลือบรรทัดเดียวทันทีที่ index loop หายไป — `words.split_whitespace()` รู้อยู่แล้วว่ามันสร้างกี่ item:
+
+```rust
+fn total_words(text: &str) -> usize {
+    text.split_whitespace().count()
+}
+```
+</details>
+
+<details>
+<summary>Bug 3: `unwrap()` บน `parse_limit`</summary>
+
+**อาการ:** ไม่มีใน run นี้ — `parse_limit("3")` เป็น string ที่ hardcode และ valid เสมอ bug นี้แฝงอยู่: ทันทีที่มันกลายเป็น CLI argument หรือ config value จริง input ที่ไม่ใช่ตัวเลขจะทำให้ทั้งโปรแกรม panic
+
+**หลักฐาน:**
+
+```text
+warning: used `unwrap()` on a `Result` value
+ --> src/main.rs:37:5
+  |
+37 |     raw.parse().unwrap()
+   |     ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is an `Err`, it will panic
+```
+
+(`cargo clippy -- -W clippy::unwrap_used`)
+
+**ทางแก้:** return `Result` แล้วให้ผู้เรียกตัดสินใจว่า limit ที่ผิดหมายความว่าอะไร (ตรงนี้ fallback ไปที่ default ที่สมเหตุสมผล):
+
+```rust
+fn parse_limit(raw: &str) -> Result<usize, std::num::ParseIntError> {
+    raw.parse()
+}
+// at the call site:
+let limit = parse_limit("3").unwrap_or(5);
+```
+</details>
+
+<details>
+<summary>Bug 4: `preview` สมมติว่า 2 ไบต์คือ 2 ตัวอักษร</summary>
+
+**อาการ:** ไม่มีเลยกับ sample text ภาษาอังกฤษล้วนนี้ ที่ทุกคำเป็น ASCII และ 1 ไบต์ต่อตัวอักษร ทันทีที่คำที่ไม่ใช่ภาษาอังกฤษปรากฏใน input นี้จะ panic
+
+**หลักฐาน** — ฟังก์ชันเดียวกัน เรียกตรง ๆ บนคำภาษาไทยแทนคำภาษาอังกฤษ:
+
+```rust
+// @expect-panic
+fn preview(word: &str) -> &str {
+    if word.len() >= 2 {
+        &word[0..2]
+    } else {
+        word
+    }
+}
+
+fn main() {
+    println!("{}", preview("สวัสดี"));
+}
+```
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:3:10:
+end byte index 2 is not a char boundary; it is inside 'ส' (bytes 0..3 of string)
+```
+
+**ทางแก้:** นับ*ตัวอักษร* ไม่ใช่ไบต์ แล้ว slice ที่ byte offset ที่ character boundary จริง ๆ ตกอยู่:
+
+```rust
+fn preview(word: &str) -> &str {
+    match word.char_indices().nth(2) {
+        Some((byte_idx, _)) => &word[..byte_idx],
+        None => word,
+    }
+}
+
+fn main() {
+    println!("{}", preview("สวัสดี")); // สว
+}
+```
+</details>
+
+## เวอร์ชันที่แก้แล้ว
+
+export const wr1FixedCode = `use std::collections::HashMap;
+
+/// Counts how many times each word appears in \`text\`.
+fn count_words(text: &str) -> HashMap<String, u32> {
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for word in text.split_whitespace() {
+        *counts.entry(word.to_string()).or_insert(0) += 1;
+    }
+    counts
+}
+
+/// Returns how many whitespace-separated words are in \`text\`.
+fn total_words(text: &str) -> usize {
+    text.split_whitespace().count()
+}
+
+/// A short preview of a word, used in the report below.
+fn preview(word: &str) -> &str {
+    match word.char_indices().nth(2) {
+        Some((byte_idx, _)) => &word[..byte_idx],
+        None => word,
+    }
+}
+
+/// Parses the "how many rows to show" argument.
+fn parse_limit(raw: &str) -> Result<usize, std::num::ParseIntError> {
+    raw.parse()
+}
+
+fn main() {
+    let text = "the quick brown fox jumps over the lazy dog the fox runs the dog barks";
+    let counts = count_words(text);
+    let total = total_words(text);
+    let limit = parse_limit("3").unwrap_or(5);
+
+    let mut entries: Vec<(&String, &u32)> = counts.iter().collect();
+    entries.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+
+    println!("total words: {total}");
+    println!("top {limit} words:");
+    for (word, count) in entries.iter().take(limit) {
+        println!("  {} ({}x)", preview(word), count);
+    }
+}`;
+
+<Playground code={wr1FixedCode} />
+
+```text
+total words: 15
+top 3 words:
+  th (4x)
+  do (2x)
+  fo (2x)
+```
+
+Output เหมือนเวอร์ชัน bug เป๊ะสำหรับ input นี้ — ทุกการแก้ตรงนี้เปลี่ยนความทนทานและความชัดเจน ไม่ใช่ผลลัพธ์ของ happy path ซึ่งเป็นเหตุผลว่าทำไม bug ทั้งสี่ตัวไม่มีตัวไหนมองเห็นได้จาก run เดิมเลย
+
+## เครื่องมือจับอะไรได้บ้าง
+
+การรัน `cargo clippy` จริงหนึ่งครั้งบนไฟล์ bug เดิม พร้อม lint ที่เกี่ยวข้องสามตัวเปิดใช้งาน:
+
+```text
+$ cargo clippy --bin wr1_buggy -- -W clippy::redundant_clone -W clippy::needless_range_loop -W clippy::unwrap_used
+warning: redundant clone
+ --> src/bin/wr1_buggy.rs:7:35
+  |
+7 |     let words_for_counting = words.clone();
+  |                                   ^^^^^^^^ help: remove this
+
+warning: the loop variable `i` is only used to index `words`
+  --> src/bin/wr1_buggy.rs:19:14
+   |
+19 |     for i in 0..words.len() {
+   |              ^^^^^^^^^^^^^^
+
+warning: used `unwrap()` on a `Result` value
+  --> src/bin/wr1_buggy.rs:37:5
+   |
+37 |     raw.parse().unwrap()
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: `scratch` (bin "wr1_buggy") generated 3 warnings
+```
+
+สามจากสี่ bug จากคำสั่งเดียว Bug 4 (byte-slice panic) มองไม่เห็นจาก `cargo clippy` และ `cargo check` เลย — ไม่มีอะไรผิด syntax เกี่ยวกับ `&word[0..2]` และไม่มี lint แบบ default หรือ off-by-default ตัวไหน flag การ slice byte-count คงที่บน `&str` โดยทั่วไป (มันถูกต้องเมื่อรู้ว่า input เป็น ASCII) การรัน `preview` เวอร์ชันแก้แล้วกับ input ภาษาไทยเดียวกันยืนยันทางแก้ ไม่ใช่ tool อัตโนมัติตัวไหน:
+
+```text
+สว
+```
+
+## Mental Model
+
+bug ทั้งสี่ตัวนี้มีรูปร่างเดียวกัน: ถูกต้อง*สำหรับ input ที่ผู้เขียนลอง* ผิดสำหรับ input ที่ผู้เขียนไม่ได้ลอง clone ที่เสียเปล่าแต่ไม่เป็นอันตราย, index loop ที่บังเอิญเยี่ยม element ทุกตัว, `unwrap()` บน literal ที่บังเอิญ parse ผ่านเสมอ, byte-slice ที่บังเอิญตกบน boundary สำหรับข้อความภาษาอังกฤษ — ไม่มีตัวไหนโผล่มาจากการรันโปรแกรมครั้งเดียวด้วย input ที่เป็นมิตร นั่นแหละคือเหตุผลว่าทำไม "มันทำงานตอนที่ฉันรัน" ถึงเป็นหลักฐานที่อ่อนแอมากสำหรับโค้ดที่ AI สร้างโดยเฉพาะ: input ที่ prompt การสร้างสมมติไว้โดยไม่พูดออกมา (ภาษาอังกฤษ, format ถูกต้อง, เล็ก) แทบไม่เคยถูกระบุ และโค้ดมักจะถูกต้องพอดีสำหรับข้อสมมตินั้นที่ไม่ได้พูดออกมา แล้วผิดทันทีที่มันถูกละเมิด
+
+## Trade-offs
+
+การแก้ bug ทั้งสี่ตัวตรงนี้ไม่มีต้นทุนด้าน performance เลย แถมทำให้โค้ดสั้นลงด้วยซ้ำ (`total_words` ย่อจาก 6 บรรทัดเหลือ 1) นั่นเป็นเรื่องปกติแต่ไม่ใช่สากล — pattern ทั่วไปใน catalog นี้คือการแก้ ownership กับ iterator มักจะฟรีหรือดีขึ้นสุทธิต่อความชัดเจน ในขณะที่ `parse_limit` ที่ return `Result` เพิ่มหนึ่งบรรทัดในทุก call site ที่ตอนนี้ต้องตัดสินใจว่า "input ผิด" หมายความว่าอะไร นั่นเป็นต้นทุนจริง และเป็นสิ่งที่ถูกต้องที่จะจ่ายทันทีที่ `"3"` เลิกเป็น literal ที่ hardcode
+
+## Common Misconceptions
+
+- **"ถ้า sample run ใน PR description ทำงาน แปลว่าโค้ดโอเค"** bug ทั้งสี่ตัวตรงนี้เงียบบน input ตัวอย่างที่ผู้เขียน (หรือ AI) เลือก งานของผู้รีวิวรวมถึงการถามว่าโค้ด*ไม่ได้*ถูกลองกับ input อะไรบ้าง — ข้อความไม่ใช่ภาษาอังกฤษ, ตัวเลขที่ format ผิด, string ว่างเปล่า
+- **"clippy จะจับ byte-slice bug ได้ถ้าฉันแค่เปิด lint เพิ่ม"** ไม่มี lint ตัวไหนใน set ของ clippy — default, pedantic, restriction, หรืออะไรก็ตาม — flag การ slice `&str` แบบ byte-count คงที่โดยทั่วไป เพราะมันถูกต้องเมื่อรู้ว่า input เป็น ASCII bug ประเภทนี้ถูกจับด้วยการรีวิวหรือ test ที่มี input ไม่ใช่ ASCII จริง ไม่ใช่ด้วย compiler flag
+
+## อ่านโค้ดที่ AI เขียน
+
+รูปร่างเดียวกัน — ถูกต้องสำหรับกรณีที่ไม่ได้ทดสอบ ผิดสำหรับกรณีที่ไม่ได้ลอง — โผล่มาเดี่ยว ๆ บ่อยพอ ๆ กับที่มันรวมอยู่ในโปรแกรมใหญ่กว่า
+
+<SpotTheBug code={`fn initials(full_name: &str) -> String {
+    full_name
+        .split_whitespace()
+        .map(|part| &part[0..1])
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn main() {
+    println!("{}", initials("Ada Lovelace"));
+}
+`}>
+โค้ดนี้ compile ผ่านและ print `AL` -- ถูกต้อง และเป็น result แบบที่ทำให้ quick test ผ่านได้พอดี bug คืออันเดียวกับ Bug 4 ข้างบน: `&part[0..1]` เอาไบต์แรกของแต่ละคำ ไม่ใช่ตัวอักษรแรก สำหรับชื่อที่มีตัวอักษรแรกไม่ใช่ ASCII -- มีสระเสียง, ไทย, Cyrillic, อะไรก็ตามนอกเหนือ single-byte UTF-8 -- โค้ดนี้ panic ด้วย error "not a char boundary" เดียวกัน แทนที่จะให้ initial ทางแก้เป็น pattern เดียวกันด้วย: `part.chars().next()` เอาตัวอักษรแรกได้ไม่ว่ามันจะใช้กี่ไบต์ในการ encode
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+โปรแกรมที่รันถูกต้องครั้งเดียวพิสูจน์แค่ว่ามันจัดการ input ตัวเดียวที่คุณลอง -- สำหรับโค้ดที่ AI สร้างโดยเฉพาะ ให้สมมติว่าทุก input ที่ไม่ได้ลอง (ข้อความไม่ใช่ภาษาอังกฤษ, ตัวเลข format ผิด, ความยาว edge-case) มีปัญหา จนกว่าการรีวิวหรือ test จะบอกเป็นอย่างอื่น
+</Callout>
+
+export const quizWorkedReview1 = [
+    {
+        q: "ทำไมโปรแกรม bug เดิมถึงรันโดยไม่มี error ที่มองเห็นได้เลย แม้จะมี bug ที่ปลูกไว้สี่ตัว?",
+        options: [
+            "bug ทุกตัวถูกปิดโดย attribute #[allow]",
+            "bug ทุกตัวเงียบเฉพาะสำหรับ input ที่ run นี้บังเอิญใช้ -- limit string ที่ hardcode และ valid เสมอ และ sample text ที่เป็น ASCII และภาษาอังกฤษล้วน",
+            "Rust ตรวจไม่พบ bug ประเภทนี้เลยไม่ว่า input จะเป็นอะไร",
+            "bug ส่งผลต่อ performance เท่านั้น ไม่ใช่ความถูกต้อง",
+        ],
+        answer: 1,
+        explain: "แต่ละ bug ถูกต้องด้วยความบังเอิญสำหรับ input นี้เฉพาะ: clone เสียเปล่าแต่ไม่เป็นอันตราย, index loop ยังเยี่ยม element ทุกตัว, unwrap สำเร็จเสมอบน literal, และ byte-slice ตกบน boundary เพราะทุกคำ sample เป็น ASCII",
+    },
+    {
+        q: "ทำไม `cargo clippy` ถึงจับ bug 1-3 ได้แต่จับ bug 4 (byte-slice panic) ไม่ได้?",
+        options: [
+            "bug 4 ต้องการ clippy เวอร์ชันใหม่กว่าที่ยังไม่มีอยู่",
+            "bug 1-3 แต่ละตัวตรงกับ clippy lint ที่มีชื่อเจาะจง (redundant_clone, needless_range_loop, unwrap_used); ไม่มี lint ตัวไหน flag การ slice `&str` แบบ byte-count คงที่โดยทั่วไป เพราะมันถูกต้องเมื่อรู้ว่า input เป็น ASCII",
+            "clippy เช็คแค่สามฟังก์ชันแรกในไฟล์เท่านั้น",
+            "bug 4 ไม่ใช่ bug จริง",
+        ],
+        answer: 1,
+        explain: "bug สามตัวที่ clippy จับได้แต่ละตัวตรงกับ lint จริงที่มีชื่อ byte-slice bug ไม่มี lint ที่ตรงกันใน clippy lint group ไหนเลย -- มันเป็น pattern ที่มีแค่มนุษย์ (หรือ test ที่มี input ไม่ใช่ ASCII) เท่านั้นที่จับได้ เพราะการ byte-slice ของ &str บางครั้งก็ถูกต้องสมบูรณ์",
+    },
+    {
+        q: "ทำไมโค้ดนี้ถึง fail?\n```rust\nfn preview(word: &str) -> &str {\n    if word.len() >= 2 {\n        &word[0..2]\n    } else {\n        word\n    }\n}\nfn main() {\n    println!(\"{}\", preview(\"สวัสดี\"));\n}\n```",
+        options: [
+            "มันไม่ fail -- มัน print สองตัวอักษรแรกถูกต้อง",
+            "error[E0308] -- type ไม่ตรงกัน",
+            "มัน panic: byte index 2 is not a char boundary เพราะตัวอักษรไทย 'ส' ครอบครองไบต์ 0 ถึง 2 (รวม 3 ไบต์) ดังนั้น slice ที่จบที่ byte 2 จึงตกอยู่ข้างในมัน",
+            "มัน panic ด้วย stack overflow",
+        ],
+        answer: 2,
+        explain: "word.len() นับไบต์ ไม่ใช่ตัวอักษร `&word[0..2]` slice ที่ byte offset 2 ซึ่งตกอยู่ข้างในตัวอักษรไทย 3 ไบต์ตัวแรก แทนที่จะอยู่บน boundary ระหว่างตัวอักษร",
+    },
+    {
+        q: "ใน `total_words` ที่แก้แล้ว ทำไม `text.split_whitespace().count()` ถึงแทนที่ body ของฟังก์ชันเดิมทั้งหมดได้?",
+        options: [
+            "เพราะ .count() เป็นกรณีพิเศษที่ใช้ได้แค่กับ Vec ที่ collect ไว้แล้วเท่านั้น",
+            "เพราะฟังก์ชันเดิม collect เข้า Vec แล้ว index ผ่านมันแค่เพื่อนับ element ทีละตัว -- .count() บน iterator ตรง ๆ ทำการนับเดียวกันได้โดยไม่ต้อง allocate Vec เลย",
+            "เพราะมันเปลี่ยน behavior การนับให้แม่นยำขึ้น",
+            "เพราะ Rust บังคับให้ทุกฟังก์ชันที่ต่ำกว่า 5 บรรทัดต้องใช้ pattern นี้",
+        ],
+        answer: 1,
+        explain: "index loop เดิมเป็นวิธีที่ซับซ้อนในการนับ element ของ `words` ทีละตัว Iterator::count() ทำสิ่งเดียวกันเป๊ะ ๆ ตรง ๆ บน iterator ของ split_whitespace() โดยไม่มี Vec กลางและไม่มี index loop เลย",
+    },
+];
+
+<Quiz client:visible id="reading-rust/worked-review-1" questions={quizWorkedReview1} />
+
+<ProgressTracker client:visible id="reading-rust/worked-review-1" />

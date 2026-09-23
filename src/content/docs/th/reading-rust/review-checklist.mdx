@@ -1,0 +1,277 @@
+---
+title: 'Review Checklist'
+description: 'checklist หน้าเดียว หกหมวด สำหรับรีวิวโค้ด Rust พร้อมเวอร์ชันสั้นแบบ copy-paste ได้และ grep one-liner'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+นี่คือเวอร์ชัน checklist ของสองบทก่อนหน้า: หนึ่งหน้า หกหมวด แต่ละข้อเขียนเป็นคำถามที่คุณถามกับบรรทัดโค้ดที่เจาะจงได้ แต่ละข้อลิงก์ไปบทที่อธิบายว่าทำไมคำถามนั้นถึงสำคัญ เปิดไว้อีกแท็บระหว่างรีวิวจริง
+
+## Ownership & Borrowing
+
+- ทุก `.clone()` มีเหตุผลที่คุณอธิบายได้ในหนึ่งประโยคไหม ("จำเป็นเพราะ X ยังใช้ตัวเดิมอยู่หลังจากนี้")? — [Ownership & Moves](/rust/th/ownership-borrowing/ownership-moves/)
+- parameter `&Vec<T>` หรือ `&String` ตรงนี้เป็น `&[T]` หรือ `&str` แทนได้ไหม? — [Slices](/rust/th/ownership-borrowing/slices/)
+- `Rc<RefCell<T>>` ตัวนี้ต้องการหลายเจ้าของและ interior mutability จริงไหม หรือ field ธรรมดากับการยืมแบบ `&mut` ก็พอแล้ว? — [Smart Pointers](/rust/th/ownership-borrowing/smart-pointers/)
+- ทุก `unsafe` block มี comment `// SAFETY:` อธิบายว่าข้อสมมติไหนทำให้มัน sound ไหม? — [The Borrow Checker Model](/rust/th/runtime-internals/borrow-checker-model/)
+- ทุก lifetime annotation แบบชัดเจนเพิ่มข้อมูลที่ elision จะไม่ infer ให้อยู่แล้วไหม? — [Lifetimes](/rust/th/traits-generics/lifetimes/)
+- `'static` ตรงนี้เพราะข้อมูลมีชีวิตอยู่ตลอดโปรแกรมจริง ๆ หรือเพราะมันปิดปาก error? — [Lifetimes](/rust/th/traits-generics/lifetimes/)
+- `mem::forget` หรือ `Box::leak` ปรากฏอยู่ไหม และถ้ามี leak นั้นตั้งใจและคุ้มกับ comment ที่อธิบายมันไหม? — [Drop and RAII](/rust/th/runtime-internals/drop-and-raii/)
+
+## Types & Traits
+
+- ก่อนจะหยิบ `dyn Trait` trait นี้ต้องการ method ที่ return `Self` หรือ generic method ที่ทำให้มัน dyn-incompatible อยู่แล้วไหม? — [Trait Objects](/rust/th/traits-generics/trait-objects/)
+- `impl Trait` ถูกใช้แค่ในตำแหน่ง argument หรือ return เท่านั้น ไม่เคยเป็น field type ของ struct ใช่ไหม? — [Generics](/rust/th/traits-generics/generics/)
+- ทุก `#[derive(Copy)]` อยู่บน type ที่เล็กพอที่ implicit copy จะถูกจริง ๆ ไหม? — [Structs](/rust/th/structs-enums-matching/structs/)
+- float (`f32`/`f64`) ถูกใช้เป็น `HashMap`/`HashSet` key หรือถูกเปรียบเทียบด้วย `==` ตรง ๆ บ้างไหม? — [HashMap](/rust/th/collections-iterators/hashmap/)
+
+## Errors & Panics
+
+- ทุก `.unwrap()`/`.expect(...)` อยู่บนค่าที่ infallible จริง ๆ ตรงนี้ ไม่ใช่ input ผู้ใช้, I/O, หรือ network response ใช่ไหม? — [Panics](/rust/th/error-handling/panic/)
+- มี `match` บน enum ตัวไหนมี `_ =>` arm ไหม และถ้ามี enum นั้นมีโอกาสโตขึ้นเป็น variant ใหม่ในอนาคตได้จริงไหม? — [Pattern Matching](/rust/th/structs-enums-matching/pattern-matching/)
+- `.is_some()`/`.is_ok()` ตามด้วย `.unwrap()` แยกกันคนละขั้นบ้างไหม ในที่ที่ `if let`/`match` ทำทั้งสองอย่างในขั้นตอนเดียวได้? — [Option](/rust/th/structs-enums-matching/option/)
+- `Box<dyn Error>` ถูกใช้เป็น public return type ของ library ในที่ที่ผู้เรียกอาจต้อง match กับ failure เฉพาะเจาะจงไหม? — [Custom Errors](/rust/th/error-handling/custom-errors/)
+- มี `panic!` ตัวไหนครอบคลุมเงื่อนไขที่ผู้เรียกอาจอยากกู้คืนได้อย่างสมเหตุสมผลไหม? — [Result](/rust/th/error-handling/result/)
+
+## Iterators & Collections
+
+- `for i in 0..collection.len()` loop ตัวไหนใช้ `i` แค่ index collection เดียวกันนั้นไหม? — [Iterators](/rust/th/collections-iterators/iterators/)
+- `.collect()` ถูกใช้ต่อทันทีด้วย method รูปร่าง iterator อีกตัว (`.contains(...)`, `.any(...)`, `.len()`) ไหม? — [Iterators](/rust/th/collections-iterators/iterators/)
+- string byte-slice ตัวไหน (`&s[a..b]`) สมมติว่าเป็น ASCII โดยไม่เช็คว่า `a`/`b` ตกบน `char` boundary สำหรับ input ที่ไม่ใช่ ASCII ไหม? — [Vec and String](/rust/th/collections-iterators/vec-string/)
+- `as` cast ระหว่าง integer type ตัวไหนเสี่ยง truncate อย่างเงียบ ๆ บน input ที่ไม่ใช่ literal เล็ก ๆ ไหม? — [Data Types](/rust/th/basics/data-types/)
+
+## Concurrency & Async
+
+- `Arc<Mutex<T>>` ตัวนี้ต้องมีชีวิตอยู่นานกว่าฟังก์ชันที่ spawn thread ของมันไหม หรือ `thread::scope` จะตัดความต้องการ `Arc` ออกได้? — [Threads](/rust/th/concurrency-testing-cargo/threads/)
+- integer ตัวเดียวที่ `Mutex` ปกป้องอยู่เป็น atomic ธรรมดาแทนได้ไหม? — [Threads](/rust/th/concurrency-testing-cargo/threads/)
+- `std::sync::MutexGuard` ตัวไหนยังอยู่ใน scope ข้าม `.await` point ไหม? — [Async Intro](/rust/th/concurrency-testing-cargo/async-intro/)
+- `async fn` ตัวไหนเรียก `thread::sleep` หรือ blocking call อื่นแทนที่จะเป็น async-aware equivalent ไหม? — [Async Intro](/rust/th/concurrency-testing-cargo/async-intro/)
+- `mpsc::channel()` (ไม่มีขอบเขต) ถูกใช้ในที่ที่ producer อาจเร็วกว่า consumer ได้จริงไหม? — [Channels](/rust/th/concurrency-testing-cargo/channels/)
+
+## Cargo & Tests
+
+- ทุก `#[should_panic]` ระบุ `expected = "..."` ไหม? — [Cargo Tests](/rust/th/concurrency-testing-cargo/cargo-tests/)
+- ทุก body ของฟังก์ชัน `#[test]` มี `assert!`/`assert_eq!`/`assert_ne!` อย่างน้อยหนึ่งตัวไหม? — [Cargo Tests](/rust/th/concurrency-testing-cargo/cargo-tests/)
+- `cargo clippy -- -D warnings` รันสะอาดไหม และมันถูกรันด้วย AI-smell lint จาก tool ladder เปิดใช้งานจริงหรือยัง? — [Verification Tools](/rust/th/reading-rust/verification-tools/)
+- resolver กับ `rust-version` ใน `Cargo.toml` ถูกตั้งไว้อย่างตั้งใจ ไม่ปล่อยให้เป็น default ใช่ไหม? — [Cargo Tests](/rust/th/concurrency-testing-cargo/cargo-tests/)
+
+## Compiler พูดว่าอย่างไร: การแก้ไข Vec ระหว่างที่กำลัง Iterate มันอยู่
+
+checklist ข้อหนึ่ง — "มีอะไรดูเหมือนจะทำให้ iterator invalid กลาง loop ไหม" — คุ้มที่จะเห็นมันถูกปฏิเสธตรง ๆ เพราะ Rust ปฏิเสธสิ่งนี้ที่ compile time แทนที่จะปล่อยให้มันทำลาย memory ที่ runtime แบบที่จะเกิดในภาษาที่มีกฎ aliasing หลวมกว่านี้:
+
+```rust
+// @expect-error E0502
+fn main() {
+    let mut v = vec![1, 2, 3];
+    for x in &v {
+        v.push(*x);
+    }
+}
+```
+
+```text
+error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable
+ --> src/main.rs:4:9
+  |
+3 |     for x in &v {
+  |              --
+  |              |
+  |              immutable borrow occurs here
+  |              immutable borrow later used here
+4 |         v.push(*x);
+  |         ^^^^^^^^^^ mutable borrow occurs here
+```
+
+`for x in &v` ถือ immutable borrow ของ `v` ตลอดทั้ง loop; `v.push(*x)` ต้องการ mutable borrow ซึ่งอยู่ร่วมกับมันไม่ได้ ข้อผิดพลาดเฉพาะนี้ — การ append เข้า collection ระหว่างที่ iterate มันอยู่ — เป็น undefined behavior ในภาษาอื่นหลายภาษา (backing array ที่ resize อาจทำให้ `x` ชี้ไปที่ memory ที่ถูกปล่อยแล้วหรือเก่าไป) แต่ที่นี่เป็น compile error แทน
+
+## เวอร์ชันสั้นแบบ Copy-Paste ได้
+
+สำหรับการผ่านแบบเร็วหรือ PR description นี่อัดทุกคำถามข้างบนให้เหลือแค่วลี:
+
+```text
+Ownership: unexplained .clone() / &Vec or &String params / Rc<RefCell> as default / unsafe
+  without SAFETY / decorative lifetimes / 'static-to-silence / mem::forget or Box::leak
+Types: dyn where impl/enum would do / impl Trait in a field / Copy on a large struct /
+  float as a HashMap key or compared with ==
+Errors: unwrap on fallible input / _ => on a growable enum / is_some+unwrap / Box<dyn
+  Error> in a library API / panic! on a recoverable condition
+Iterators: index loop instead of iterator / needless collect / byte-slice on non-ASCII /
+  as-cast truncation risk
+Concurrency: Arc<Mutex> where scope/atomic would do / lock held across .await /
+  thread::sleep in async / unbounded channel
+Cargo & tests: should_panic without expected / test with no assert / clippy not run
+  with -D warnings / resolver and rust-version left to default
+```
+
+## Grep List
+
+ก่อนจะอ่าน body ของฟังก์ชันแม้แต่ตัวเดียว รันคำสั่งนี้บนไฟล์ (หรือ diff) เพื่อดูว่ารายการที่ signal สูงสุดของ checklist กระจุกตัวอยู่ตรงไหน:
+
+```bash
+grep -nE 'clone\(\)|unwrap\(\)|expect\(|unsafe|'"'"'static|Rc<RefCell|Box<dyn Error|as u|_ =>|mem::forget|#\[allow|\.lock\(\)\.unwrap\(\)' src/**/*.rs
+```
+
+ไม่กี่ hit กระจายอยู่ในไฟล์ใหญ่ ๆ เป็นเรื่องปกติ hit ห้าหกตัวกระจุกอยู่ในฟังก์ชันเดียวคือวิธีที่เร็วที่สุดของ checklist ในการชี้ว่าควรเริ่มอ่านอย่างละเอียดตรงไหน
+
+export const cleanReviewCode = `struct Order {
+    items: Vec<(String, u32)>, // (name, price in cents)
+}
+
+// &[...] not &Vec<...>, &str not &String -- accepts strictly more callers
+fn total_cents(items: &[(String, u32)]) -> u32 {
+    items.iter().map(|(_, price)| price).sum()
+}
+
+fn format_receipt(order: &Order) -> String {
+    let mut lines = Vec::new();
+    for (name, price) in &order.items { // iterator, not an index loop
+        lines.push(format!("{name}: {price}"));
+    }
+    lines.push(format!("total: {}", total_cents(&order.items)));
+    lines.join("\\n")
+}
+
+fn main() {
+    let order = Order {
+        items: vec![
+            ("coffee".to_string(), 350),
+            ("bagel".to_string(), 275),
+        ],
+    };
+    println!("{}", format_receipt(&order));
+}`;
+
+<Playground code={cleanReviewCode} />
+
+โค้ดนี้ผ่านทุกข้อใน checklist ข้างบน: ไม่มี `.clone()` เลยสักที่, `&[(String, u32)]` แทน `&Vec<...>`, iterator ธรรมดาแทน index loop, ไม่มี `.unwrap()` บนอะไรที่ fallible เลย (ไม่มีอะไร fallible ตรงนี้เลย) และไม่มี suppression เลย การจำได้ว่าการผ่านแบบสะอาดหน้าตาเป็นอย่างไรมีประโยชน์พอ ๆ กับการจำได้ว่ากลิ่นไม่ดีหน้าตาเป็นอย่างไร — มันคือ baseline ที่ catalog ส่วนที่เหลือของโมดูลนี้ถูกวัดเทียบด้วย
+
+<Callout title="Checklist เป็นจุดเริ่มต้น ไม่ใช่คำตัดสิน">
+ไม่มีคำถามข้อไหนมีคำตอบที่ถูกต้องเป็นสากล — `.clone()` อาจเป็นตัวเลือกที่ถูกต้องพอดี `Box<dyn Error>` อาจเป็นตัวเลือกที่ถูกต้องแม้ใน library ที่มีชุด failure เปิดกว้างจริง ๆ `Arc<Mutex<T>>` อาจ reason ได้ง่ายกว่า atomic แม้ atomic จะใช้งานได้ทางเทคนิค งานของ checklist คือทำให้แน่ใจว่าคุณ*ถาม*คำถามนั้นแล้ว ไม่ใช่ยื่นคำตอบให้คุณ
+</Callout>
+
+## Mental Model
+
+Checklist แลก depth กับ coverage: มันจะไม่จับ logic bug ที่ subtle เฉพาะ domain ของ codebase นี้ แต่มันเผยรูปร่างของปัญหาสองโหลเดิมได้อย่างสม่ำเสมอในไฟล์ Rust ใด ๆ ในเวลาคงที่ ไม่ว่าคุณจะคุ้นเคยกับ codebase นี้แค่ไหน นั่นแหละคือการแลกที่การอ่านผ่านครั้งแรกบนโค้ดที่ไม่คุ้นเคย (หรือโค้ดที่ AI สร้าง) ควรทำ — หาก่อนว่าความเสี่ยงกระจุกอยู่ตรงไหนก่อนที่จะใช้เวลาอ่านลึกกับฟังก์ชันใดฟังก์ชันหนึ่ง
+
+## Trade-offs
+
+การรัน grep list กับ checklist ทุกครั้งที่รีวิวเพิ่มเวลาสองสามนาทีให้กับการผ่านที่ "แค่อ่าน diff" จะไม่ใช้เวลาแบบนั้น — และบน diff ที่กลายเป็นว่าสะอาดล้วน ๆ เวลานั้นไม่ให้ finding อะไรเลย ทางเลือกคือข้ามไปอ่าน logic ตรง ๆ เร็วกว่าบน diff ที่สะอาด และแย่กว่าพอดีบน diff ที่มันสำคัญที่สุด: ไฟล์ที่มี pattern พวกนี้หลายตัวกระจุกอยู่ด้วยกัน ซึ่งการอ่านแบบไม่มีโครงสร้างมีโอกาสน้อยที่สุดที่จะสังเกตว่ามันเป็นกลุ่มก้อน แทนที่จะเห็นเป็นทางเลือกแยกกันที่ให้อภัยได้ทีละอัน
+
+## Common Misconceptions
+
+- **"checklist ข้อไหนถูก flag แปลว่าโค้ดผิด"** มันแปลว่าโค้ดนั้นสมควรได้รับคำถามที่เจาะจง หลายข้อ (`.clone()` ที่จำเป็นจริง ๆ, `Box<dyn Error>` ที่เปิดกว้างอย่างชอบธรรม) คาดว่าจะผ่านคำถามนั้นโดยไม่ถูก flag
+- **"ถ้า clippy สะอาด checklist ก็ไม่จำเป็น"** หลายข้อใน checklist — channel ไม่มีขอบเขต, `Arc<Mutex<T>>` ในที่ที่ scope จะพอ, test ที่ไม่มี assertion — ไม่มี clippy lint ที่ตรงกันเลย checklist กับ tool ladder (บทถัดไป) ครอบคลุมพื้นที่ที่ต่างกัน ทับกันแค่บางส่วน
+- **"grep list จับทุกอย่างที่ checklist ครอบคลุม"** มันจับเฉพาะส่วนที่ grep ได้ทาง syntax เท่านั้น `_ =>` catch-all, lifetime ประดับ, และ "design นี้ต้องการหลายเจ้าของจริงไหม" ล้วนต้องการการอ่าน ไม่ใช่แค่การจับคู่ text
+
+## อ่านโค้ดที่ AI เขียน
+
+การรัน grep list บนไฟล์ที่ AI สร้างมักจะเผย hit หลายตัวในฟังก์ชันเดียว ซึ่งเป็น signal "กลุ่มก้อน" ที่ checklist ถูกออกแบบมาให้จับพอดี
+
+<SpotTheBug code={`use std::rc::Rc;
+use std::cell::RefCell;
+
+struct Cache {
+    data: Rc<RefCell<Vec<String>>>,
+}
+
+fn add_entry(cache: Rc<RefCell<Vec<String>>>, entry: String) {
+    cache.borrow_mut().push(entry);
+}
+
+fn print_all(cache: Rc<RefCell<Vec<String>>>) {
+    for item in cache.borrow().iter() {
+        println!("{item}");
+    }
+}
+
+fn main() {
+    let cache = Rc::new(RefCell::new(Vec::new()));
+    add_entry(cache.clone(), "first".to_string());
+    add_entry(cache.clone(), "second".to_string());
+    print_all(cache.clone());
+}
+`}>
+การ grep ไฟล์นี้หา term ของ checklist เจอ `Rc<RefCell` สามครั้งและ `.clone()` สามครั้ง ทั้งหมดอยู่ในไฟล์ 20 บรรทัดที่มี thread เดียวและไม่มีความต้องการ shared-ownership จริง ๆ เลย -- `main` เป็นผู้เรียกตัวเดียว และมันเรียกทุกอย่างตามลำดับ ไม่มีอะไรตรงนี้ต้องการเจ้าของสองคนมีชีวิตอยู่พร้อมกันหรือ interior mutability ข้าม alias เลย `&mut Vec<String>` ธรรมดาที่ส่งแบบ mutable reference ทำงานเดียวกันได้โดยไม่มี `Rc`, ไม่มี `RefCell`, และไม่มี `.clone()` เลยสักที่: `fn add_entry(cache: &mut Vec<String>, entry: String)` เรียกเป็น `add_entry(&mut cache, "first".to_string())` grep list ไม่ได้บอกสิ่งนี้ด้วยตัวมันเอง -- `Rc<RefCell` สาม hit ในไฟล์เล็ก ๆ เดียวคือ signal ที่บอกว่า "ไปอ่านฟังก์ชันนี้แล้วถามว่ามันจำเป็นต้องอยู่ตรงนี้ไหม" และการอ่านมันคือสิ่งที่ยืนยันว่าคำตอบคือไม่
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+รัน grep list ก่อนเพื่อหาว่า pattern ที่ signal สูงสุดกระจุกอยู่ตรงไหน แล้วค่อยใช้ checklist หกหมวดกับจุดนั้นเป๊ะ ๆ ก่อนจะอ่านไฟล์ที่เหลือทีละบรรทัด
+</Callout>
+
+export const quizReviewChecklist = [
+    {
+        q: "จุดประสงค์จริงของ checklist ตามบทนี้คืออะไร?",
+        options: [
+            "ให้คำตัดสินถูก-ผิดที่ชัดเจนกับทุก clone(), unsafe block, และ Arc<Mutex<T>> ในไฟล์",
+            "รับประกันว่า clippy จะรายงาน warning ศูนย์เมื่อทุกข้อถูกจัดการแล้ว",
+            "ทำให้แน่ใจว่าคำถามที่เจาะจงถูกถามที่จุดเสี่ยงที่รู้จักประมาณ 24 จุด ไม่ใช่ยื่นคำตอบที่ตัดสินไว้แล้วให้คุณ",
+            "แทนที่การอ่านโค้ดทั้งหมดด้วยคำสั่ง automated เดียว",
+        ],
+        answer: 2,
+        explain: "บทนี้บอกชัดว่าข้อที่ถูก flag แปลว่าสมควรถามคำถาม ไม่ใช่ว่าโค้ดผิดโดยอัตโนมัติ -- clone บางอัน, การใช้ Box<dyn Error> บางแบบ, และการเลือก Arc<Mutex<T>> บางกรณีเป็นตัวเลือกที่ถูกต้อง",
+    },
+    {
+        q: "ทำไมโค้ดนี้ compile ไม่ผ่าน?\n```rust\nfn main() {\n    let mut v = vec![1, 2, 3];\n    for x in &v {\n        v.push(*x);\n    }\n}\n```",
+        options: [
+            "error[E0382] -- ใช้ moved value `v`",
+            "error[E0502] -- ยืม `v` แบบ mutable ไม่ได้เพราะถูกยืมแบบ immutable โดย iterator ของ `for` loop อยู่แล้ว",
+            "error[E0499] -- ยืม `v` แบบ mutable มากกว่าหนึ่งครั้งในเวลาเดียวกันไม่ได้",
+            "compile ผ่าน แต่ panic ที่ runtime ด้วย out-of-bounds index",
+        ],
+        answer: 1,
+        explain: "`for x in &v` ถือ immutable borrow ของ v ตลอด body ของ loop `v.push(*x)` ต้องการ mutable borrow ซึ่งอยู่ร่วมกับ immutable borrow ของ loop ไม่ได้ -- E0502 ถูกจับที่ compile time",
+    },
+    {
+        q: "ข้อไหนใน checklist ที่ไม่มี clippy lint แบบ default หรือ off-by-default ที่ตรงกันเลย ตามที่โมดูลนี้บอก?",
+        options: [
+            "Index loop ที่ใช้ loop variable แค่ index collection เดียวกัน",
+            "mpsc::channel() แบบไม่มีขอบเขตในที่ที่ producer อาจเร็วกว่า consumer ได้จริง",
+            "is_some() ตามด้วย unwrap() แยกกันทันที",
+            "field ของ struct ที่เขียนเป็น `impl Trait`",
+        ],
+        answer: 1,
+        explain: "needless_range_loop, unnecessary_unwrap, และกรณี impl-Trait-ใน-field (compile error, E0562) ล้วนมีเครื่องมือที่จับได้ ส่วน channel ไม่มีขอบเขตเป็นความเสี่ยงจริงไหมต้องอาศัยการคิดเรื่องความเร็ว producer/consumer -- ไม่มี lint ตัวไหนมีความเห็นเรื่องนั้น",
+    },
+    {
+        q: "ทำไมบทนี้ถึงแนะนำให้รัน grep list ก่อนอ่าน body ของฟังก์ชัน แทนที่จะรันทีหลัง?",
+        options: [
+            "เพราะ grep เร็วกว่ามนุษย์ในการหา logic bug",
+            "เพราะการกระจุกตัวของ match หลายตัวในฟังก์ชันเดียวเป็น signal ที่แรงกว่า match เดียวที่อ่านแยกกัน และมันบอกว่าควรใช้เวลาอ่านลึกที่ไหนก่อน",
+            "เพราะ clippy ต้องการให้ grep list รันก่อนไม่งั้นมันจะไม่เจออะไรเลย",
+            "เพราะ grep list แทนที่ความจำเป็นในการอ่าน checklist ไปเลย",
+        ],
+        answer: 1,
+        explain: "คุณค่าของ grep list คือการแสดงว่า term ที่ signal สูงสุดของ checklist หลายตัวกระจุกอยู่ที่เดียวกันตรงไหน ซึ่งพลาดง่ายเมื่ออ่านไฟล์จากบนลงล่างธรรมดา แต่ชัดเจนทันทีที่นับ hit ต่อฟังก์ชัน",
+    },
+    {
+        q: "ในตัวอย่าง SpotTheBug สามฟังก์ชันแต่ละตัวรับ `Rc<RefCell<Vec<String>>>` โดย value และผู้เรียก clone Rc ก่อนทุก call จริง ๆ แล้ว hit ของ `Rc<RefCell` กับ `clone()` จาก grep list บอกอะไรผู้รีวิวตรงนี้?",
+        options: [
+            "ว่าโค้ดนี้จะ compile ไม่ผ่านแน่นอน",
+            "ว่ามีกลุ่มก้อนที่คุ้มค่าจะสืบสวน -- และการสืบสวนตรงนี้เผยผู้เรียกแบบ single-threaded ตามลำดับที่ไม่มีความต้องการหลายเจ้าของหรือ interior-mutability จริง ดังนั้น `&mut Vec<String>` ธรรมดาจะทำงานเดียวกันได้โดยไม่มี Rc, RefCell, หรือ clone เลย",
+            "ว่า Rc<RefCell<T>> เป็นตัวเลือกที่ผิดเสมอในโปรแกรม Rust ใด ๆ",
+            "ว่า call ของ clone() แต่ละตัวเป็น redundant clone ที่ clippy default lint จะจับได้อยู่แล้ว",
+        ],
+        answer: 1,
+        explain: "hit จาก grep เป็น signal ให้ไปอ่านฟังก์ชัน ไม่ใช่คำตัดสินด้วยตัวมันเอง การอ่านมันตรงนี้แสดงว่า main เป็นผู้เรียกตัวเดียว เรียกทุกอย่างตามลำดับ -- ไม่มีความต้องการ aliasing หรือหลายเจ้าของเลย ดังนั้นชั้น Rc<RefCell<...>> ทั้งหมดจึงเป็นเครื่องจักรที่ไม่จำเป็น",
+    },
+    {
+        q: "ตาม checklist เมื่อไหร่ที่ lifetime annotation แบบชัดเจนอย่าง `<'a>` ควรถูกมองว่าเป็นกลิ่นไม่ดี?",
+        options: [
+            "เมื่อไหร่ก็ตามที่ฟังก์ชันรับ reference parameter มากกว่าหนึ่งตัว",
+            "เสมอ -- lifetime แบบชัดเจนไม่ควรปรากฏใน Rust ที่ idiomatic เลย",
+            "เมื่อมันไม่เพิ่มข้อมูลอะไรที่กฎ lifetime elision ของ Rust จะไม่ infer ให้อัตโนมัติอยู่แล้ว",
+            "เฉพาะเมื่อฟังก์ชันนั้นใช้ `unsafe` ด้วย",
+        ],
+        answer: 2,
+        explain: "checklist ข้อนี้พูดถึง lifetime ที่ประดับโดยเฉพาะ -- elision ครอบคลุมกรณี single-input-reference ทั่วไปอยู่แล้ว 'a แบบชัดเจนตรงนั้นเป็นแค่เสียงรบกวนล้วน ๆ ไม่ใช่กลิ่นไม่ดีทุกที่ที่ lifetime ปรากฏ",
+    },
+];
+
+<Quiz client:visible id="reading-rust/review-checklist" questions={quizReviewChecklist} />
+
+<ProgressTracker client:visible id="reading-rust/review-checklist" />

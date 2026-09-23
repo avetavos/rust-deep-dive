@@ -1,0 +1,1541 @@
+---
+title: 'AI Bug Catalog'
+description: 'pattern จริง 24 แบบที่ AI assistant สร้างขึ้นใน Rust: snippet, อาการจริง, การแก้, และเครื่องมือไหนที่จับมันได้'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+pattern ทุกอันด้านล่างถูกเขียนให้ดูเหมือนโค้ด Rust ที่ AI สร้างขึ้นแบบปกติ น่าเชื่อถือ — แบบที่โผล่ใน pull request จริง แต่ละอันมีโครงสี่ส่วนเหมือนกัน: snippet, อาการที่สังเกตจริง (compiler diagnostic, runtime panic, clippy lint, หรือ behavior ที่ผิด — ทุกอันเป็น output ที่ตรวจสอบจริงแล้ว ไม่ใช่การเดา), การแก้, และ — สำคัญที่สุด — **เครื่องมือไหนที่จับมันได้จริง** คอลัมน์สุดท้ายนั้นคือประเด็นของ catalog ทั้งหมดนี้: บางอันถูกจับอัตโนมัติทันทีที่คุณรัน `cargo clippy -- -D warnings` หลายอันที่แย่ที่สุดไม่ถูกจับโดยอะไรเลยนอกจากมนุษย์ที่รู้ว่าต้องมองตรงไหน
+
+## Ownership & Borrowing
+
+#### 1. Clone-to-silence
+
+โค้ดที่ AI สร้างมักจะเอื้อมมือไปหยิบ `.clone()` ทันทีที่ borrow checker บ่น ไม่ว่าจะต้องการเจ้าของตัวที่สองจริง ๆ หรือไม่
+
+```rust
+#[derive(Clone)]
+struct Config {
+    name: String,
+}
+
+fn print_name(cfg: Config) {
+    println!("{}", cfg.name);
+}
+
+fn main() {
+    let cfg = Config { name: String::from("prod") };
+    print_name(cfg.clone());
+    print_name(cfg.clone()); // this is the last use of `cfg` -- no clone needed here
+}
+```
+
+โค้ดนี้ compile ผ่านและรันได้ปกติ ซึ่งเป็นเหตุผลว่าทำไมมันถึงรอดจากการรีวิว `.clone()` ตัวที่สองสูญเปล่าล้วน ๆ: `cfg` ไม่ถูกใช้อีกหลังบรรทัดนี้เลย ดังนั้นค่านี้ move ได้เลยแทน
+
+```text
+error: redundant clone
+  --> src/main.rs:13:19
+   |
+13 |     print_name(cfg.clone());
+   |                   ^^^^^^^^ help: remove this
+   |
+note: this value is dropped without further use
+  --> src/main.rs:13:16
+   |
+13 |     print_name(cfg.clone());
+   |                ^^^
+```
+
+```rust
+#[derive(Clone)]
+struct Config {
+    name: String,
+}
+
+fn print_name(cfg: Config) {
+    println!("{}", cfg.name);
+}
+
+fn main() {
+    let cfg = Config { name: String::from("prod") };
+    print_name(cfg.clone()); // still needed: cfg is used again below (via a hypothetical caller)
+    print_name(cfg); // last use -- move instead of clone
+}
+```
+
+**เครื่องมือ:** `clippy::redundant_clone` — lint จริง แต่ปิดเป็น default ไว้; รันด้วย `cargo clippy -- -W clippy::redundant_clone` **บทเรียน:** [Ownership & Moves](/rust/th/ownership-borrowing/ownership-moves/)
+
+export const cloneToSilenceCode = `#[derive(Clone)]
+struct Config {
+    name: String,
+}
+
+fn print_name(cfg: Config) {
+    println!("{}", cfg.name);
+}
+
+fn main() {
+    let cfg = Config { name: String::from("prod") };
+    print_name(cfg.clone());
+    print_name(cfg.clone()); // last use of cfg -- no clone needed
+}`;
+
+<Playground code={cloneToSilenceCode} />
+
+#### 2. `Rc<RefCell<T>>` เป็นตัวเลือกแรกเสมอ
+
+โค้ดที่ AI สร้างมักจะเอื้อมมือไปหยิบ `Rc<RefCell<T>>` ทันทีที่โค้ดสองส่วนต้องแตะค่าเดียวกัน โดยไม่เช็คว่า plain ownership, การยืมแบบ `&mut`, หรือการจัดโครงสร้างใหม่จะใช้ได้หรือไม่
+
+```rust
+// @expect-panic
+use std::cell::RefCell;
+use std::rc::Rc;
+
+struct Counter {
+    value: RefCell<i32>,
+}
+
+fn bump_twice(counter: &Rc<Counter>) {
+    let mut a = counter.value.borrow_mut();
+    let mut b = counter.value.borrow_mut(); // second exclusive borrow while `a` is still alive
+    *a += 1;
+    *b += 1;
+}
+
+fn main() {
+    let counter = Rc::new(Counter { value: RefCell::new(0) });
+    bump_twice(&counter);
+    println!("{}", counter.value.borrow());
+}
+```
+
+`RefCell` ย้ายการเช็ค borrow จาก compile time ไป runtime — โค้ดนี้ compile ผ่านสะอาด แล้ว panic ทันทีที่รัน:
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:10:31:
+RefCell already borrowed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+```rust
+struct Counter {
+    value: i32, // plain field -- no Rc, no RefCell needed; nothing here is actually shared
+}
+
+fn bump_twice(counter: &mut Counter) {
+    counter.value += 1;
+    counter.value += 1;
+}
+
+fn main() {
+    let mut counter = Counter { value: 0 };
+    bump_twice(&mut counter);
+    println!("{}", counter.value);
+}
+```
+
+**เครื่องมือ:** ไม่มี — มนุษย์เท่านั้น การละเมิด borrow ของ `RefCell` เป็น runtime panic ไม่ใช่ compile error หรือ clippy lint ไม่มีอะไรนอกจากรันโค้ด (หรือรีวิว borrow pattern ด้วยมือ) ที่จะเผยปัญหานี้ **บทเรียน:** [Smart Pointers](/rust/th/ownership-borrowing/smart-pointers/)
+
+#### 3. Lifetime ประดับและ `'static` ที่ใช้ปิดปาก compiler
+
+สองหน้าของนิสัยเดียวกัน: เขียน lifetime แบบชัดเจนที่ elision จะ infer ให้อยู่แล้ว หรือแปะ `'static` บน bound เพื่อทำให้ error หายไปแทนที่จะแก้ปัญหา ownership จริง
+
+```rust
+fn first_word<'a>(s: &'a str) -> &'a str {
+    s.split_whitespace().next().unwrap_or("")
+}
+
+fn main() {
+    println!("{}", first_word("hello world"));
+}
+```
+
+`'a` ตรงนี้คือสิ่งที่กฎ lifetime elision ของ Rust จะสร้างให้อัตโนมัติอยู่แล้ว — มันไม่เพิ่มข้อมูลอะไรเลย มีแต่เสียงรบกวน:
+
+```text
+warning: the following explicit lifetimes could be elided: 'a
+ --> src/main.rs:1:15
+  |
+1 | fn first_word<'a>(s: &'a str) -> &'a str {
+  |               ^^      ^^          ^^
+  |
+  = note: `#[warn(clippy::needless_lifetimes)]` on by default
+help: elide the lifetimes
+  |
+1 - fn first_word<'a>(s: &'a str) -> &'a str {
+1 + fn first_word(s: &str) -> &str {
+  |
+```
+
+```rust
+fn first_word(s: &str) -> &str {
+    s.split_whitespace().next().unwrap_or("")
+}
+
+fn main() {
+    println!("{}", first_word("hello world"));
+}
+```
+
+**เครื่องมือ:** `clippy::needless_lifetimes` — เปิดเป็น default ส่วนแบบ `'static`-เพื่อปิดปาก (leak หรือ clone เพื่อทำให้ error หายไปแทนที่จะจัดโครงสร้าง ownership ใหม่) เป็นกลิ่นไม่ดีทาง design ที่ไม่มี lint ตัวไหนจับได้ **บทเรียน:** [Lifetimes](/rust/th/traits-generics/lifetimes/)
+
+#### 4. `unsafe` ที่ไม่มี comment `// SAFETY:`
+
+โค้ดที่ AI สร้างบางครั้งเอื้อมมือไปหยิบ `unsafe` (มักเพื่อ indexing หรือ pointer operation แบบไม่เช็ค) โดยไม่อธิบายว่าทำไมข้อสมมติที่ compiler ตรวจไม่ได้จึงเป็นจริง
+
+```rust
+fn read_first(buf: &[u8]) -> u8 {
+    unsafe { *buf.get_unchecked(0) }
+}
+
+fn main() {
+    println!("{}", read_first(&[1, 2, 3]));
+}
+```
+
+โค้ดนี้ compile ผ่านและสำหรับ input นี้รันได้ปกติ — แต่ไม่มีอะไรตรงนี้ให้ผู้รีวิว (หรือคนแก้ไขในอนาคต) เช็คความ safety ของมันได้เลย:
+
+```text
+error: unsafe block missing a safety comment
+ --> src/main.rs:2:5
+  |
+2 |     unsafe { *buf.get_unchecked(0) }
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: consider adding a safety comment on the preceding line
+```
+
+```rust
+fn read_first(buf: &[u8]) -> u8 {
+    debug_assert!(!buf.is_empty(), "read_first requires a non-empty slice");
+    // SAFETY: caller-checked non-empty via debug_assert above; index 0 is always in bounds.
+    unsafe { *buf.get_unchecked(0) }
+}
+
+fn main() {
+    println!("{}", read_first(&[1, 2, 3]));
+}
+```
+
+**เครื่องมือ:** `clippy::undocumented_unsafe_blocks` — lint จริง ปิดเป็น default; รันด้วย `cargo clippy -- -W clippy::undocumented_unsafe_blocks` **บทเรียน:** [The Borrow Checker Model](/rust/th/runtime-internals/borrow-checker-model/)
+
+#### 5. `mem::forget` ทำให้ memory leak
+
+`std::mem::forget` ปลอดภัยทาง memory — นั่นแหละคือเหตุผลว่าทำไมโค้ดที่ AI สร้างถึงเอื้อมมือไปหยิบมันได้ง่าย (เพื่อหลบปัญหา `Drop` order สักอย่าง) โดยไม่รู้ตัวว่ามัน leak ค่านั้นตลอดไป
+
+```rust
+use std::mem;
+
+fn main() {
+    let data = Box::new(vec![1, 2, 3]);
+    mem::forget(data);
+    println!("done");
+}
+```
+
+โปรแกรม compile ผ่าน รันได้ และ print `done` — ไม่มีอะไรในการรันปกติที่เผย leak นี้เลย leak checker ของ Miri (เปิดเป็น default) เผยมันได้:
+
+```text
+done
+error: memory leaked: alloc382 (Rust heap, size: 24, align: 8), allocated here:
+ --> src/main.rs:4:16
+  |
+4 |     let data = Box::new(vec![1, 2, 3]);
+  |                ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: memory leaked: alloc290 (Rust heap, size: 12, align: 4), allocated here:
+ --> src/main.rs:4:25
+  |
+4 |     let data = Box::new(vec![1, 2, 3]);
+  |                         ^^^^^^^^^^^^^
+
+note: set `MIRIFLAGS=-Zmiri-ignore-leaks` to disable this check
+error: aborting due to 2 previous errors
+```
+
+```rust
+fn main() {
+    let data = Box::new(vec![1, 2, 3]);
+    // just let `data` drop normally at the end of scope -- no forget needed
+    println!("done, will drop: {data:?}");
+}
+```
+
+**เครื่องมือ:** `cargo +nightly miri run` — leak checker ของ Miri จับสิ่งนี้ได้; `cargo build`/`cargo test`/clippy ปกติจับไม่ได้ เพราะ `mem::forget` เป็น safe Rust เต็มตัว **บทเรียน:** [Drop and RAII](/rust/th/runtime-internals/drop-and-raii/)
+
+export const derefForgetCode = `fn main() {
+    let data = Box::new(vec![1, 2, 3]);
+    std::mem::forget(data);
+    println!("done");
+}`;
+
+<Playground code={derefForgetCode} />
+
+## Types & Traits
+
+#### 6. Parameter แบบ owned หรือ reference-to-owned แทนที่จะเป็น borrowed slice
+
+โค้ดที่ AI สร้างมักเขียน `String`, `&String`, หรือ `&Vec<T>` เป็น parameter type ในที่ที่ `&str` หรือ `&[T]` จะรับผู้เรียกได้มากกว่าอย่างเคร่งครัดโดยไม่เสีย functionality อะไรเลย
+
+```rust
+fn total_len(items: &Vec<String>) -> usize {
+    items.iter().map(|s| s.len()).sum()
+}
+
+fn shout(s: &String) -> String {
+    s.to_uppercase()
+}
+
+fn main() {
+    let v = vec![String::from("a"), String::from("bb")];
+    println!("{}", total_len(&v));
+    println!("{}", shout(&v[0]));
+}
+```
+
+```text
+error: writing `&Vec` instead of `&[_]` involves a new object where a slice will do
+ --> src/main.rs:1:21
+  |
+1 | fn total_len(items: &Vec<String>) -> usize {
+  |                     ^^^^^^^^^^^^
+  |
+help: change this to
+  |
+1 - fn total_len(items: &Vec<String>) -> usize {
+1 + fn total_len(items: &[String]) -> usize {
+  |
+
+error: writing `&String` instead of `&str` involves a new object where a slice will do
+ --> src/main.rs:5:13
+  |
+5 | fn shout(s: &String) -> String {
+  |             ^^^^^^^
+  |
+help: change this to
+  |
+5 - fn shout(s: &String) -> String {
+5 + fn shout(s: &str) -> String {
+  |
+```
+
+```rust
+fn total_len(items: &[String]) -> usize {
+    items.iter().map(|s| s.len()).sum()
+}
+
+fn shout(s: &str) -> String {
+    s.to_uppercase()
+}
+
+fn main() {
+    let v = vec![String::from("a"), String::from("bb")];
+    println!("{}", total_len(&v)); // &Vec<String> still coerces to &[String]
+    println!("{}", shout(&v[0])); // &String still coerces to &str
+}
+```
+
+อีกแบบที่เกี่ยวข้องและมองข้ามง่าย: parameter `String` แบบ owned ที่ฟังก์ชันแค่อ่านและไม่เคย mutate หรือเก็บไว้เลย
+
+```rust
+fn shout_owned(s: String) -> String {
+    s.to_uppercase()
+}
+```
+
+```text
+error: this argument is passed by value, but not consumed in the function body
+ --> src/main.rs:1:16
+  |
+1 | fn shout_owned(s: String) -> String {
+  |                ^^^^^^^^^ help: consider changing the type to: `&str`
+```
+
+**เครื่องมือ:** `clippy::ptr_arg` (เปิดเป็น default) จับ `&String`/`&Vec<T>`; `clippy::needless_pass_by_value` (ปิดเป็น default, `-W clippy::needless_pass_by_value`) จับกรณี `String` แบบ owned **บทเรียน:** [Slices](/rust/th/ownership-borrowing/slices/)
+
+#### 7. `impl Trait` เป็น field ของ struct
+
+`impl Trait` ใช้ได้เฉพาะในตำแหน่ง function argument กับ return เท่านั้น — โค้ดที่ AI สร้างบางครั้งพยายามใช้มันเป็น field type โดยอาจเทียบเคียงกับตำแหน่ง return
+
+```rust
+// @expect-error E0562
+trait Shape {
+    fn area(&self) -> f64;
+}
+
+struct Circle {
+    radius: f64,
+}
+
+impl Shape for Circle {
+    fn area(&self) -> f64 {
+        std::f64::consts::PI * self.radius * self.radius
+    }
+}
+
+struct Scene {
+    shape: impl Shape,
+}
+
+fn main() {}
+```
+
+```text
+error[E0562]: `impl Trait` is not allowed in field types
+  --> src/main.rs:16:12
+   |
+16 |     shape: impl Shape,
+   |            ^^^^^^^^^^
+   |
+   = note: `impl Trait` is only allowed in arguments and return types of functions and methods
+```
+
+มีทางแก้จริงสองแบบ และใช้แทนกันไม่ได้: generics แก้ปัญหานี้เมื่อ `Scene` ควรถือ shape type แบบ concrete เดียวต่อการ instantiate หนึ่งครั้ง; `dyn Trait` แก้ปัญหาเมื่อ `Scene` แต่ละตัวต้องการ shape ที่ concrete ต่างกัน
+
+```rust
+trait Shape {
+    fn area(&self) -> f64;
+}
+
+struct Circle {
+    radius: f64,
+}
+
+impl Shape for Circle {
+    fn area(&self) -> f64 {
+        std::f64::consts::PI * self.radius * self.radius
+    }
+}
+
+struct Scene<S: Shape> {
+    shape: S, // one concrete shape type per Scene<S>
+}
+
+// or, if Scene needs to hold *different* shape types across instances:
+struct DynScene {
+    shape: Box<dyn Shape>,
+}
+
+fn main() {
+    let scene = Scene { shape: Circle { radius: 2.0 } };
+    println!("{}", scene.shape.area());
+}
+```
+
+**เครื่องมือ:** rustc, `error[E0562]` — โค้ดนี้ compile ไม่ผ่านเสมอ จึงหลุดออกไปแบบเงียบ ๆ ไม่ได้ **บทเรียน:** [Generics](/rust/th/traits-generics/generics/)
+
+#### 8. `#[derive(Copy)]` บน struct ที่ใหญ่
+
+`Copy` ถูกกฎบน struct ใดก็ตามที่ทุก field เป็น `Copy` ไม่ว่าจะขนาดเท่าไหร่ก็ตาม — ไม่มีอะไรหยุดโค้ดที่ AI สร้างจาก derive มันบน struct ที่ใหญ่จริง ๆ ซึ่งเปลี่ยนทุก "borrow" ที่ผู้เขียนตั้งใจให้เป็น copy เต็มไบต์อย่างเงียบ ๆ
+
+```rust
+#[derive(Clone, Copy)]
+struct Big {
+    data: [u64; 32],
+}
+
+fn consume(b: Big) -> u64 {
+    b.data.iter().sum()
+}
+
+fn main() {
+    let b = Big { data: [1; 32] };
+    println!("{}", consume(b)); // implicit copy, not a move -- `b` is still usable below
+    println!("{}", consume(b)); // second implicit copy
+    println!("{}", std::mem::size_of::<Big>());
+}
+```
+
+```text
+1
+1
+256
+```
+
+ทุกครั้งที่เรียก `consume` จะ copy ทั้ง 256 ไบต์ของ `Big`; เพราะมันเป็น `Copy`, `b` จึงไม่เคยถูก "move ออกไป" ดังนั้นโค้ด compile ผ่าน รันผ่าน และ copy ข้อมูลมากกว่าที่ผู้รีวิวที่ skim หา `.clone()` จะสังเกตเห็นเงียบ ๆ — copy ของ `Copy` เกิดขึ้นโดยไม่มี syntax ให้เห็นเลย
+
+```rust
+#[derive(Clone)] // not Copy -- 256 bytes is too large to copy implicitly on every use
+struct Big {
+    data: [u64; 32],
+}
+
+fn consume(b: &Big) -> u64 { // borrow instead of taking by value
+    b.data.iter().sum()
+}
+
+fn main() {
+    let b = Big { data: [1; 32] };
+    println!("{}", consume(&b));
+    println!("{}", consume(&b));
+}
+```
+
+**เครื่องมือ:** ไม่มี — มนุษย์เท่านั้น (`std::mem::size_of` และ `cargo bloat` วัดต้นทุนได้เมื่อคุณสงสัยแล้ว แต่ไม่มี clippy lint ตัวไหน flag ว่า "type `Copy` นี้ใหญ่เกินไป") **บทเรียน:** [Structs](/rust/th/structs-enums-matching/structs/)
+
+export const bigCopyCode = `#[derive(Clone, Copy)]
+struct Big {
+    data: [u64; 32],
+}
+
+fn consume(b: Big) -> u64 {
+    b.data.iter().sum()
+}
+
+fn main() {
+    let b = Big { data: [1; 32] };
+    println!("{}", consume(b));
+    println!("{}", consume(b));
+    println!("{} bytes, copied on every call", std::mem::size_of::<Big>());
+}`;
+
+<Playground code={bigCopyCode} />
+
+#### 9. `PartialEq` บน float ที่ใช้เป็น key หรือ equality logic
+
+Float implement `PartialEq` แต่จงใจไม่ implement `Eq` (`NaN != NaN`) ซึ่งโค้ดที่ AI สร้างเจอปัญหานี้สองทาง: พยายามใช้ type ที่มี float เป็น `HashMap` key หรือเปรียบเทียบ float ด้วย `==` ซึ่ง rounding error ทำให้การเปรียบเทียบไม่น่าเชื่อถือ
+
+```rust
+// @expect-error E0599
+use std::collections::HashMap;
+
+#[derive(PartialEq)]
+struct Price(f64);
+
+fn main() {
+    let mut m: HashMap<Price, &str> = HashMap::new();
+    m.insert(Price(9.99), "widget");
+    println!("{}", m.len());
+}
+```
+
+```text
+error[E0599]: the method `insert` exists for struct `HashMap<Price, &str>`, but its trait bounds were not satisfied
+ --> src/main.rs:8:7
+  |
+4 | struct Price(f64);
+  | ------------ doesn't satisfy `Price: Eq` or `Price: Hash`
+...
+8 |     m.insert(Price(9.99), "widget");
+  |       ^^^^^^
+  |
+  = note: the following trait bounds were not satisfied:
+          `Price: Eq`
+          `Price: Hash`
+```
+
+แบบเปรียบเทียบตรง ๆ compile ผ่านและแย่กว่า เพราะมันล้มเหลวอย่างเงียบ ๆ กับ input จริง แทนที่จะปฏิเสธการ compile:
+
+```rust
+fn main() {
+    let price = 19.99_f64;
+    let total = 0.0_f64 + 19.99;
+    if total == price {
+        println!("match");
+    } else {
+        println!("no match");
+    }
+}
+```
+
+```text
+error: strict comparison of `f32` or `f64`
+ --> src/main.rs:4:8
+  |
+4 |     if total == price {
+  |        ^^^^^^^^^^^^^^ help: consider comparing them within some margin of error: `(total - price).abs() < error_margin`
+```
+
+```rust
+use std::collections::HashMap;
+
+fn main() {
+    // key on cents (an integer) instead of dollars (a float)
+    let mut m: HashMap<u32, &str> = HashMap::new();
+    m.insert(999, "widget");
+    println!("{}", m.len());
+
+    let price = 19.99_f64;
+    let total = 0.0_f64 + 19.99;
+    if (total - price).abs() < f64::EPSILON {
+        println!("match");
+    } else {
+        println!("no match");
+    }
+}
+```
+
+**เครื่องมือ:** `E0599` (rustc) สำหรับกรณี `HashMap` key — compile ไม่ผ่านเสมอ; `clippy::float_cmp` (ปิดเป็น default, `-W clippy::float_cmp`) สำหรับการเปรียบเทียบ `==` ตรง ๆ ซึ่ง compile ผ่านและอาจ pass หรือ fail แบบคาดเดาไม่ได้ **บทเรียน:** [HashMap](/rust/th/collections-iterators/hashmap/)
+
+## Errors & Panics
+
+#### 10. `unwrap()` บน input ที่ fail ได้
+
+กลิ่นที่พบบ่อยที่สุดในโค้ดที่ AI สร้าง: เอื้อมมือไปหยิบ `.unwrap()` บน `Result`/`Option` ที่มาจากการ parse, I/O, หรือแหล่งอื่นใดที่ไม่ได้รับประกันว่าจะสำเร็จจริง ๆ
+
+```rust
+fn parse_port(raw: &str) -> u16 {
+    raw.parse().unwrap()
+}
+
+fn main() {
+    println!("{}", parse_port("8080"));
+}
+```
+
+โค้ดนี้รันได้ปกติสำหรับ `"8080"` และ panic สำหรับอย่างอื่น — `parse_port("not a number")` จะให้ message แบบ `called `Result::unwrap()` on an `Err` value: ParseIntError { kind: InvalidDigit }` restriction lint ของ clippy flag `unwrap()` ทุกตัวไม่ว่า input จะเป็นอะไร ซึ่งเป็นประเด็นพอดี — มันบอกไม่ได้ว่า call ไหน "ปลอดภัย" ได้มากไปกว่าผู้รีวิวที่ skim เร็ว ๆ:
+
+```text
+error: used `unwrap()` on a `Result` value
+ --> src/main.rs:2:5
+  |
+2 |     raw.parse().unwrap()
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: if this value is an `Err`, it will panic
+  = help: consider using `expect()` to provide a better panic message
+```
+
+```rust
+fn parse_port(raw: &str) -> Result<u16, std::num::ParseIntError> {
+    raw.parse()
+}
+
+fn main() {
+    match parse_port("8080") {
+        Ok(port) => println!("{port}"),
+        Err(e) => eprintln!("invalid port: {e}"),
+    }
+}
+```
+
+**เครื่องมือ:** `clippy::unwrap_used` — restriction lint ปิดเป็น default; รันด้วย `cargo clippy -- -W clippy::unwrap_used` **บทเรียน:** [Panics](/rust/th/error-handling/panic/)
+
+#### 11. `_ =>` กลืน enum variant
+
+catch-all match arm compile ผ่านสะอาดวันนี้ และยังคง compile ผ่านอย่างเงียบ ๆ ต่อไปหลังมี variant ใหม่ถูกเพิ่มแล้วไม่เคยถูกจัดการอย่างชัดเจนตรงไหนที่ใช้ wildcard นี้
+
+```rust
+enum Status {
+    Active,
+    Suspended,
+    Closed,
+}
+
+fn describe(s: Status) -> &'static str {
+    match s {
+        Status::Active => "active",
+        _ => "inactive",
+    }
+}
+
+fn main() {
+    println!("{}", describe(Status::Suspended));
+}
+```
+
+โค้ดนี้ print `inactive` สำหรับ `Suspended` ซึ่งบังเอิญถูกต้องตรงนี้ — แต่ไม่มีอะไรหยุด variant `Status::Pending` จากการถูกเพิ่มเดือนหน้าแล้วตกลงไปใน `_` arm เดียวกันอย่างเงียบ ๆ โดยไม่มีสัญญาณ compile-time ว่า `describe` ต้องถูกดูอีกครั้ง:
+
+```text
+error: wildcard match will also match any future added variants
+  --> src/main.rs:10:9
+   |
+10 |         _ => "inactive",
+   |         ^ help: try: `Status::Suspended | Status::Closed`
+```
+
+```rust
+enum Status {
+    Active,
+    Suspended,
+    Closed,
+}
+
+fn describe(s: Status) -> &'static str {
+    match s {
+        Status::Active => "active",
+        Status::Suspended | Status::Closed => "inactive",
+    }
+}
+
+fn main() {
+    println!("{}", describe(Status::Suspended));
+}
+```
+
+ตอนนี้การเพิ่ม `Status::Pending` จะทำให้เกิด compile error ใน `describe` (และทุกที่ที่ใช้ pattern เดียวกัน) แทนที่จะเป็น behavior เงียบ ๆ ที่อาจผิดได้
+
+**เครื่องมือ:** `clippy::wildcard_enum_match_arm` — restriction lint ปิดเป็น default; รันด้วย `cargo clippy -- -W clippy::wildcard_enum_match_arm` **บทเรียน:** [Pattern Matching](/rust/th/structs-enums-matching/pattern-matching/)
+
+export const wildcardMatchCode = `enum Status {
+    Active,
+    Suspended,
+    Closed,
+}
+
+fn describe(s: Status) -> &'static str {
+    match s {
+        Status::Active => "active",
+        _ => "inactive",
+    }
+}
+
+fn main() {
+    println!("{}", describe(Status::Suspended));
+    println!("{}", describe(Status::Closed));
+}`;
+
+<Playground code={wildcardMatchCode} />
+
+#### 12. `is_some()` ตามด้วย `unwrap()`
+
+แทนที่จะเป็น `if let Some(x) = opt` หรือ `match` โค้ดที่ AI สร้างบางครั้งเช็ค `is_some()` แล้วเรียก `.unwrap()` แยกกันคนละขั้น — ถูกต้อง แต่ทำด้วยมือ (และปลอดภัยน้อยกว่าเมื่อถูกแก้ในอนาคต) ในสิ่งที่ pattern matching ทำในขั้นตอนเดียวอยู่แล้ว
+
+```rust
+fn describe(x: Option<i32>) -> String {
+    if x.is_some() {
+        format!("value: {}", x.unwrap())
+    } else {
+        "none".to_string()
+    }
+}
+
+fn main() {
+    println!("{}", describe(Some(5)));
+}
+```
+
+```text
+warning: called `unwrap` on `x` after checking its variant with `is_some`
+ --> src/main.rs:3:30
+  |
+2 |     if x.is_some() {
+  |     -------------- help: try: `if let Some(<item>) = x`
+3 |         format!("value: {}", x.unwrap())
+  |                              ^^^^^^^^^^
+  |
+  = note: `#[warn(clippy::unnecessary_unwrap)]` on by default
+```
+
+```rust
+fn describe(x: Option<i32>) -> String {
+    if let Some(v) = x {
+        format!("value: {v}")
+    } else {
+        "none".to_string()
+    }
+}
+
+fn main() {
+    println!("{}", describe(Some(5)));
+}
+```
+
+**เครื่องมือ:** `clippy::unnecessary_unwrap` — เปิดเป็น default **บทเรียน:** [Option](/rust/th/structs-enums-matching/option/)
+
+export const isSomeUnwrapCode = `fn describe(x: Option<i32>) -> String {
+    if x.is_some() {
+        format!("value: {}", x.unwrap())
+    } else {
+        "none".to_string()
+    }
+}
+
+fn main() {
+    println!("{}", describe(Some(5)));
+    println!("{}", describe(None));
+}`;
+
+<Playground code={isSomeUnwrapCode} />
+
+#### 13. `Box<dyn Error>` เป็น public error type ของ library
+
+การกลืนทุก failure เข้า `Box<dyn std::error::Error>` เป็น idiomatic ใน binary `main.rs` ที่ไม่มีอะไรข้างล่างต้อง `match` กับสาเหตุที่เฉพาะเจาะจง ใน public API ของ library มันพรากความสามารถนั้นไปจากผู้เรียกใช้พอดี
+
+```rust
+use std::error::Error;
+
+pub fn load_user(id: u32) -> Result<String, Box<dyn Error>> {
+    if id == 0 {
+        return Err("invalid id".into());
+    }
+    Ok(format!("user-{id}"))
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    println!("{}", load_user(1)?);
+    Ok(())
+}
+```
+
+โค้ดนี้ compile ผ่านและรันได้ถูกต้อง ดังนั้นไม่มีอะไรจากการรันที่เผยปัญหา ต้นทุนโผล่มาเฉพาะกับผู้เรียก `load_user` ที่อยากตอบสนองต่อ "invalid id" ต่างจาก failure mode อื่นในอนาคต — ด้วย `Box<dyn Error>` ทางเลือกเดียวคือ downcast หรือ match กับ string ของ message ที่ format แล้ว
+
+```rust
+use std::fmt;
+
+#[derive(Debug)]
+pub enum LoadUserError {
+    InvalidId(u32),
+}
+
+impl fmt::Display for LoadUserError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LoadUserError::InvalidId(id) => write!(f, "invalid id: {id}"),
+        }
+    }
+}
+
+impl std::error::Error for LoadUserError {}
+
+pub fn load_user(id: u32) -> Result<String, LoadUserError> {
+    if id == 0 {
+        return Err(LoadUserError::InvalidId(id));
+    }
+    Ok(format!("user-{id}"))
+}
+
+fn main() {
+    match load_user(0) {
+        Ok(name) => println!("{name}"),
+        Err(LoadUserError::InvalidId(id)) => eprintln!("rejecting id {id}"), // caller can match on the real cause
+    }
+}
+```
+
+**เครื่องมือ:** ไม่มี — มนุษย์เท่านั้น นี่เป็นการตัดสินใจด้าน API design; ทั้งสองแบบ compile ผ่านและรันได้ ไม่มี lint ตัวไหนมีความเห็นว่า return type ไหนควรอยู่บนฟังก์ชัน public ของ library **บทเรียน:** [Custom Errors](/rust/th/error-handling/custom-errors/)
+
+#### 14. `panic!` สำหรับเงื่อนไขที่กู้คืนได้
+
+โค้ดที่ AI สร้างบางครั้งเอื้อมมือไปหยิบ `panic!` บนเงื่อนไขที่ผู้เรียกอาจอยากจัดการเอง (input ผิด, config value หายไป) แทนที่จะ return `Result`
+
+```rust
+fn parse_config(raw: &str) -> u32 {
+    if raw.is_empty() {
+        panic!("config value missing");
+    }
+    raw.parse().unwrap_or(0)
+}
+
+fn main() {
+    println!("{}", parse_config("42"));
+}
+```
+
+```text
+error: `panic` should not be present in production code
+ --> src/main.rs:3:9
+  |
+3 |         panic!("config value missing");
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+```rust
+fn parse_config(raw: &str) -> Result<u32, &'static str> {
+    if raw.is_empty() {
+        return Err("config value missing");
+    }
+    Ok(raw.parse().unwrap_or(0))
+}
+
+fn main() {
+    match parse_config("42") {
+        Ok(v) => println!("{v}"),
+        Err(e) => eprintln!("error: {e}"),
+    }
+}
+```
+
+**เครื่องมือ:** `clippy::panic` — restriction lint ปิดเป็น default; รันด้วย `cargo clippy -- -W clippy::panic` มัน flag `panic!` ทุก call แบบไม่มีเงื่อนไข ซึ่งเป็นเหตุผลว่าทำไมมันเป็น restriction lint ไม่ใช่ default: บาง panic เป็นตัวเลือกที่ถูกต้องจริง ๆ (ดู decision table ของบท [Panics](/rust/th/error-handling/panic/)) และ lint แยกแยะกรณีเหล่านั้นออกจากกรณีนี้ไม่ได้ **บทเรียน:** [Result](/rust/th/error-handling/result/)
+
+## Iterators & Collections
+
+#### 15. Index loop แทนที่จะเป็น iterator
+
+loop แบบ `for i in 0..len` ที่ใช้ `i` แค่ index collection เดิมเท่านั้น เกือบทุกครั้งจะเป็น iterator บน collection นั้นตรง ๆ โดยธรรมชาติมากกว่า
+
+```rust
+fn main() {
+    let items = [10, 20, 30];
+    let mut total = 0;
+    for i in 0..items.len() {
+        total += items[i];
+    }
+    println!("{total}");
+}
+```
+
+```text
+warning: the loop variable `i` is only used to index `items`
+ --> src/main.rs:4:14
+  |
+4 |     for i in 0..items.len() {
+  |              ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(clippy::needless_range_loop)]` on by default
+help: consider using an iterator
+  |
+4 -     for i in 0..items.len() {
+4 +     for <item> in &items {
+  |
+```
+
+```rust
+fn main() {
+    let items = [10, 20, 30];
+    let total: i32 = items.iter().sum();
+    println!("{total}");
+}
+```
+
+**เครื่องมือ:** `clippy::needless_range_loop` — เปิดเป็น default **บทเรียน:** [Iterators](/rust/th/collections-iterators/iterators/)
+
+export const rangeLoopCode = `fn main() {
+    let items = [10, 20, 30];
+    let mut total = 0;
+    for i in 0..items.len() {
+        total += items[i];
+    }
+    println!("{total}");
+}`;
+
+<Playground code={rangeLoopCode} />
+
+#### 16. `collect()` ที่ถูกใช้ต่อทันทีด้วย iterator method อีกตัว
+
+collect เข้า `Vec` เพียงเพื่อเรียก `.contains(...)`, `.len()`, หรือ method อื่นที่ iterator adapter ธรรมดาตอบได้ตรง ๆ ทันที เสียทั้ง allocation และการวนข้อมูลเต็มรอบไปเปล่า ๆ
+
+```rust
+fn main() {
+    let names = ["ann", "bob", "cy"];
+    let upper: Vec<String> = names.iter().map(|s| s.to_uppercase()).collect();
+    if upper.contains(&"BOB".to_string()) {
+        println!("found");
+    }
+}
+```
+
+```text
+error: avoid using `collect()` when not needed
+ --> src/main.rs:3:69
+  |
+3 |     let upper: Vec<String> = names.iter().map(|s| s.to_uppercase()).collect();
+  |                                                                     ^^^^^^^
+4 |     if upper.contains(&"BOB".to_string()) {
+  |        ---------------------------------- the iterator could be used here instead
+  |
+help: check if the original Iterator contains an element instead of collecting then checking
+  |
+3 ~
+4 ~     if names.iter().map(|s| s.to_uppercase()).any(|x| x == "BOB".to_string()) {
+  |
+```
+
+```rust
+fn main() {
+    let names = ["ann", "bob", "cy"];
+    if names.iter().map(|s| s.to_uppercase()).any(|x| x == "BOB") {
+        println!("found");
+    }
+}
+```
+
+**เครื่องมือ:** `clippy::needless_collect` — ปิดเป็น default; รันด้วย `cargo clippy -- -W clippy::needless_collect` **บทเรียน:** [Iterators](/rust/th/collections-iterators/iterators/)
+
+#### 17. Byte-slice string ที่ตำแหน่งไม่ใช่ ASCII boundary
+
+การ index/slice ของ `String`/`&str` ทำงานบน**ไบต์** ไม่ใช่ตัวอักษร โค้ดที่ AI สร้างที่ปฏิบัติกับ `&s[0..1]` เหมือนเป็น "ตัวอักษรแรก" ใช้ได้กับ ASCII และ panic กับอย่างอื่น
+
+```rust
+// @expect-panic
+fn main() {
+    let name = "สวัสดี";
+    println!("{}", &name[0..1]);
+}
+```
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:3:25:
+end byte index 1 is not a char boundary; it is inside 'ส' (bytes 0..3 of string)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+`char` ของ Rust มีได้ถึง 4 ไบต์; ตัวอักษรไทย `ส` ตัวเดียวใช้ 3 ไบต์ ดังนั้น byte index `1` จึงตกลงไปข้างในมันแทนที่จะอยู่บน boundary
+
+```rust
+fn main() {
+    let name = "สวัสดี";
+    if let Some(first_char) = name.chars().next() {
+        println!("{first_char}");
+    }
+}
+```
+
+**เครื่องมือ:** ไม่มีที่ compile time — นี่คือ runtime panic `cargo test` ที่มี input ไม่ใช่ ASCII ใน suite จะจับได้; ไม่มี clippy lint ตัวไหน flag การ byte-range slice บน `&str` โดยทั่วไป เพราะบางครั้งมันตั้งใจ (เช่น slice ที่ byte offset ที่รู้อยู่แล้วว่าเป็น char boundary) **บทเรียน:** [Vec and String](/rust/th/collections-iterators/vec-string/)
+
+export const byteSliceCode = `// @expect-panic
+fn main() {
+    let name = "สวัสดี";
+    println!("{}", &name[0..1]);
+}`;
+
+<Playground code={byteSliceCode} />
+
+#### 18. `as` truncate บน numeric cast แบบแคบลง
+
+`as` ระหว่าง integer type ไม่ panic เลย — มัน truncate อย่างเงียบ ๆ โค้ดที่ AI สร้างที่ใช้ `as` "แปลง" ค่าที่อาจไม่พอดี ให้ตัวเลขผิดแทนที่จะให้ error ในทั้ง debug และ release build
+
+```rust
+fn main() {
+    let big: i32 = 300;
+    let small = big as u8;
+    println!("{small}");
+}
+```
+
+```text
+44
+```
+
+`300` ไม่พอดีกับ `u8` (สูงสุด `255`); `as` เก็บแค่ 8 บิตต่ำสุดของ bit pattern (`300 = 0b1_0010_1100` และไบต์ต่ำ `0b0010_1100` คือ `44`) อย่างเงียบ ๆ ในทุก build profile — นี่ไม่เกี่ยวกับ (และไม่ panic เหมือน) arithmetic overflow เช่น `250u8 + 10`
+
+```text
+error: casting `i32` to `u8` may truncate the value
+ --> src/main.rs:3:17
+  |
+3 |     let small = big as u8;
+  |                 ^^^^^^^^^
+  |
+help: ... or use `try_from` and handle the error accordingly
+  |
+3 -     let small = big as u8;
+3 +     let small = u8::try_from(big);
+  |
+```
+
+```rust
+fn main() {
+    let big: i32 = 300;
+    match u8::try_from(big) {
+        Ok(small) => println!("{small}"),
+        Err(_) => eprintln!("{big} does not fit in a u8"),
+    }
+}
+```
+
+**เครื่องมือ:** `clippy::cast_possible_truncation` — pedantic lint ปิดเป็น default; รันด้วย `cargo clippy -- -W clippy::cast_possible_truncation` **บทเรียน:** [Data Types](/rust/th/basics/data-types/)
+
+export const asTruncateCode = `fn main() {
+    let big: i32 = 300;
+    let small = big as u8;
+    println!("{small}");
+}`;
+
+<Playground code={asTruncateCode} />
+
+## Concurrency & Async
+
+#### 19. `Arc<Mutex<T>>` เมื่อ `thread::scope` หรือ atomic ก็พอแล้ว
+
+`Arc<Mutex<T>>` เป็นเครื่องมือที่ถูกต้องเมื่อ thread ต้องมีชีวิตอยู่นานกว่าฟังก์ชันที่ spawn มันจริง ๆ หรือเมื่อ shared state มากกว่าตัวเลขตัวเดียว โค้ดที่ AI สร้างเอื้อมมือไปหยิบมันเป็น default แม้ว่า thread จะถูก join ก่อนฟังก์ชันคืนค่า (ที่ `thread::scope` ไม่ต้องการ `Arc` เลย) หรือ shared state เป็นตัวนับตัวเดียว (ที่ atomic ไม่ต้องการ lock เลย)
+
+```rust
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn main() {
+    let counter = Arc::new(Mutex::new(0));
+    let mut handles = vec![];
+    for _ in 0..4 {
+        let counter = Arc::clone(&counter);
+        handles.push(thread::spawn(move || {
+            let mut n = counter.lock().unwrap();
+            *n += 1;
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+    println!("{}", *counter.lock().unwrap());
+}
+```
+
+โค้ดนี้ compile ผ่าน รันได้ และ print `4` — ถูกต้องสมบูรณ์ แค่แบกเครื่องจักรมากกว่าที่ปัญหาต้องการ (`Arc` สำหรับ shared ownership ข้าม thread, `Mutex` สำหรับ exclusive access, lock/unlock ทุกครั้งที่เพิ่ม) เพราะ thread ทั้งสี่ถูก join ก่อนที่ `main` จะอ่านค่านั้นด้วยซ้ำ
+
+```rust
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::thread;
+
+fn main() {
+    let counter = AtomicI32::new(0);
+    thread::scope(|s| {
+        for _ in 0..4 {
+            s.spawn(|| {
+                counter.fetch_add(1, Ordering::SeqCst); // no lock, no Arc -- just an atomic op
+            });
+        }
+    }); // thread::scope guarantees every spawned thread joins here
+    println!("{}", counter.load(Ordering::SeqCst));
+}
+```
+
+**เครื่องมือ:** ไม่มี — มนุษย์เท่านั้น ทั้งสองแบบ compile ผ่าน รันได้ และให้ output เหมือนกัน ไม่มี lint flag ว่า "lock นี้ไม่จำเป็น" เพราะการตัดสินแบบนั้นต้องเข้าใจรูปแบบการแชร์ข้อมูลจริง **บทเรียน:** [Threads](/rust/th/concurrency-testing-cargo/threads/)
+
+export const arcMutexExcessCode = `use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn main() {
+    let counter = Arc::new(Mutex::new(0));
+    let mut handles = vec![];
+    for _ in 0..4 {
+        let counter = Arc::clone(&counter);
+        handles.push(thread::spawn(move || {
+            let mut n = counter.lock().unwrap();
+            *n += 1;
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+    println!("{}", *counter.lock().unwrap());
+}`;
+
+<Playground code={arcMutexExcessCode} />
+
+#### 20. ถือ `std::sync::Mutex` guard ข้าม `.await` point
+
+`std::sync::MutexGuard` ที่ถูกถือข้าม `.await` บล็อก task อื่นทุกตัวที่รอ lock เดียวกันตลอดเวลาที่ task นี้แค่ suspend อยู่ — ไม่ใช่แค่ตอนที่มันกำลังแตะข้อมูลที่ lock ไว้จริง ๆ (ตัวอย่างนี้ต้องการ crate `tokio` ซึ่ง browser Playground และ harness ของคอร์สนี้ไม่มี — transcript ด้านล่างมาจากการรัน `cargo clippy` จริงบน scratch crate ที่มี `tokio = { version = "1", features = ["full"] }`)
+
+```rust
+// @skip-verify crate: tokio
+use std::sync::Mutex;
+
+async fn increment(counter: &Mutex<i32>) {
+    let mut guard = counter.lock().unwrap();
+    *guard += 1;
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+}
+
+#[tokio::main]
+async fn main() {
+    let counter = Mutex::new(0);
+    increment(&counter).await;
+    println!("{}", *counter.lock().unwrap());
+}
+```
+
+```text
+error: this `MutexGuard` is held across an await point
+ --> src/main.rs:4:9
+  |
+4 |     let mut guard = counter.lock().unwrap();
+  |         ^^^^^^^^^
+  |
+  = help: consider using an async-aware `Mutex` type or ensuring the `MutexGuard` is dropped before calling `await`
+note: these are all the await points this lock is held through
+ --> src/main.rs:6:61
+  |
+6 |     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+  |                                                             ^^^^^
+```
+
+```rust
+// @skip-verify crate: tokio
+use std::sync::Mutex;
+
+async fn increment(counter: &Mutex<i32>) {
+    { // guard is dropped at the end of this block, before the .await
+        let mut guard = counter.lock().unwrap();
+        *guard += 1;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+}
+
+#[tokio::main]
+async fn main() {
+    let counter = Mutex::new(0);
+    increment(&counter).await;
+    println!("{}", *counter.lock().unwrap());
+}
+```
+
+**เครื่องมือ:** `clippy::await_holding_lock` — เปิดเป็น default (ต้องมี async runtime crate อย่าง `tokio` เพื่อให้มันทำงาน เพราะ lint ทำงานเฉพาะข้าม `.await` จริงเท่านั้น) **บทเรียน:** [Async Intro](/rust/th/concurrency-testing-cargo/async-intro/)
+
+#### 21. `thread::sleep` ข้างใน `async fn`
+
+`thread::sleep` บล็อก OS thread ทั้งตัวที่มันรันอยู่ — รวมถึง worker thread ของ async executor และทุก task อื่นที่ thread นั้นถูกจัดตารางไว้ให้รัน `tokio::time::sleep(...).await` คืน thread กลับให้ executor แทน ไม่มีอะไรใน type system แยกสองอย่างนี้ออกจากกัน โค้ดที่ AI สร้างจึงใช้อันที่ผิดแล้ว compile ผ่านได้เหมือนกัน
+
+```rust
+// @skip-verify crate: tokio
+use std::time::{Duration, Instant};
+
+async fn slow_task(id: u32) {
+    println!("task {id} start");
+    std::thread::sleep(Duration::from_millis(200)); // blocks the executor thread, not just this task
+    println!("task {id} done");
+}
+
+#[tokio::main]
+async fn main() {
+    let start = Instant::now();
+    tokio::join!(slow_task(1), slow_task(2));
+    println!("elapsed: {}ms", start.elapsed().as_millis());
+}
+```
+
+โค้ดนี้ compile ผ่านโดยไม่มี warning และรันจนจบ แต่ timing เผยว่าเกิดอะไรขึ้น — สอง task รันทีละตัวต่อกัน ไม่ใช่พร้อมกัน:
+
+```text
+task 1 start
+task 1 done
+task 2 start
+task 2 done
+elapsed: 414ms
+```
+
+ถ้า `slow_task` yield จริง ๆ ระหว่างรอ ทั้งสอง sleep 200ms จะซ้อนทับกัน และผลรวมจะใกล้ 200ms ไม่ใช่เกือบสองเท่า
+
+```rust
+// @skip-verify crate: tokio
+use std::time::{Duration, Instant};
+
+async fn slow_task(id: u32) {
+    println!("task {id} start");
+    tokio::time::sleep(Duration::from_millis(200)).await; // yields the thread back to the executor
+    println!("task {id} done");
+}
+
+#[tokio::main]
+async fn main() {
+    let start = Instant::now();
+    tokio::join!(slow_task(1), slow_task(2));
+    println!("elapsed: {}ms", start.elapsed().as_millis());
+}
+```
+
+**เครื่องมือ:** ไม่มี — ไม่มี clippy lint ตัวไหน flag `thread::sleep` ข้างใน `async fn` ทางเดียวที่จับได้คือสังเกตอาการ (task ที่ควรซ้อนทับกันแต่ไม่ทับ) หรือรีวิว blocking call ทุกตัวข้างใน `async fn` body ด้วยมือ **บทเรียน:** [Async Intro](/rust/th/concurrency-testing-cargo/async-intro/)
+
+#### 22. Channel แบบไม่มีขอบเขตและไม่มี backpressure
+
+`std::sync::mpsc::channel()` ไม่มี capacity limit — producer ที่เร็วกว่า consumer จะเก็บ allocate memory สำหรับ message ที่ buffer ไว้ไปเรื่อย ๆ ไม่จำกัด โค้ดที่ AI สร้างใช้ unbounded channel constructor เป็น default โดยไม่พิจารณาว่า producer ควรถูกชะลอหรือไม่
+
+```rust
+use std::sync::mpsc;
+use std::thread;
+
+fn main() {
+    let (tx, rx) = mpsc::channel::<u32>();
+    let producer = thread::spawn(move || {
+        for i in 0..1000 {
+            tx.send(i).unwrap(); // no backpressure -- producer never waits for the consumer
+        }
+    });
+    producer.join().unwrap();
+    let mut total = 0u64;
+    while let Ok(v) = rx.try_recv() {
+        total += v as u64;
+    }
+    println!("{total}");
+}
+```
+
+โค้ดนี้ compile ผ่านและรันถูกต้องสำหรับ `1000` message — bug เป็นความเสี่ยงเฉพาะเมื่อ producer เร็วกว่า*มาก*หรือไม่จำกัด ซึ่ง memory จะโตไม่จำกัดและไม่มีอะไรในโค้ดส่งสัญญาณว่ามันกำลังเกิดขึ้น
+
+```rust
+use std::sync::mpsc;
+use std::thread;
+
+fn main() {
+    let (tx, rx) = mpsc::sync_channel::<u32>(32); // bounded -- send() blocks once the buffer is full
+    let producer = thread::spawn(move || {
+        for i in 0..1000 {
+            tx.send(i).unwrap(); // now applies backpressure to the producer
+        }
+    });
+    let mut total = 0u64;
+    while let Ok(v) = rx.recv() {
+        total += v as u64;
+    }
+    producer.join().unwrap();
+    println!("{total}");
+}
+```
+
+**เครื่องมือ:** ไม่มี — มนุษย์เท่านั้น `mpsc::channel()` เป็น API ที่ถูกต้องสมบูรณ์; มีแค่การพิจารณาอัตราส่วนความเร็ว producer/consumer จริงเท่านั้นที่จะเผยว่า queue แบบไม่จำกัดเป็นความเสี่ยงจริงหรือไม่ **บทเรียน:** [Channels](/rust/th/concurrency-testing-cargo/channels/)
+
+export const unboundedChannelCode = `use std::sync::mpsc;
+use std::thread;
+
+fn main() {
+    let (tx, rx) = mpsc::channel::<u32>();
+    let producer = thread::spawn(move || {
+        for i in 0..1000 {
+            tx.send(i).unwrap();
+        }
+    });
+    producer.join().unwrap();
+    let mut total = 0u64;
+    while let Ok(v) = rx.try_recv() {
+        total += v as u64;
+    }
+    println!("{total}");
+}`;
+
+<Playground code={unboundedChannelCode} />
+
+## Cargo & Tests
+
+#### 23. `#[should_panic]` ที่ไม่มี `expected = "..."`
+
+`#[should_panic]` เดี่ยว ๆ pass บน panic **ใดก็ได้** จากสาเหตุใดก็ได้ — รวมถึง bug ที่ไม่เกี่ยวข้องกันเลยที่บังเอิญ panic ด้วยเช่นกัน มันให้ความมั่นใจปลอม ๆ ว่า error path ที่เจาะจงถูกทดสอบแล้ว
+
+```rust
+pub fn withdraw(balance: u32, amount: u32) -> u32 {
+    balance - amount // BUG: no insufficient-funds check; relies on an accidental u32 underflow panic
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic] // no `expected = "..."` -- passes on ANY panic, not just the intended one
+    fn withdraw_too_much_panics() {
+        withdraw(5, 100); // intent: "insufficient funds" should panic with a clear message
+    }
+}
+```
+
+```text
+running 1 test
+test tests::withdraw_too_much_panics - should panic ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+`cargo test` เขียว แต่ `withdraw` ไม่เคย validate "insufficient funds" จริง ๆ เลย — มัน panic จาก `u32` subtraction underflow (`attempt to subtract with overflow`) ซึ่งเป็น panic คนละแบบ ไม่ให้ข้อมูลอะไรเลย ที่บังเอิญทำให้ `#[should_panic]` แบบไม่เจาะจง pass ได้พอ ๆ กับที่ validation ที่ตั้งใจไว้จะทำ
+
+```rust
+pub fn withdraw(balance: u32, amount: u32) -> u32 {
+    if amount > balance {
+        panic!("insufficient funds: balance {balance}, requested {amount}");
+    }
+    balance - amount
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "insufficient funds")]
+    fn withdraw_too_much_panics() {
+        withdraw(5, 100);
+    }
+}
+```
+
+**เครื่องมือ:** ไม่มี — `cargo test` รายงานว่าผ่านทั้งสองแบบ; ไม่มี clippy lint ตัวไหนเช็คการใช้ `#[should_panic]` มีแค่การอ่าน test เอง (หรือแบบแก้แล้วที่ `expected = "..."` fail จริงเมื่อเจอ panic ผิดสาเหตุ) ที่จับสิ่งนี้ได้ **บทเรียน:** [Cargo Tests](/rust/th/concurrency-testing-cargo/cargo-tests/)
+
+#### 24. Test ที่ไม่มี assertion
+
+ฟังก์ชัน test ที่เรียกโค้ดที่ทดสอบแต่ไม่เคยเช็คผลลัพธ์เลย "ผ่าน" ตราบใดที่การเรียกนั้นไม่ panic — ซึ่งไม่บอกอะไรเลยว่า output ถูกต้องหรือไม่
+
+```rust
+pub fn total_price(unit_price: u32, quantity: u32) -> u32 {
+    unit_price * quantity
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn total_price_computes_total() {
+        // BUG: calls the function but never asserts on the result -- always "passes"
+        total_price(3, 4);
+    }
+}
+```
+
+```text
+running 1 test
+test tests::total_price_computes_total ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+แม้แต่ `total_price` ที่คืน `0` สำหรับทุก input หรือ overflow อย่างเงียบ ๆ ก็จะผ่าน test นี้เหมือนเดิม — ไม่มีอะไรในนั้นเปรียบเทียบ output จริงกับค่าที่คาดไว้เลย
+
+```rust
+pub fn total_price(unit_price: u32, quantity: u32) -> u32 {
+    unit_price * quantity
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn total_price_computes_total() {
+        assert_eq!(total_price(3, 4), 12);
+    }
+}
+```
+
+**เครื่องมือ:** ไม่มี — `cargo test` รายงานว่าผ่านทั้งสองแบบ; ไม่มี clippy lint ตัวไหนเช็คว่า body ของฟังก์ชัน `#[test]` มี assertion หรือไม่ นี่เป็น finding จากการรีวิวของมนุษย์ล้วน ๆ: อ่าน body ของทุก test ไม่ใช่แค่ชื่อมัน **บทเรียน:** [Cargo Tests](/rust/th/concurrency-testing-cargo/cargo-tests/)
+
+## อ่านโค้ดที่ AI เขียน
+
+รายการที่อันตรายที่สุดใน catalog นี้คือแถวที่ "เครื่องมือ: ไม่มี" — ทุกอันนั้น compile ผ่าน ส่วนใหญ่รันถูกต้องบน happy path และ `cargo test` เขียวทั้งสองแบบ ชุดนั้นแหละคือสิ่งที่ทำให้มันรอดจากการรีวิวแบบผิวเผิน
+
+<SpotTheBug code={`use std::sync::mpsc;
+use std::thread;
+
+fn produce_and_sum(count: u32) -> u64 {
+    let (tx, rx) = mpsc::channel::<u32>();
+    let producer = thread::spawn(move || {
+        for i in 0..count {
+            tx.send(i).unwrap();
+        }
+    });
+    producer.join().unwrap();
+    let mut total = 0u64;
+    while let Ok(v) = rx.try_recv() {
+        total += v as u64;
+    }
+    total
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn produce_and_sum_works() {
+        produce_and_sum(5);
+    }
+}
+
+fn main() {
+    println!("{}", produce_and_sum(5));
+}
+`}>
+สอง pattern จาก catalog ซ้อนกันในไฟล์เล็ก ๆ ไฟล์เดียว อย่างแรก `mpsc::channel` ไม่มีขอบเขต (#22) — โอเคที่ `count = 5` แต่เป็นความเสี่ยงจริงถ้า `count` มาจาก input ที่ไม่น่าเชื่อถือ อย่างที่สอง และร้ายแรงกว่าทันที: `produce_and_sum_works` (#24) เรียกฟังก์ชันแล้วไม่ assert อะไรเลย ดังนั้นมันจะผ่านเหมือนเดิมแม้ `produce_and_sum` จะคืน `0` เสมอ ทั้งคู่ compile สะอาด รันสะอาด และ `cargo test` print `1 passed` — เครื่องหมายถูกสีเขียวตรงนี้ไม่ใช่หลักฐานว่าผลรวมถูกคำนวณถูกต้อง เป็นแค่หลักฐานว่าการเรียกฟังก์ชันไม่ panic เท่านั้น ทางแก้สำหรับ test คือหนึ่งบรรทัด: `assert_eq!(produce_and_sum(5), 10);` ทางแก้สำหรับ channel เป็นคำถามด้าน design — queue แบบไม่มีขอบเขตยอมรับได้จริงไหมสำหรับ `count` ของผู้เรียกรายนี้
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+โค้ดที่ compile ผ่านและผ่าน `cargo test` ผ่านมาตรฐานที่ compiler กับ test runner เช็คได้แล้วเท่านั้น — สำหรับ pattern "เครื่องมือ: ไม่มี" ด้านบน มาตรฐานนั้นต่ำกว่าที่มันดูมาก และมีแค่มนุษย์ที่อ่าน logic จริงเท่านั้นที่ผ่านส่วนที่เหลือได้
+</Callout>
+
+export const quizAiBugCatalog = [
+    {
+        q: "ในตัวอย่าง clone-to-silence ทำไม clippy ถึง flag แค่ `.clone()` ตัวที่สอง ไม่ใช่ตัวแรก?",
+        options: [
+            "Clippy flag clone() ทุกครั้ง รวมถึงครั้งแรกด้วย",
+            "clone ครั้งแรกจำเป็นจริง ๆ เพราะ `cfg` ถูกใช้อีกครั้งหลังจากนั้น; ครั้งที่สองคือการใช้ครั้งสุดท้ายของ `cfg` ดังนั้น move ก็ใช้ได้แทน",
+            "Clippy ตรวจจับ clone() ข้างใน function argument ไม่ได้",
+            "call แรก compile ไม่ผ่าน clippy จึงไม่ไปถึงมัน",
+        ],
+        answer: 1,
+        explain: "clippy::redundant_clone flag เฉพาะ clone ที่ค่าถูก drop โดยไม่ถูกใช้อีกหลังจากนั้น -- ตรงกับ call ที่สองพอดี เพราะ cfg ไม่ถูกแตะอีกเลยหลังจากนั้น",
+    },
+    {
+        q: "อะไรเกิดขึ้นจริงที่ runtime ในตัวอย่าง `Rc<RefCell<T>>` ที่มี `borrow_mut()` สองครั้งซ้อนทับกัน?",
+        options: [
+            "compile ไม่ผ่านด้วย error[E0502]",
+            "compile ผ่าน แล้ว panic ที่ runtime ด้วย message แบบ \"RefCell already borrowed\"",
+            "compile ผ่านและรันได้ปกติ ใช้ reference เดียวกันสำหรับทั้ง `a` และ `b` อย่างเงียบ ๆ",
+            "ทำให้เกิด undefined behavior ที่มีแค่ Miri เท่านั้นที่ตรวจพบ",
+        ],
+        answer: 1,
+        explain: "RefCell ย้ายการเช็ค borrow จาก compile time ไป runtime borrow_mut() แบบ exclusive ครั้งที่สองขณะที่ guard แรกยังมีชีวิตอยู่จะ panic ทันทีที่โค้ดรันจริง -- ไม่ใช่ compile error",
+    },
+    {
+        q: "ทำไม `cargo +nightly miri run` รายงาน memory leak สำหรับ `mem::forget(Box::new(...))` ในขณะที่โปรแกรมเดียวกัน compile ผ่านและรันได้ปกติภายใต้ `cargo run` ธรรมดา?",
+        options: [
+            "mem::forget เป็น undefined behavior ซึ่งมีแค่ Miri เท่านั้นที่รันมันได้เลย",
+            "mem::forget เป็น safe, memory-safe Rust เต็มตัว -- มันแค่ป้องกันไม่ให้ destructor ของค่านั้น (และการ deallocate) ทำงานเลย ซึ่ง leak checker ของ Miri เฝ้าดูโดยเฉพาะ และการรันปกติไม่รายงานสิ่งนี้",
+            "Miri รายงานทุก heap allocation เป็น leak เสมอ",
+            "โปรแกรม panic จริง ๆ ภายใต้ Miri และ \"memory leaked\" คือ panic message ของ Miri",
+        ],
+        answer: 1,
+        explain: "mem::forget ไม่ก่อ unsafe behavior เลย -- มันแค่ข้าม Drop ซึ่งปกติจะปล่อย allocation leak checker ของ Miri มองหา allocation ที่ยังมีชีวิตอยู่ตอนโปรแกรมจบโดยเฉพาะ การรันปกติไม่มีการเช็คแบบนี้เลยและแค่ exit ไป",
+    },
+    {
+        q: "โค้ดนี้ print อะไร และเพราะอะไร?\n```rust\nfn main() {\n    let big: i32 = 300;\n    let small = big as u8;\n    println!(\"{small}\");\n}\n```",
+        options: [
+            "panic ด้วย \"attempt to convert with overflow\"",
+            "255 เพราะ `as` saturate ไปที่ค่าสูงสุดของ target type",
+            "44 เพราะ `as` truncate เหลือ 8 บิตต่ำสุดของ bit pattern ของ 300 โดยไม่ panic ใน build profile ไหนเลย",
+            "compile ไม่ผ่านเพราะ 300 ไม่พอดีกับ u8",
+        ],
+        answer: 2,
+        explain: "`as` ระหว่าง integer type ไม่ panic เลย -- มันเก็บแค่บิตที่พอดีอย่างเงียบ ๆ 300 = 0b1_0010_1100; ไบต์ต่ำ 0b0010_1100 คือ 44 นี่ไม่เกี่ยวกับ panic จาก arithmetic overflow ของ +, -, หรือ *",
+    },
+    {
+        q: "ทำไม `clippy::wildcard_enum_match_arm` ถึง flag `_ =>` arm แม้ว่า match นั้นจะทำงานถูกต้องสำหรับทุก variant ที่มีอยู่ตอนนี้?",
+        options: [
+            "เพราะ `_ =>` arm ทำงานช้ากว่าการ list ทุก variant เสมอ",
+            "เพราะมันยังคง match (และอาจจัดการผิด) กับ variant ใดก็ตามที่ถูกเพิ่มเข้า enum ในอนาคตอย่างเงียบ ๆ โดยไม่มี compile error ชี้กลับมาที่ match นี้เลย",
+            "เพราะ `_ =>` เป็น syntax ที่ deprecated กำลังถูกลบใน edition ถัดไป",
+            "เพราะมันใช้ได้เฉพาะกับ enum ที่ derive Copy เท่านั้น",
+        ],
+        answer: 1,
+        explain: "คุณค่าทั้งหมดของ exhaustive match คือการเพิ่ม variant ใหม่กลายเป็น compile error ทุกที่ที่ยังไม่ถูกจัดการ `_ =>` arm opt-out จากการรับประกันนั้นสำหรับ match นี้โดยเฉพาะ",
+    },
+    {
+        q: "ในตัวอย่าง `should_panic` ทำไม `cargo test` ถึงรายงานว่า test ผ่าน แม้ว่า `withdraw` จะไม่เคย implement เช็ค \"insufficient funds\" ที่มันอ้างว่าทดสอบเลย?",
+        options: [
+            "cargo test ไม่ได้รัน test ที่มี #[should_panic] จริง ๆ",
+            "`#[should_panic]` ที่ไม่มี string `expected = \"...\"` จะ pass บน panic อะไรก็ได้ และ `withdraw` ที่มี bug ก็ panic อยู่ดี -- จาก integer-underflow ที่ไม่เกี่ยวข้อง ไม่ใช่ validation ที่หายไป",
+            "test ถูก ignore เป็น default และไม่เคยทำงานจริง",
+            "withdraw(5, 100) ไม่ panic จริงในเวอร์ชันนี้",
+        ],
+        answer: 1,
+        explain: "u32 subtraction underflow panic ใน debug build โดยไม่สนใจว่ามี explicit check หรือไม่ ดังนั้น #[should_panic] ของ test จึงถูกตอบสนองด้วย panic ที่ผิดสาเหตุไปเลย มีแค่ #[should_panic(expected = \"...\")] เท่านั้นที่จะจับความไม่ตรงกันนี้ได้",
+    },
+    {
+        q: "ทำไม lint `await_holding_lock` ของ clippy ถึงต้องการ async runtime crate อย่าง tokio เพื่อให้มันทำงานจริง ไม่ใช่แค่ `std::sync::Mutex` เดี่ยว ๆ?",
+        options: [
+            "lint นี้มี bug และไม่ทำงานถ้าไม่มี tokio",
+            "std::sync::Mutex ไม่มีอยู่ถ้าไม่มี async runtime",
+            "lint นี้เฝ้าดูโดยเฉพาะว่า scope ของ MutexGuard ข้าม `.await` point จริงหรือไม่ -- ถ้าไม่มี async fn ที่ await อะไรจริง ๆ ก็ไม่มี await point ให้ guard ข้ามเลย",
+            "tokio แทนที่ std::sync::Mutex ทั้งหมด ดังนั้น lint จึงเข้าใจแค่ Mutex type ของ tokio เท่านั้น",
+        ],
+        answer: 2,
+        explain: "อันตราย (และ lint) เกี่ยวกับ lock ที่ถูกถือข้าม suspension point โดยเฉพาะ async fn ที่ไม่มี .await จริง หรือไม่มี async code เลย ไม่มี suspension point แบบนั้นให้ lint เช็ค",
+    },
+    {
+        q: "ทั้งเวอร์ชัน `Arc<Mutex<i32>>` counter และเวอร์ชัน `thread::scope` + atomic counter compile ผ่าน รันได้ และ print ผลเหมือนกัน อะไรคือความต่างจริง ๆ ระหว่างสองแบบนี้?",
+        options: [
+            "ไม่มีความต่างจริง ๆ เลย เป็นแค่สอง spelling ของ machine code เดียวกัน",
+            "เวอร์ชัน Arc<Mutex<T>> เร็วกว่าเสมอเพราะมัน cache lock",
+            "เวอร์ชัน atomic หลีกเลี่ยง Arc (เพราะ thread::scope รับประกันว่า thread ที่ spawn ทุกตัว join ก่อน scope จบ borrow จึงพอแล้ว) และหลีกเลี่ยง lock (การเพิ่มค่า integer ตัวเดียวไม่ต้องการ mutual exclusion เกินกว่า atomic operation เอง) -- เครื่องจักรน้อยกว่าสำหรับการรับประกันเดียวกัน",
+            "เวอร์ชัน Arc<Mutex<T>> ไม่ thread-safe",
+        ],
+        answer: 2,
+        explain: "Arc<Mutex<T>> เป็นเครื่องมือที่ถูกต้องเมื่อ thread ต้องมีชีวิตอยู่นานกว่าฟังก์ชันที่ spawn มันหรือ shared state มากกว่าค่า primitive ตัวเดียว ที่นี่ทั้งสองอย่างไม่จริง ดังนั้น thread::scope (ไม่ต้องการ Arc) บวก atomic (ไม่ต้องการ lock) จึงให้ผลเหมือนกันด้วยเครื่องจักรน้อยกว่า",
+    },
+    {
+        q: "ในบรรดา 24 pattern นี้ อันไหน compile ผ่านสำเร็จเสมอ แต่ถูกจับได้เฉพาะโดย `cargo +nightly miri run` ไม่ใช่ clippy หรือ warning ปกติของ rustc?",
+        options: [
+            "การ byte-slice string ที่ตำแหน่งไม่ใช่ ASCII boundary",
+            "mem::forget ที่ leak Box",
+            "mpsc channel แบบไม่มีขอบเขต",
+            "impl Trait ใน struct field",
+        ],
+        answer: 1,
+        explain: "mem::forget เป็น safe Rust โดยไม่มี compiler warning และไม่มี clippy lint แบบ default ที่ต่อต้านมัน default leak-checking ของ Miri คือเครื่องมือที่เผย leak จริง ๆ ด้วยการ track allocation ที่ยังมีชีวิตอยู่ตอนโปรแกรม exit",
+    },
+];
+
+<Quiz client:visible id="reading-rust/ai-bug-catalog" questions={quizAiBugCatalog} />
+
+<ProgressTracker client:visible id="reading-rust/ai-bug-catalog" />

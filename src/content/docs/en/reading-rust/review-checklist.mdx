@@ -1,0 +1,277 @@
+---
+title: 'The Review Checklist'
+description: 'A one-page, six-section checklist for reviewing Rust code, with a copy-pasteable short version and a grep one-liner.'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+This is the checklist version of the previous two lessons: one page, six sections, each item phrased as a question you can ask about a specific line of code, each linked to the lesson that explains why the question matters. Keep it open in a second tab during a real review.
+
+## Ownership & Borrowing
+
+- Does every `.clone()` have a reason you could state in one sentence ("needed because X still uses the original afterward")? — [Ownership & Moves](/rust/en/ownership-borrowing/ownership-moves/)
+- Could this `&Vec<T>` or `&String` parameter be `&[T]` or `&str` instead? — [Slices](/rust/en/ownership-borrowing/slices/)
+- Does this `Rc<RefCell<T>>` need multiple owners and interior mutability, or would a plain field and a `&mut` borrow do? — [Smart Pointers](/rust/en/ownership-borrowing/smart-pointers/)
+- Does every `unsafe` block carry a `// SAFETY:` comment explaining which invariant makes it sound? — [The Borrow Checker Model](/rust/en/runtime-internals/borrow-checker-model/)
+- Does every explicit lifetime annotation add information elision would not already infer? — [Lifetimes](/rust/en/traits-generics/lifetimes/)
+- Is `'static` here because the data genuinely lives forever, or because it silenced an error? — [Lifetimes](/rust/en/traits-generics/lifetimes/)
+- Does `mem::forget` or `Box::leak` appear, and if so, is the leak intentional and worth the comment explaining it? — [Drop and RAII](/rust/en/runtime-internals/drop-and-raii/)
+
+## Types & Traits
+
+- Before reaching for `dyn Trait`, does the trait actually need `Self`-returning or generic methods that would make it dyn-incompatible anyway? — [Trait Objects](/rust/en/traits-generics/trait-objects/)
+- Is `impl Trait` used only in argument or return position, never as a struct field type? — [Generics](/rust/en/traits-generics/generics/)
+- Does every `#[derive(Copy)]` sit on a type small enough that an implicit copy is actually cheap? — [Structs](/rust/en/structs-enums-matching/structs/)
+- Is a float (`f32`/`f64`) ever used as a `HashMap`/`HashSet` key, or compared with a bare `==`? — [HashMap](/rust/en/collections-iterators/hashmap/)
+
+## Errors & Panics
+
+- Does every `.unwrap()`/`.expect(...)` sit on a value that is genuinely infallible here, not user input, I/O, or a network response? — [Panics](/rust/en/error-handling/panic/)
+- Does any `match` on an enum have a `_ =>` arm, and if so, could the enum realistically grow a new variant later? — [Pattern Matching](/rust/en/structs-enums-matching/pattern-matching/)
+- Is `.is_some()`/`.is_ok()` ever followed by a separate `.unwrap()` where `if let`/`match` would do both in one step? — [Option](/rust/en/structs-enums-matching/option/)
+- Is `Box<dyn Error>` used as a public library return type where a caller might need to match on the specific failure? — [Custom Errors](/rust/en/error-handling/custom-errors/)
+- Does any `panic!` cover a condition the caller could reasonably want to recover from? — [Result](/rust/en/error-handling/result/)
+
+## Iterators & Collections
+
+- Does any `for i in 0..collection.len()` loop use `i` only to index that same collection? — [Iterators](/rust/en/collections-iterators/iterators/)
+- Is `.collect()` immediately consumed by another iterator-shaped method (`.contains(...)`, `.any(...)`, `.len()`)? — [Iterators](/rust/en/collections-iterators/iterators/)
+- Does any string byte-slice (`&s[a..b]`) assume ASCII, with no check that `a`/`b` land on a `char` boundary for non-ASCII input? — [Vec and String](/rust/en/collections-iterators/vec-string/)
+- Does any `as` cast between integer types risk silent truncation on input that isn't a small literal? — [Data Types](/rust/en/basics/data-types/)
+
+## Concurrency & Async
+
+- Does this `Arc<Mutex<T>>` need to outlive the function that spawned its threads, or would `thread::scope` remove the need for `Arc`? — [Threads](/rust/en/concurrency-testing-cargo/threads/)
+- Could a `Mutex`-protected single integer be a plain atomic instead? — [Threads](/rust/en/concurrency-testing-cargo/threads/)
+- Is any `std::sync::MutexGuard` still in scope across an `.await` point? — [Async Intro](/rust/en/concurrency-testing-cargo/async-intro/)
+- Does any `async fn` call `thread::sleep` or another blocking call instead of an async-aware equivalent? — [Async Intro](/rust/en/concurrency-testing-cargo/async-intro/)
+- Is `mpsc::channel()` (unbounded) used where a producer could realistically outpace its consumer? — [Channels](/rust/en/concurrency-testing-cargo/channels/)
+
+## Cargo & Tests
+
+- Does every `#[should_panic]` specify `expected = "..."`? — [Cargo Tests](/rust/en/concurrency-testing-cargo/cargo-tests/)
+- Does every `#[test]` function body contain at least one `assert!`/`assert_eq!`/`assert_ne!`? — [Cargo Tests](/rust/en/concurrency-testing-cargo/cargo-tests/)
+- Does `cargo clippy -- -D warnings` run clean, and has it actually been run with the AI-smell lints from the tool ladder enabled? — [Verification Tools](/rust/en/reading-rust/verification-tools/)
+- Is the resolver and `rust-version` in `Cargo.toml` set deliberately, not left to whatever the default happens to be? — [Cargo Tests](/rust/en/concurrency-testing-cargo/cargo-tests/)
+
+## What the Compiler Says: Modifying a Vec While Iterating It
+
+One checklist item — "does anything look like it could invalidate an iterator mid-loop" — is worth seeing rejected outright, because Rust refuses this at compile time rather than letting it corrupt memory at runtime the way it would in a language with less strict aliasing rules:
+
+```rust
+// @expect-error E0502
+fn main() {
+    let mut v = vec![1, 2, 3];
+    for x in &v {
+        v.push(*x);
+    }
+}
+```
+
+```text
+error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable
+ --> src/main.rs:4:9
+  |
+3 |     for x in &v {
+  |              --
+  |              |
+  |              immutable borrow occurs here
+  |              immutable borrow later used here
+4 |         v.push(*x);
+  |         ^^^^^^^^^^ mutable borrow occurs here
+```
+
+`for x in &v` holds an immutable borrow of `v` for the whole loop; `v.push(*x)` needs a mutable borrow, which cannot coexist with it. This specific mistake — appending to a collection while iterating over it — is undefined behavior in several other languages (a resized backing array can leave `x` pointing at freed or stale memory) and a compile error here instead.
+
+## The Copy-Pasteable Short Version
+
+For a quick pass or a PR description, this compresses every question above into a phrase:
+
+```text
+Ownership: unexplained .clone() / &Vec or &String params / Rc<RefCell> as default / unsafe
+  without SAFETY / decorative lifetimes / 'static-to-silence / mem::forget or Box::leak
+Types: dyn where impl/enum would do / impl Trait in a field / Copy on a large struct /
+  float as a HashMap key or compared with ==
+Errors: unwrap on fallible input / _ => on a growable enum / is_some+unwrap / Box<dyn
+  Error> in a library API / panic! on a recoverable condition
+Iterators: index loop instead of iterator / needless collect / byte-slice on non-ASCII /
+  as-cast truncation risk
+Concurrency: Arc<Mutex> where scope/atomic would do / lock held across .await /
+  thread::sleep in async / unbounded channel
+Cargo & tests: should_panic without expected / test with no assert / clippy not run
+  with -D warnings / resolver and rust-version left to default
+```
+
+## The Grep List
+
+Before reading a single function body, run this over the file (or the diff) to see where the checklist's highest-signal items cluster:
+
+```bash
+grep -nE 'clone\(\)|unwrap\(\)|expect\(|unsafe|'"'"'static|Rc<RefCell|Box<dyn Error|as u|_ =>|mem::forget|#\[allow|\.lock\(\)\.unwrap\(\)' src/**/*.rs
+```
+
+A handful of hits spread across a large file is normal. A cluster of five or six inside one function is the checklist's fastest way to point you at exactly where to start reading closely.
+
+export const cleanReviewCode = `struct Order {
+    items: Vec<(String, u32)>, // (name, price in cents)
+}
+
+// &[...] not &Vec<...>, &str not &String -- accepts strictly more callers
+fn total_cents(items: &[(String, u32)]) -> u32 {
+    items.iter().map(|(_, price)| price).sum()
+}
+
+fn format_receipt(order: &Order) -> String {
+    let mut lines = Vec::new();
+    for (name, price) in &order.items { // iterator, not an index loop
+        lines.push(format!("{name}: {price}"));
+    }
+    lines.push(format!("total: {}", total_cents(&order.items)));
+    lines.join("\\n")
+}
+
+fn main() {
+    let order = Order {
+        items: vec![
+            ("coffee".to_string(), 350),
+            ("bagel".to_string(), 275),
+        ],
+    };
+    println!("{}", format_receipt(&order));
+}`;
+
+<Playground code={cleanReviewCode} />
+
+This one passes every item in the checklist above: no `.clone()` anywhere, `&[(String, u32)]` instead of `&Vec<...>`, a plain iterator instead of an index loop, no `.unwrap()` on anything fallible (there's nothing fallible here), and no suppressions. Recognizing what a clean pass looks like is as useful as recognizing what a smell looks like — it's the baseline the rest of this module's catalog is measured against.
+
+<Callout title="A checklist is a starting point, not a verdict">
+None of these questions has a universally right answer — a `.clone()` can be exactly the right call, `Box<dyn Error>` can be the right choice even in a library with a genuinely open-ended set of failures, an `Arc<Mutex<T>>` can be simpler to reason about than an atomic even when the atomic would technically work. The checklist's job is to make sure you *asked* the question, not to hand you the answer.
+</Callout>
+
+## Mental Model
+
+A checklist trades depth for coverage: it will not catch a subtle logic bug specific to this one codebase's domain, but it reliably surfaces the same two dozen shapes of trouble across any Rust file, in a fixed amount of time, regardless of how familiar you are with this particular codebase. That's exactly the trade a first pass over unfamiliar (or AI-generated) code should make — establish where the risk is concentrated before spending deep-reading time on any one function.
+
+## Trade-offs
+
+Running the grep list and checklist on every review adds a few minutes to a pass that "just reading the diff" wouldn't spend — and on a diff that turns out to be entirely clean, that time produces no findings at all. The alternative, skipping straight to reading logic, is faster on clean diffs and worse on exactly the diffs where it matters most: a file with several of these patterns clustered together, which unstructured reading is the least likely style of review to notice as a cluster rather than as isolated, individually-forgivable choices.
+
+## Common Misconceptions
+
+- **"A checklist item flagged means the code is wrong."** It means the code deserves a specific question asked of it. Several items (a genuinely necessary `.clone()`, a legitimately open-ended `Box<dyn Error>`) are expected to survive the question un-flagged.
+- **"If clippy is clean, the checklist is redundant."** Several checklist items — an unbounded channel, `Arc<Mutex<T>>` where a scope would do, a test with no assertion — have no corresponding clippy lint at all. The checklist and the tool ladder (next lesson) cover different, only partially overlapping ground.
+- **"The grep list catches everything the checklist covers."** It catches the syntactically greppable subset. `_ =>` catch-alls, decorative lifetimes, and "does this design need multiple owners" all require reading, not just pattern-matching text.
+
+## Reading AI-generated code
+
+Running the grep list over a generated file often surfaces several hits in one function, which is exactly the "cluster" signal the checklist is designed to catch.
+
+<SpotTheBug code={`use std::rc::Rc;
+use std::cell::RefCell;
+
+struct Cache {
+    data: Rc<RefCell<Vec<String>>>,
+}
+
+fn add_entry(cache: Rc<RefCell<Vec<String>>>, entry: String) {
+    cache.borrow_mut().push(entry);
+}
+
+fn print_all(cache: Rc<RefCell<Vec<String>>>) {
+    for item in cache.borrow().iter() {
+        println!("{item}");
+    }
+}
+
+fn main() {
+    let cache = Rc::new(RefCell::new(Vec::new()));
+    add_entry(cache.clone(), "first".to_string());
+    add_entry(cache.clone(), "second".to_string());
+    print_all(cache.clone());
+}
+`}>
+Grepping this file for the checklist's terms hits `Rc<RefCell` three times and `.clone()` three times, all inside a 20-line file with a single thread and no genuine shared-ownership requirement -- `main` is the only caller, and it calls everything sequentially. Nothing here ever needs two owners alive at once or interior mutability across an alias; a plain `&mut Vec<String>` passed by mutable reference does the same job with no `Rc`, no `RefCell`, and no `.clone()` anywhere: `fn add_entry(cache: &mut Vec<String>, entry: String)`, called as `add_entry(&mut cache, "first".to_string())`. The grep list does not tell you this by itself -- three `Rc<RefCell` hits in one small file is the signal that says "go read this function and ask whether it needs to be here," and reading it is what confirms the answer is no.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Run the grep list first to find where the highest-signal patterns cluster, then work the six-section checklist against exactly those spots before reading the rest of the file line by line.
+</Callout>
+
+export const quizReviewChecklist = [
+    {
+        q: "What is the actual purpose of the checklist, according to this lesson?",
+        options: [
+            "To provide a definitive right-or-wrong verdict on every clone(), unsafe block, and Arc<Mutex<T>> in a file",
+            "To guarantee that clippy will report zero warnings once every item is addressed",
+            "To make sure a specific question gets asked at each of ~24 known trouble spots, not to hand you a pre-decided answer",
+            "To replace reading the code entirely with a single automated command",
+        ],
+        answer: 2,
+        explain: "The lesson is explicit that a flagged item means a question deserves asking, not that the code is automatically wrong -- some clones, some Box<dyn Error> uses, and some Arc<Mutex<T>> choices are the right call.",
+    },
+    {
+        q: "Why does this fail to compile?\n```rust\nfn main() {\n    let mut v = vec![1, 2, 3];\n    for x in &v {\n        v.push(*x);\n    }\n}\n```",
+        options: [
+            "error[E0382] -- use of moved value `v`",
+            "error[E0502] -- cannot borrow `v` as mutable because it is also borrowed as immutable by the `for` loop's iterator",
+            "error[E0499] -- cannot borrow `v` as mutable more than once at a time",
+            "It compiles, but panics at runtime with an out-of-bounds index",
+        ],
+        answer: 1,
+        explain: "`for x in &v` holds an immutable borrow of v for the whole loop body. `v.push(*x)` needs a mutable borrow, which cannot coexist with the loop's immutable borrow -- E0502, caught at compile time.",
+    },
+    {
+        q: "Which of these checklist items has NO corresponding default or off-by-default clippy lint at all, according to this module?",
+        options: [
+            "An index loop that only uses the loop variable to index the same collection",
+            "An unbounded mpsc::channel() where a producer could realistically outpace its consumer",
+            "is_some() immediately followed by a separate unwrap()",
+            "A struct field written as `impl Trait`",
+        ],
+        answer: 1,
+        explain: "needless_range_loop, unnecessary_unwrap, and the impl-Trait-in-field case (a compile error, E0562) all have a tool that catches them. Whether an unbounded channel is actually a risk requires reasoning about producer/consumer speed -- no lint has an opinion on that.",
+    },
+    {
+        q: "Why does the lesson recommend running the grep list BEFORE reading function bodies, rather than after?",
+        options: [
+            "Because grep is faster than a human at finding logic bugs",
+            "Because a cluster of several matches inside one function is a stronger signal than any single match read in isolation, and it tells you where to spend deep-reading time first",
+            "Because clippy requires the grep list to run first or it will not find anything",
+            "Because the grep list replaces the need to read the checklist at all",
+        ],
+        answer: 1,
+        explain: "The grep list's value is showing where several of the checklist's highest-signal terms cluster together in one place, which is easy to miss when just reading a file top to bottom but obvious once you count hits per function.",
+    },
+    {
+        q: "In the SpotTheBug example, three functions each take `Rc<RefCell<Vec<String>>>` by value and the caller clones the Rc before every call. What does the grep list's `Rc<RefCell` and `clone()` hits actually tell a reviewer here?",
+        options: [
+            "That the code definitely will not compile",
+            "That there is a cluster worth investigating -- and investigating it here reveals a single-threaded, sequential caller with no real multiple-owner or interior-mutability need, so a plain `&mut Vec<String>` would do the same job with no Rc, RefCell, or clone at all",
+            "That Rc<RefCell<T>> is always the wrong choice in any Rust program",
+            "That the clone() calls are each redundant clones that clippy's default lints would already catch",
+        ],
+        answer: 1,
+        explain: "The grep hits are a signal to go read the function, not a verdict by themselves. Reading it here shows main is the only caller, calling everything sequentially -- no aliasing or multi-owner requirement exists, so the whole Rc<RefCell<...>> layer is unnecessary machinery.",
+    },
+    {
+        q: "According to the checklist, when should an explicit lifetime annotation like `<'a>` be considered a smell?",
+        options: [
+            "Whenever a function takes more than one reference parameter",
+            "Always -- explicit lifetimes should never appear in idiomatic Rust",
+            "When it adds no information that Rust's lifetime elision rules would not already infer automatically",
+            "Only when the function also uses `unsafe`",
+        ],
+        answer: 2,
+        explain: "The checklist item is specifically about lifetimes that are decorative -- elision already covers the common single-input-reference cases; an explicit 'a there is pure noise, not a smell everywhere lifetimes appear.",
+    },
+];
+
+<Quiz client:visible id="reading-rust/review-checklist" questions={quizReviewChecklist} />
+
+<ProgressTracker client:visible id="reading-rust/review-checklist" />

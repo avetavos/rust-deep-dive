@@ -1,0 +1,370 @@
+---
+title: 'Worked Review 4: Library Crate + Tests'
+description: 'A full review of a small, plausible, AI-generated library crate -- four planted bugs across API design, Cargo.toml, and tests, with real cargo output.'
+sidebar:
+  order: 8
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+The last full review is a library crate, not a binary — this one has a `Cargo.toml`, a public API meant for other people's code to call, and a real test suite. Because a library crate with tests can't run inside the browser Playground (`cargo test` needs a real `cargo` invocation, not just `rustc` on one file), everything here is a real captured transcript from `cargo build`, `cargo test`, and `cargo clippy` run in a scratch crate — quoted verbatim, not reconstructed.
+
+## The Crate
+
+A tiny library: apply a percentage discount to a price.
+
+```toml
+# Cargo.toml
+[package]
+name = "discount-lib"
+version = "0.1.0"
+
+[dependencies]
+```
+
+```rust
+// @skip-verify multi-file: real library crate with Cargo.toml + tests, verified via cargo build/test/clippy transcripts below
+use std::error::Error;
+
+/// Applies a percentage discount to a price given in cents.
+pub fn apply_discount(price_cents: u32, percent: u8) -> Result<u32, Box<dyn Error>> {
+    let discount = (price_cents as u64 * percent as u64) / 100;
+    let discount: u32 = discount.try_into()?;
+    Ok(price_cents - discount)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic]
+    fn rejects_bad_percent() {
+        apply_discount(1000, 150).unwrap();
+    }
+
+    #[test]
+    fn discount_reduces_price() {
+        apply_discount(1000, 10).unwrap();
+    }
+}
+```
+
+Running `cargo build` on this exact `Cargo.toml` and `src/lib.rs`:
+
+```text
+$ cargo build
+warning: `package.edition` is unspecified, defaulting to `2015` while the latest is `2024`
+error[E0599]: no method named `try_into` found for type `u64` in the current scope
+  --> src/lib.rs:6:34
+   |
+6  |     let discount: u32 = discount.try_into()?;
+   |                                  ^^^^^^^^
+   |
+   = help: items from traits can only be used if the trait is in scope
+   = note: 'std::convert::TryInto' is included in the prelude starting in Edition 2021
+help: trait `TryInto` which provides `try_into` is implemented but not in scope; perhaps you want to import it
+   |
+1  + use std::convert::TryInto;
+   |
+
+error: could not compile `discount-lib` (lib) due to 1 previous error
+```
+
+This doesn't even build. Bug 1 is a compile error — but it's worth reading past it, because three more real bugs are hiding behind it and only show up once the crate actually compiles.
+
+## Findings
+
+<details>
+<summary>Bug 1: missing `edition` in `Cargo.toml`</summary>
+
+**Symptom:** `cargo build` fails outright — `TryInto` (and therefore `.try_into()`) is only in the standard prelude starting with edition 2021; without an explicit `edition`, Cargo defaults to `2015`, where the trait must be imported explicitly.
+
+**Evidence:** the `cargo build` transcript above — note the warning appears *before* the error, and would be easy to miss when scrolling straight to the red text.
+
+**Fix:** set the edition explicitly to match the rest of this course (2024) — `cargo new` does this automatically, which is exactly why a hand-edited or generated `Cargo.toml` is the one place this tends to go missing:
+
+```toml
+# Cargo.toml
+[package]
+name = "discount-lib"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+```
+</details>
+
+<details>
+<summary>Bug 2: `Box<dyn Error>` as this library's public error type</summary>
+
+**Symptom:** once Bug 1 is fixed and the crate compiles, `apply_discount` works — but its only possible failure (an invalid percentage) is erased into an opaque, unmatchable `Box<dyn Error>`. Any caller who wants to react specifically to "bad percent" versus some other future failure mode can only inspect the formatted message string.
+
+**Evidence:** no lint fires — this compiles and works correctly; the cost only appears in what a caller of this library can and can't do with the error.
+
+**Fix:** a concrete, matchable error enum — the whole reason a library, as opposed to a `main.rs` binary, benefits from this is that other people's code needs to `match` on the failure, not just print it:
+
+```rust
+// @skip-verify fragment: shown in full in the fixed version below
+#[derive(Debug, PartialEq)]
+pub enum DiscountError {
+    InvalidPercent(u8),
+}
+```
+</details>
+
+<details>
+<summary>Bug 3: `#[should_panic]` with no `expected = "..."`, testing an unvalidated input path</summary>
+
+**Symptom:** `rejects_bad_percent` passes — but reading the function it tests shows there is no validation of `percent` at all. `apply_discount(1000, 150)` computes a discount of 1500 cents on a 1000-cent price, and `1000u32 - 1500` underflows, panicking on arithmetic overflow rather than on any deliberate rejection.
+
+**Evidence** — the real panic, with the `#[should_panic]` wrapper removed to see what actually happens:
+
+```text
+thread 'main' (<id>) panicked at src/main.rs:6:18:
+attempt to subtract with overflow
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
+
+With `#[should_panic]` (no `expected`) restored, `cargo test` reports this as a pass — because *any* panic satisfies an unqualified `#[should_panic]`:
+
+```text
+test tests::rejects_bad_percent - should panic ... ok
+```
+
+The test's name claims "rejects bad percent." The function does no such thing — it has no validation at all, and the test would pass identically even if the panic came from an entirely unrelated bug.
+
+**Fix:** validate the input explicitly (this is also the fix for Bug 2 — a validated function has a real error to return), and test the `Err` case directly instead of relying on a panic:
+
+```rust
+// @skip-verify fragment: shown in full in the fixed version below
+#[test]
+fn rejects_bad_percent() {
+    assert_eq!(apply_discount(1000, 150), Err(DiscountError::InvalidPercent(150)));
+}
+```
+</details>
+
+<details>
+<summary>Bug 4: `discount_reduces_price` asserts nothing</summary>
+
+**Symptom:** `apply_discount(1000, 10).unwrap()` is called and its result immediately discarded — the test passes as long as the call doesn't panic, regardless of whether `900` (the mathematically correct answer) or any other value comes back.
+
+**Evidence:**
+
+```text
+test tests::discount_reduces_price ... ok
+```
+
+Green, and completely uninformative about whether the arithmetic is right.
+
+**Fix:**
+
+```rust
+// @skip-verify fragment: shown in full in the fixed version below
+#[test]
+fn discount_reduces_price() {
+    assert_eq!(apply_discount(1000, 10), Ok(900));
+}
+```
+</details>
+
+## The Fixed Version
+
+```toml
+# Cargo.toml
+[package]
+name = "discount-lib"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+```
+
+```rust
+use std::fmt;
+
+/// The specific ways applying a discount can fail.
+#[derive(Debug, PartialEq)]
+pub enum DiscountError {
+    InvalidPercent(u8),
+}
+
+impl fmt::Display for DiscountError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DiscountError::InvalidPercent(p) => write!(f, "invalid discount percent: {p}"),
+        }
+    }
+}
+
+impl std::error::Error for DiscountError {}
+
+/// Applies a percentage discount to a price given in cents.
+pub fn apply_discount(price_cents: u32, percent: u8) -> Result<u32, DiscountError> {
+    if percent > 100 {
+        return Err(DiscountError::InvalidPercent(percent));
+    }
+    let discount = (u64::from(price_cents) * u64::from(percent)) / 100;
+    let discount = u32::try_from(discount).expect("discount is always <= price_cents, which is a u32");
+    Ok(price_cents - discount)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_bad_percent() {
+        assert_eq!(apply_discount(1000, 150), Err(DiscountError::InvalidPercent(150)));
+    }
+
+    #[test]
+    fn discount_reduces_price() {
+        assert_eq!(apply_discount(1000, 10), Ok(900));
+    }
+}
+```
+
+## What The Tools Caught
+
+Real `cargo build`, `cargo test`, and `cargo clippy` runs against this exact fixed crate:
+
+```text
+$ cargo build
+   Compiling discount-lib v0.1.0 (discount-lib)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s
+```
+
+```text
+$ cargo test
+   Compiling discount-lib v0.1.0 (discount-lib)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src/lib.rs (target/debug/deps/discount_lib-...)
+
+running 2 tests
+test tests::discount_reduces_price ... ok
+test tests::rejects_bad_percent ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests discount_lib
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+```text
+$ cargo clippy -- -D warnings
+    Checking discount-lib v0.1.0 (discount-lib)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
+```
+
+All green — and, tellingly, `cargo clippy -- -D warnings` was **also** completely silent on the original *buggy* version (once Bug 1's compile error was fixed enough to let clippy run at all). None of Bugs 2 through 4 are lint-detectable; only Bug 1 was ever a hard compiler error. This crate is a compact demonstration of the module's central point: two of these four real bugs live entirely in "Tool: none" territory.
+
+## Mental Model
+
+A library crate has one more audience than a binary does: whoever depends on it. Every choice in this review — the error type, the test that actually asserts something, the `Cargo.toml` that declares which language edition the code was written against — is metadata *about* the code that the code itself doesn't enforce. The compiler cannot tell you your error type should be more specific, that your test forgot to check anything, or that your `Cargo.toml` is missing a field it would benefit from; all three require someone to ask "what does this promise to the people using it," which is a question about intent, not syntax.
+
+## Trade-offs
+
+A concrete error enum (Bug 2's fix) is more code than `Box<dyn Error>` for a library with exactly one failure mode today — the payoff is entirely about what happens when the library gains a second failure mode later, at which point `match`-ability becomes valuable and `Box<dyn Error>` becomes a liability that's expensive to remove from a published API. For a genuinely one-off internal binary, `Box<dyn Error>` remains the right, lower-effort choice — the trade-off flips specifically at the library/binary boundary, which is why this course treats the two differently rather than picking one rule for both.
+
+## Common Misconceptions
+
+- **"Cargo always sets a sensible edition default."** It sets a default — `2015` — chosen for backward compatibility with crates published over a decade ago, not for sensibility with new code. `cargo new` writes the current edition explicitly for exactly this reason; a hand-written or generated `Cargo.toml` has no such guardrail.
+- **"A green `cargo test` run on a library crate means its public API is well designed."** It means the tests that exist pass. Nothing about `cargo test` passing evaluates whether the error type is appropriately specific, whether the public functions are named and documented well, or whether the tests actually assert the right things — all of which are exactly the four bugs in this review.
+
+## Reading AI-generated code
+
+The same shape — a library function that erases its own most useful information into a generic error type — is common enough in generated code to be worth a quick, standalone check.
+
+<SpotTheBug code={`use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+struct ParseAgeError;
+
+impl fmt::Display for ParseAgeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid age")
+    }
+}
+
+impl Error for ParseAgeError {}
+
+pub fn parse_age(raw: &str) -> Result<u8, Box<dyn Error>> {
+    let age: u8 = raw.parse().map_err(|_| ParseAgeError)?;
+    if age > 150 {
+        return Err(Box::new(ParseAgeError));
+    }
+    Ok(age)
+}
+
+fn main() {
+    println!("{:?}", parse_age("42"));
+    println!("{:?}", parse_age("not a number"));
+    println!("{:?}", parse_age("200"));
+}
+`}>
+This compiles and runs correctly -- both real failure modes ("not a number" and "over 150") already have a proper `ParseAgeError` type defined for them, which is more thoughtful than reaching for a bare string error. The remaining bug is subtler: the function's return type is still `Box<dyn Error>`, which throws away the fact that a well-defined, matchable `ParseAgeError` was sitting right there the whole time. A caller of `parse_age` cannot `match` on "was this a parse failure or a range failure" without downcasting -- despite the two cases already being distinguishable inside the function. Changing the return type to `Result<u8, ParseAgeError>` (and giving `ParseAgeError` a field for which case occurred, if the caller needs to distinguish them) costs nothing here and gives every caller back the specificity the code already had internally.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A library's error type is part of its public API, not an implementation detail -- Box&lt;dyn Error&gt; is the right default for a binary's main and often the wrong one for a library whose callers need to react differently to different failures.
+</Callout>
+
+export const quizWorkedReview4 = [
+    {
+        q: "Why does `cargo build` fail on the original buggy crate with `error[E0599]: no method named \`try_into\` found`, when `try_into()` is a real standard library method?",
+        options: [
+            "try_into() was removed from the standard library in a recent version",
+            "The Cargo.toml has no `edition` field, so Cargo defaults to edition 2015 -- and TryInto (which provides try_into) is only included in Rust's prelude automatically starting with edition 2021",
+            "The function's return type is incompatible with try_into()",
+            "try_into() requires an external crate that wasn't added as a dependency",
+        ],
+        answer: 1,
+        explain: "The compiler's own suggestion says it directly: 'std::convert::TryInto' is included in the prelude starting in Edition 2021. Without an edition field, Cargo defaults to 2015, where TryInto must be imported explicitly.",
+    },
+    {
+        q: "In the buggy version, why does `rejects_bad_percent`'s `#[should_panic]` pass even though `apply_discount` has no validation logic for `percent` at all?",
+        options: [
+            "should_panic tests are skipped by default and never actually run",
+            "#[should_panic] with no expected string passes on any panic -- here, apply_discount(1000, 150) panics from u32 subtraction underflow (the discount exceeds the price), not from any deliberate rejection of the bad percentage",
+            "The test actually fails, but cargo test misreports it as passing",
+            "apply_discount silently returns 0 instead of panicking",
+        ],
+        answer: 1,
+        explain: "The function computes a discount larger than the price when percent exceeds 100, and subtracting it underflows a u32 in debug mode -- an accidental panic, not validation. An unqualified #[should_panic] cannot distinguish this from the deliberate rejection its name implies.",
+    },
+    {
+        q: "Why is `Box<dyn Error>` treated as a real finding in this library, given that the code compiles, runs, and passes every test?",
+        options: [
+            "Box<dyn Error> doesn't actually implement the Error trait, so this is a latent compile error",
+            "It erases the one specific, known failure mode (an invalid percentage) into an opaque type that callers can only print, not match on -- a cost that is invisible in this crate's own tests but real for any downstream caller that needs to react to that specific failure",
+            "It makes the function significantly slower at runtime",
+            "It is a syntax error that clippy fails to catch",
+        ],
+        answer: 1,
+        explain: "Box<dyn Error> compiles and runs fine -- the finding is an API design cost, not a correctness bug: callers of a library lose the ability to match on specific failure cases, which matters more as a library's public API is used by code the library author doesn't control.",
+    },
+    {
+        q: "What does the fact that `cargo clippy -- -D warnings` reports zero warnings on the buggy crate (once it compiles) demonstrate about this review?",
+        options: [
+            "That the crate actually has no bugs at all",
+            "That clippy is broken and needs to be reinstalled",
+            "That two of this review's four real bugs (the Box<dyn Error> API choice and the assertion-free test) are entirely outside what any clippy lint checks -- consistent with this module's broader finding that roughly ten of the 24 catalog patterns have no automated tool at any rung",
+            "That -D warnings only works on binaries, not library crates",
+        ],
+        answer: 2,
+        explain: "A silent clippy run does not mean a file is bug-free -- it means nothing in clippy's lint set happens to match these specific problems. Both the error-type design choice and the missing assertion require a human reading the code with intent in mind, not a tool matching a pattern.",
+    },
+];
+
+<Quiz client:visible id="reading-rust/worked-review-4" questions={quizWorkedReview4} />
+
+<ProgressTracker client:visible id="reading-rust/worked-review-4" />

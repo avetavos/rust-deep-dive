@@ -1,0 +1,441 @@
+---
+title: 'Worked Review 2: Inventory System'
+description: 'A full review of a small, plausible, AI-generated inventory program -- four planted bugs across structs, enums, and Option, with real tool output.'
+sidebar:
+  order: 6
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+The second full review: a small inventory-tracking program built around a struct and an enum. Same process as before — read it first, form your own opinion, then compare against the findings below.
+
+## The Program
+
+export const wr2BuggyCode = `#[derive(Clone, Copy)]
+struct Item {
+    id: u32,
+    price: f64,
+    stock: u32,
+    barcode: [u8; 64],
+}
+
+enum Status {
+    InStock,
+    LowStock,
+    OutOfStock,
+    Discontinued,
+}
+
+fn status_label(status: Status) -> &'static str {
+    match status {
+        Status::InStock => "in stock",
+        _ => "unavailable",
+    }
+}
+
+fn find_item_by_price(items: &[Item], target_price: f64) -> Option<&Item> {
+    items.iter().find(|item| item.price == target_price)
+}
+
+fn total_value(items: &[Item]) -> f64 {
+    items.iter().map(|i| i.price * i.stock as f64).sum()
+}
+
+fn describe_cheapest(items: &[Item]) -> String {
+    let cheapest = items.iter().min_by(|a, b| a.price.partial_cmp(&b.price).unwrap());
+    if cheapest.is_some() {
+        format!("cheapest item id: {}", cheapest.unwrap().id)
+    } else {
+        "no items".to_string()
+    }
+}
+
+fn apply_discount(item: Item, percent: f64) -> Item {
+    let mut discounted = item;
+    discounted.price *= 1.0 - percent / 100.0;
+    discounted
+}
+
+fn main() {
+    let items = vec![
+        Item { id: 1, price: 9.99, stock: 10, barcode: [0; 64] },
+        Item { id: 2, price: 24.50, stock: 3, barcode: [0; 64] },
+        Item { id: 3, price: 4.25, stock: 0, barcode: [0; 64] },
+    ];
+
+    println!("{}", status_label(Status::InStock));
+    println!("{}", status_label(Status::LowStock));
+    println!("{}", status_label(Status::OutOfStock));
+    println!("{}", status_label(Status::Discontinued));
+
+    if let Some(found) = find_item_by_price(&items, 9.99) {
+        println!("found item {} at $9.99", found.id);
+    }
+
+    println!("total value: \${:.2}", total_value(&items));
+    println!("{}", describe_cheapest(&items));
+
+    let discounted = apply_discount(items[1], 10.0);
+    println!("discounted price: \${:.2}", discounted.price);
+    println!("original still: \${:.2}", items[1].price);
+    println!("size of Item: {} bytes", std::mem::size_of::<Item>());
+}`;
+
+<Playground code={wr2BuggyCode} />
+
+```text
+in stock
+unavailable
+unavailable
+unavailable
+found item 1 at $9.99
+total value: $173.40
+cheapest item id: 3
+discounted price: $22.05
+original still: $24.50
+size of Item: 80 bytes
+```
+
+Four bugs, and only one of them is even visible in this output.
+
+## Findings
+
+<details>
+<summary>Bug 1: `_ =>` collapses three distinct statuses into one</summary>
+
+**Symptom:** `LowStock`, `OutOfStock`, and `Discontinued` all print `"unavailable"` — visible right here in the output, but easy to read past as "the fallback branch, working as intended" rather than "three real states with no distinguishing label."
+
+**Evidence:**
+
+```text
+warning: wildcard match will also match any future added variants
+  --> src/main.rs:19:9
+   |
+19 |         _ => "unavailable",
+   |         ^ help: try: `Status::LowStock | Status::OutOfStock | Status::Discontinued`
+```
+
+(`cargo clippy -- -W clippy::wildcard_enum_match_arm`)
+
+**Fix:** list every variant explicitly — the compiler then guarantees a future fifth `Status` variant fails to compile here until it's given its own label, instead of silently joining the "unavailable" bucket:
+
+```rust
+// @skip-verify fragment: Status is defined earlier in the full listing above
+fn status_label(status: Status) -> &'static str {
+    match status {
+        Status::InStock => "in stock",
+        Status::LowStock => "low stock",
+        Status::OutOfStock => "out of stock",
+        Status::Discontinued => "discontinued",
+    }
+}
+```
+</details>
+
+<details>
+<summary>Bug 2: `find_item_by_price` compares floats with `==`</summary>
+
+**Symptom:** none in this run — `9.99` in the search call and `9.99` in the item's price field are the identical literal, encoded identically, so `==` happens to succeed. It stops succeeding the moment either side is the result of any computation (a discount, a currency conversion, a sum) instead of a matching literal.
+
+**Evidence:**
+
+```text
+warning: strict comparison of `f32` or `f64`
+  --> src/main.rs:24:30
+   |
+24 |     items.iter().find(|item| item.price == target_price)
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider comparing them within some margin of error: `(item.price - target_price).abs() < error_margin`
+```
+
+(`cargo clippy -- -W clippy::float_cmp`)
+
+**Fix:** compare within a tolerance instead of exact equality:
+
+```rust
+// @skip-verify fragment: Item is defined earlier in the full listing above
+fn find_item_by_price(items: &[Item], target_price: f64) -> Option<&Item> {
+    items.iter().find(|item| (item.price - target_price).abs() < f64::EPSILON)
+}
+```
+
+A more robust real-world fix stores prices as integer cents (`u32`) instead of `f64` at all, sidestepping float comparison entirely — worth considering here, but out of scope for this specific fix.
+</details>
+
+<details>
+<summary>Bug 3: `is_some()` then `unwrap()` in `describe_cheapest`</summary>
+
+**Symptom:** none — logically correct, just doing by hand what `match`/`if let` already do in one step, and therefore one edit away from a bug (nothing stops a future edit from changing what `cheapest` holds between the `is_some()` check and the `unwrap()` call).
+
+**Evidence:**
+
+```text
+warning: called `unwrap` on `cheapest` after checking its variant with `is_some`
+  --> src/main.rs:34:41
+   |
+33 |     if cheapest.is_some() {
+   |     --------------------- help: try: `if let Some(<item>) = cheapest`
+34 |         format!("cheapest item id: {}", cheapest.unwrap().id)
+   |                                         ^^^^^^^^^^^^^^^^^
+```
+
+(`cargo clippy` — `unnecessary_unwrap` is on by default)
+
+**Fix:**
+
+```rust
+// @skip-verify fragment: Item is defined earlier in the full listing above
+fn describe_cheapest(items: &[Item]) -> String {
+    match items.iter().min_by(|a, b| a.price.partial_cmp(&b.price).unwrap()) {
+        Some(cheapest) => format!("cheapest item id: {}", cheapest.id),
+        None => "no items".to_string(),
+    }
+}
+```
+</details>
+
+<details>
+<summary>Bug 4: `#[derive(Copy)]` on an 80-byte struct</summary>
+
+**Symptom:** `apply_discount(items[1], 10.0)` compiles and works correctly — but `items[1]` is passed *by value*, and because `Item` is `Copy`, this silently copies all 80 bytes rather than moving or borrowing. `items[1]` is still fully usable on the next line (`original still: $24.50`) specifically because nothing was moved — a plain copy happened instead, invisibly.
+
+**Evidence:** no lint fires for this — only measurement reveals it:
+
+```text
+size of Item: 80 bytes
+```
+
+`#[derive(Copy)]` is legal here (every field is `Copy`-eligible... except `barcode: [u8; 64]`, which is `Copy` too, since arrays of `Copy` types are `Copy`) — legality was never in question, only whether copying 80 bytes on every by-value use is the intended cost.
+
+**Fix:** drop `Copy` (keep `Clone`) and take `&Item` by reference where the function only needs to read it, cloning only where a genuinely independent, mutable copy is needed:
+
+```rust
+// @skip-verify fragment: Item is defined earlier in the full listing above
+fn apply_discount(item: &Item, percent: f64) -> Item {
+    let mut discounted = item.clone();
+    discounted.price *= 1.0 - percent / 100.0;
+    discounted
+}
+// call site: apply_discount(&items[1], 10.0)
+```
+
+This makes the clone explicit and visible at the one call site that actually needs an independent copy, instead of allowing every future by-value use of `Item` to silently copy 80 bytes.
+</details>
+
+## The Fixed Version
+
+export const wr2FixedCode = `#[derive(Clone)]
+struct Item {
+    id: u32,
+    price: f64,
+    stock: u32,
+    barcode: [u8; 64],
+}
+
+enum Status {
+    InStock,
+    LowStock,
+    OutOfStock,
+    Discontinued,
+}
+
+fn status_label(status: Status) -> &'static str {
+    match status {
+        Status::InStock => "in stock",
+        Status::LowStock => "low stock",
+        Status::OutOfStock => "out of stock",
+        Status::Discontinued => "discontinued",
+    }
+}
+
+fn find_item_by_price(items: &[Item], target_price: f64) -> Option<&Item> {
+    items.iter().find(|item| (item.price - target_price).abs() < f64::EPSILON)
+}
+
+fn total_value(items: &[Item]) -> f64 {
+    items.iter().map(|i| i.price * i.stock as f64).sum()
+}
+
+fn describe_cheapest(items: &[Item]) -> String {
+    match items.iter().min_by(|a, b| a.price.partial_cmp(&b.price).unwrap()) {
+        Some(cheapest) => format!("cheapest item id: {}", cheapest.id),
+        None => "no items".to_string(),
+    }
+}
+
+fn apply_discount(item: &Item, percent: f64) -> Item {
+    let mut discounted = item.clone();
+    discounted.price *= 1.0 - percent / 100.0;
+    discounted
+}
+
+fn main() {
+    let items = vec![
+        Item { id: 1, price: 9.99, stock: 10, barcode: [0; 64] },
+        Item { id: 2, price: 24.50, stock: 3, barcode: [0; 64] },
+        Item { id: 3, price: 4.25, stock: 0, barcode: [0; 64] },
+    ];
+
+    println!("{}", status_label(Status::InStock));
+    println!("{}", status_label(Status::LowStock));
+    println!("{}", status_label(Status::OutOfStock));
+    println!("{}", status_label(Status::Discontinued));
+
+    if let Some(found) = find_item_by_price(&items, 9.99) {
+        println!("found item {} at $9.99", found.id);
+    }
+
+    println!("total value: \${:.2}", total_value(&items));
+    println!("{}", describe_cheapest(&items));
+
+    let discounted = apply_discount(&items[1], 10.0);
+    println!("discounted price: \${:.2}", discounted.price);
+    println!("original still: \${:.2}", items[1].price);
+    println!("size of Item: {} bytes", std::mem::size_of::<Item>());
+}`;
+
+<Playground code={wr2FixedCode} />
+
+```text
+in stock
+low stock
+out of stock
+discontinued
+found item 1 at $9.99
+total value: $173.40
+cheapest item id: 3
+discounted price: $22.05
+original still: $24.50
+size of Item: 80 bytes
+```
+
+Every status now has its own label; everything else is byte-for-byte the same output as before — bugs 2 through 4 were never visible in this specific run, only in what they risk under different input or different future edits.
+
+## What The Tools Caught
+
+One real combined `cargo clippy` run against the original buggy file:
+
+```text
+$ cargo clippy --bin wr2_buggy -- -W clippy::wildcard_enum_match_arm -W clippy::float_cmp -W clippy::unnecessary_unwrap
+warning: wildcard match will also match any future added variants
+  --> src/bin/wr2_buggy.rs:19:9
+   |
+19 |         _ => "unavailable",
+   |         ^ help: try: `Status::LowStock | Status::OutOfStock | Status::Discontinued`
+
+warning: strict comparison of `f32` or `f64`
+  --> src/bin/wr2_buggy.rs:24:30
+   |
+24 |     items.iter().find(|item| item.price == target_price)
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: called `unwrap` on `cheapest` after checking its variant with `is_some`
+  --> src/bin/wr2_buggy.rs:34:41
+   |
+33 |     if cheapest.is_some() {
+   |     --------------------- help: try: `if let Some(<item>) = cheapest`
+34 |         format!("cheapest item id: {}", cheapest.unwrap().id)
+   |                                         ^^^^^^^^^^^^^^^^^
+
+warning: `scratch` (bin "wr2_buggy") generated 3 warnings
+```
+
+Three of four, from one command (`wildcard_enum_match_arm` and `float_cmp` need `-W`; `unnecessary_unwrap` is on by default). Bug 4 — the 80-byte `Copy` struct — triggers no lint at all; `std::mem::size_of::<Item>()`, printed directly in the program's own output, is the only signal that anything is worth a second look.
+
+## Mental Model
+
+Structs and enums encode a shape once and then get copied, matched, and compared everywhere that type is used — which means a design mistake at the type's definition (deriving `Copy` on something large, leaving a status without every variant labeled) doesn't stay local. It resurfaces at every call site that takes the struct by value, and every `match` that reaches for `_` instead of listing variants. Reviewing a struct or enum definition is worth the same attention as reviewing a public function signature, for the same reason: everything downstream inherits the decision made there.
+
+## Trade-offs
+
+Listing every enum variant explicitly (fixing Bug 1) costs a few more lines today and pays off the moment a fifth `Status` variant is added — the compiler forces every affected `match` to be updated, rather than letting it silently fall into `_`. That's a real, deliberate trade: more verbose now, safer under change later. The float-to-cents redesign mentioned in Bug 2's fix is the more thorough version of the same trade-off — `u32` cents costs a one-time refactor and removes an entire category of float-comparison bugs permanently, rather than papering over one call site with an epsilon comparison.
+
+## Common Misconceptions
+
+- **"`_ =>` is just Rust's version of `default`/`else` — using it is always fine."** It compiles to that, but it also opts a specific `match` out of the exhaustiveness checking that's the main reason to use `match` over `if`/`else` chains in the first place. The tradeoff is legitimate for some matches (a truly open-ended set of cases) and a real risk for others (a small, closed enum like `Status`).
+- **"`#[derive(Copy)]` only matters for performance, not correctness."** In this example it's both: the silent 80-byte copy is a performance cost, and the fact that `items[1]` is still valid after `apply_discount(items[1], ...)` — because it was copied, not moved — can also mask a bug where the caller *meant* to consume the original and accidentally still has it.
+
+## Reading AI-generated code
+
+The same `_ =>` shape shows up constantly in generated match statements over small, closed enums — often because the author (human or AI) was thinking about the *common* case, not the *complete* one.
+
+<SpotTheBug code={`enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+fn is_horizontal(direction: Direction) -> bool {
+    match direction {
+        Direction::East => true,
+        Direction::West => true,
+        _ => false,
+    }
+}
+
+fn main() {
+    println!("{}", is_horizontal(Direction::East));
+    println!("{}", is_horizontal(Direction::North));
+}
+`}>
+This compiles, runs, and prints `true` then `false` -- entirely correct for a 4-variant enum with only 4 possible outcomes. The `_ => false` arm is doing real work here (covering `North` and `South`), which is exactly what makes it look reasonable. The risk shows up the moment `Direction` gains a fifth variant -- `Direction::Northeast`, say -- which would silently report `is_horizontal(Direction::Northeast) == false` with no compile error anywhere, even if the correct answer for a diagonal direction is genuinely ambiguous and deserves a human decision. `Direction::North | Direction::South => false` compiles to the same behavior today and forces a decision the day a fifth variant is added.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A struct or enum's definition is reviewed once but inherited everywhere that type is used -- an unlabeled match arm or an oversized Copy type is a small mistake at the definition and a repeated one at every call site.
+</Callout>
+
+export const quizWorkedReview2 = [
+    {
+        q: "In the buggy program's output, `LowStock`, `OutOfStock`, and `Discontinued` all print \"unavailable\". Why is this a bug rather than intended behavior?",
+        options: [
+            "It isn't a bug -- collapsing multiple statuses into one label is always correct",
+            "The `_ =>` arm makes it impossible to tell these three distinct, meaningfully different statuses apart in the output, and a future fifth Status variant would silently join the same bucket with no compile error",
+            "The program actually panics when printing these three statuses",
+            "Rust requires all match arms to return the same string, so this is unavoidable",
+        ],
+        answer: 1,
+        explain: "The three statuses carry real, different meaning (temporarily low, currently out, permanently discontinued) that the catch-all discards. Worse, a new variant added later inherits the same silent collapse with no signal that it needs its own case.",
+    },
+    {
+        q: "Why does `find_item_by_price(&items, 9.99)` work correctly in this program despite comparing floats with `==`?",
+        options: [
+            "Rust's == operator on f64 always accounts for floating-point rounding error automatically",
+            "The search value 9.99 and the item's stored price 9.99 are the identical literal encoded identically, so exact equality happens to hold -- this would not hold if either value came from a computation like a discount or currency conversion",
+            "f64 comparison with == is deprecated and this code doesn't actually compile",
+            "The clippy::float_cmp lint automatically fixes this at compile time",
+        ],
+        answer: 1,
+        explain: "Two identical literals produce identical bit patterns, so == succeeds here by construction. The bug is latent: any price derived from arithmetic (a discount, a sum, a currency conversion) is exactly the case where floating-point rounding makes == unreliable.",
+    },
+    {
+        q: "What does `std::mem::size_of::<Item>()` reveal about Bug 4, and why does no clippy lint flag it?",
+        options: [
+            "It reveals Item is only 8 bytes, which is too small to be useful",
+            "It reveals Item is 80 bytes, and because it derives Copy, every by-value use (like `apply_discount(items[1], 10.0)`) silently copies all 80 bytes -- no lint exists because deriving Copy on a large-but-legal type is a design tradeoff, not a syntax or logic error",
+            "It reveals a memory leak that Miri would also catch",
+            "It reveals that the struct fails to compile on 32-bit targets",
+        ],
+        answer: 1,
+        explain: "Copy is legal on any struct whose fields are all Copy-eligible, regardless of size -- legality was never the issue. Only measuring the actual size (or running cargo bloat) reveals the real cost of copying it implicitly on every by-value use.",
+    },
+    {
+        q: "Why does the fix for `describe_cheapest` (using `match` instead of `is_some()` + `unwrap()`) matter, given that the original code was not actually incorrect?",
+        options: [
+            "It changes the function's return type",
+            "It removes a step where a future edit to the code between the is_some() check and the unwrap() call could invalidate the assumption that cheapest is still Some, causing a panic that match/if let structurally cannot allow",
+            "It makes the function run measurably faster",
+            "It is required because is_some() does not exist in Rust 2024",
+        ],
+        answer: 1,
+        explain: "is_some() then a separate unwrap() relies on nothing changing cheapest in between -- true today, but not enforced by the compiler the way match or if let Some(...) enforces it structurally, by binding the value only in the branch where it's guaranteed to exist.",
+    },
+];
+
+<Quiz client:visible id="reading-rust/worked-review-2" questions={quizWorkedReview2} />
+
+<ProgressTracker client:visible id="reading-rust/worked-review-2" />

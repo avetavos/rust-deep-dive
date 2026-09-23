@@ -1,0 +1,339 @@
+---
+title: 'Worked Review 3: Worker Pool'
+description: 'รีวิวเต็มของ threaded worker pool ที่ AI สร้างขึ้น น่าเชื่อถือ ขนาดเล็ก -- bug ที่ปลูกไว้สี่ตัวข้าม Arc, Mutex, channel, และ join พร้อม output เครื่องมือจริง'
+sidebar:
+  order: 7
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+รีวิวเต็มบทที่สามเข้าสู่ concurrency ที่ "มันรันถูกต้อง" เป็นหลักฐานที่อ่อนแอกว่าปกติอีก — bug ทุกตัวในโปรแกรมนี้มองไม่เห็นภายใต้ load ปกติ และโผล่มาแค่ตอน panic, consumer ที่ช้า, หรือข้อสมมติเรื่อง timing ที่บังเอิญเป็นจริงในวันนี้เท่านั้น
+
+## โปรแกรม
+
+Worker pool ที่ยกกำลังสองชุดตัวเลขข้ามสี่ thread
+
+export const wr3BuggyCode = `use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
+/// The actual unit of work: square a number.
+fn process_job(job: u32) -> u32 {
+    job * job
+}
+
+/// Runs \`jobs\` across \`worker_count\` threads and returns every result.
+fn run_worker_pool(jobs: Vec<u32>, worker_count: usize) -> Vec<u32> {
+    let (job_tx, job_rx) = mpsc::channel::<u32>();
+    let job_rx = Arc::new(Mutex::new(job_rx));
+    let results = Arc::new(Mutex::new(Vec::new()));
+
+    for job in jobs {
+        job_tx.send(job).unwrap();
+    }
+    drop(job_tx); // closes the channel once every job has been sent
+
+    for _ in 0..worker_count {
+        let job_rx = Arc::clone(&job_rx);
+        let results = Arc::clone(&results);
+        thread::spawn(move || loop {
+            let job = { job_rx.lock().unwrap().recv() };
+            match job {
+                Ok(job) => {
+                    let mut guard = results.lock().unwrap();
+                    guard.push(process_job(job));
+                }
+                Err(_) => break, // channel closed -- no more jobs
+            }
+        });
+    }
+
+    // Give the workers time to finish before reading the results.
+    thread::sleep(Duration::from_millis(300));
+    let results = results.lock().unwrap();
+    results.clone()
+}
+
+fn main() {
+    let jobs: Vec<u32> = (1..=10).collect();
+    let mut results = run_worker_pool(jobs, 4);
+    results.sort_unstable();
+    println!("processed {} jobs", results.len());
+    println!("results: {results:?}");
+    println!("sum of squares: {}", results.iter().sum::<u32>());
+}`;
+
+<Playground code={wr3BuggyCode} />
+
+```text
+processed 10 jobs
+results: [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
+sum of squares: 385
+```
+
+Output ถูกต้อง ทุกครั้งที่คุณรันมันในทางปฏิบัติ มีสี่ปัญหาแยกกันซ่อนอยู่หลัง "ในทางปฏิบัติ" นั้น
+
+## Findings
+
+<details>
+<summary>Bug 1: `Arc<Mutex<T>>` ในที่ที่ `thread::scope` จะตัด `Arc` ออกไปได้ทั้งหมด</summary>
+
+**อาการ:** ไม่มี — โปรแกรมถูกต้อง แค่แบกเครื่องจักรด้าน ownership (`Arc::clone` ทุกรอบ loop, atomic reference counting ทุกครั้งที่เข้าถึง) ที่ scoped thread ไม่ต้องการเลย
+
+**ทำไม:** `thread::spawn` ต้องการให้ทุกค่าที่ capture เป็น `'static` เพราะ thread ที่ spawn อาจมีชีวิตอยู่นานกว่าฟังก์ชันที่สร้างมันได้ในทางทฤษฎี — ซึ่งเป็นเหตุผลว่าทำไม `Arc` (shared ownership ไม่มี lifetime คงที่) จึงจำเป็นตรงนี้เลย `thread::scope` รับประกันว่าทุก thread ที่ spawn ข้างในมันจะถูก join ก่อนที่ scope block จะจบ ดังนั้น plain borrow (`&Mutex<T>`) จึงแชร์กับ worker แต่ละตัวได้อย่างปลอดภัยแทน
+
+**หลักฐาน:** ไม่มี lint ตัวไหน flag สิ่งนี้ — มันเป็น pattern ที่ชอบธรรม compile ผ่าน ถูกต้อง คำถามมีแค่ว่ามันเป็นเครื่องจักรมากกว่าที่ปัญหาต้องการหรือไม่ ตรงนี้ lifetime ของ worker thread ทุกตัวถูกจำกัดโดยธรรมชาติด้วย body ของ `run_worker_pool` เอง ดังนั้นมันจึงเป็น
+
+**ทางแก้:** ดูเวอร์ชันที่แก้แล้วด้านล่าง — `thread::scope` แทนที่ `thread::spawn`, `Arc<Mutex<T>>` กลายเป็น `Mutex<T>` ธรรมดาที่ยืมผ่าน reference เข้าไปใน closure ของแต่ละ worker
+</details>
+
+<details>
+<summary>Bug 2: Mutex poisoning ไม่เคยถูกจัดการ</summary>
+
+**อาการ:** ไม่มีใน run นี้ — ทุก job ตรงนี้เล็กพอที่ `process_job` จะไม่ panic เลย ทันทีที่ job ตัวหนึ่ง panic ขณะที่ worker ถือ lock `results` อยู่ `.lock().unwrap()` ครั้งถัดไปของ thread อื่นทุกตัว — รวมถึงของ main thread เอง ตอนท้ายของ `run_worker_pool` — จะ panic ด้วย ไม่ว่า thread นั้นจะทำอะไรผิดหรือไม่ก็ตาม
+
+**หลักฐาน** — repro เล็ก ๆ: worker ตัวหนึ่ง panic จาก overflow ขณะถือ lock; `.lock()` *ตัวถัดไป* บน thread ที่ไม่เกี่ยวข้องกันเลย ต้องจ่ายราคาแทน:
+
+```rust
+// @expect-panic
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn process_job(job: u32) -> u32 {
+    job * job // overflows for a large enough job
+}
+
+fn main() {
+    let results = Arc::new(Mutex::new(Vec::<u32>::new()));
+    let jobs = [100_000u32]; // large enough that job * job overflows a u32
+
+    let results_a = Arc::clone(&results);
+    let handle = thread::spawn(move || {
+        let mut guard = results_a.lock().unwrap();
+        guard.push(process_job(jobs[0])); // panics here, while the lock is held
+    });
+    let _ = handle.join();
+
+    // BUG: this lock panics too, even though this thread did nothing wrong
+    let guard = results.lock().unwrap();
+    println!("{:?}", *guard);
+}
+```
+
+```text
+thread '<unnamed>' (<id>) panicked at src/main.rs:12:9:
+attempt to multiply with overflow
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'main' (<id>) panicked at src/main.rs:19:26:
+called `Result::unwrap()` on an `Err` value: PoisonError { .. }
+```
+
+**ทางแก้:** ตัดสินใจอย่างตั้งใจว่า lock ที่ poisoned หมายความว่าอะไรสำหรับโปรแกรมนี้ แทนที่จะปล่อยให้ `.unwrap()` ส่งต่อมันเป็น panic ใหม่ที่ดูไม่เกี่ยวข้องกัน `Mutex::lock()` return `LockResult<MutexGuard<T>>`; การจัดการกรณี poisoned อย่างชัดเจน (กู้คืน guard ด้วย `.into_inner()`, หรือปฏิบัติกับ pool ที่ poisoned เป็น fatal แล้ว shutdown อย่างสะอาด) คือทางแก้ — อันไหนถูกต้องขึ้นอยู่กับว่าผลลัพธ์บางส่วนยังใช้ได้สำหรับโปรแกรมเฉพาะนี้หรือไม่:
+
+```rust
+// @skip-verify fragment: illustrates handling the poisoned case explicitly, not a full runnable program
+match results.lock() {
+    Ok(guard) => guard,
+    Err(poisoned) => {
+        eprintln!("a worker panicked; recovering partial results");
+        poisoned.into_inner() // decide deliberately to keep going with what's there
+    }
+};
+```
+</details>
+
+<details>
+<summary>Bug 3: `mpsc::channel()` (ไม่มีขอบเขต) สำหรับกระจาย job</summary>
+
+**อาการ:** ไม่มีเลยกับ 10 job ความเสี่ยงเป็นสัดส่วนกับว่าแหล่ง job จริงใหญ่และ bursty แค่ไหน channel ไม่มีขอบเขตที่ป้อนโดย เช่น live event stream แทนที่จะเป็น `Vec<u32>` คงที่ จะ buffer job ที่ยังไม่ถูก consume ทุกตัวใน memory โดยไม่มีขีดจำกัดเลย
+
+**หลักฐาน:** ไม่มี — `mpsc::channel()` เป็น API ที่ถูกต้องสมบูรณ์ และไม่มีอะไรเกี่ยวกับโปรแกรม 10-job เฉพาะนี้ที่ใหญ่พอจะเผยปัญหา นี่เป็นคำถามด้าน design เกี่ยวกับแหล่ง job *จริง* ที่โค้ดนี้จะเจอในที่สุด ไม่ใช่สิ่งที่ test หรือ lint ตอบได้เกี่ยวกับโค้ดตามที่เขียนไว้
+
+**ทางแก้:** `mpsc::sync_channel(capacity)` block sender ทันทีที่ buffer เต็ม ใช้ backpressure แทนการ buffer ไม่จำกัด — ดูเวอร์ชันที่แก้แล้วด้านล่าง
+</details>
+
+<details>
+<summary>Bug 4: `JoinHandle` ของ worker ถูกทิ้ง ไม่เคยถูก join</summary>
+
+**อาการ:** ไม่มีใน run นี้ — sleep คงที่ 300ms บังเอิญใจกว้างพอสำหรับ job ยกกำลังสองเล็ก ๆ สี่ตัวที่จะเสร็จ ไม่มีอะไรเกี่ยวกับ sleep นั้นที่รับประกันได้: เครื่องที่ช้ากว่า, job ที่หนักกว่า, หรือการเปลี่ยน worker count ล้วนอาจทำให้มันสั้นเกินไป และไม่มี signal เลยถ้ามันเป็นแบบนั้น — โค้ดจะแค่ return ผลลัพธ์น้อยกว่าที่คาดไว้อย่างเงียบ ๆ
+
+มีต้นทุนที่สองที่คมกว่าซึ่ง sleep เท่าไหร่ก็แก้ไม่ได้: `thread::spawn` return `JoinHandle` และการเรียก `.join()` บนมันเป็นวิธี*เดียว*ที่ thread ที่ spawn จะรู้ว่า thread ที่ spawn มา panic หรือไม่ ตรงนี้ `JoinHandle` ทุกตัวถูกทิ้งทันทีที่ `for` loop ที่สร้างมันย้ายไป iteration ถัดไป — ถ้า worker panic `Result` ของมันไม่เคยถูกตรวจสอบเลย ดังนั้นไม่มีอะไรใน return value หรือ exit status ของ `run_worker_pool` สะท้อนว่า worker ตายไปแล้ว รวมกับ Bug 2 job ที่ overflow ตัวเดียวจะ poison lock ที่แชร์กัน (main thread ก็ panic ด้วย — ดัง) แต่ worker ที่ crash ด้วยเหตุผลใดก็ตามที่*ไม่*แตะ lock ที่แชร์กันจะ fail อย่างเงียบสนิท
+
+**หลักฐาน:** ไม่มี lint ตัวไหน flag สิ่งนี้เหมือนกัน — การทิ้ง `JoinHandle` ถูกกฎ Rust ปกติ มีแค่การอ่านว่า `.join()`'s return value มีไว้*เพื่ออะไร*เท่านั้นที่เผยช่องว่างนี้
+
+**ทางแก้:** การเปลี่ยนแปลงเดียวกันที่แก้ Bug 1 แก้อันนี้ด้วย — `thread::scope` join ทุก thread ที่ spawn อัตโนมัติเมื่อ scope block จบ และส่งต่อ panic จากตัวไหนก็ตามในนั้นให้ผู้เรียก แทนที่จะทิ้งมันอย่างเงียบ ๆ
+</details>
+
+## เวอร์ชันที่แก้แล้ว
+
+`thread::scope` แทนที่ `thread::spawn` ตัดความต้องการ `Arc` ออก (Bug 1) และรับประกันว่า worker ทุกตัวถูก join ก่อนที่ `results` จะถูกอ่าน (Bug 4 พร้อม sleep ไปด้วย); `mpsc::sync_channel` เพิ่ม backpressure (Bug 3) Bug 2 (poisoning) เป็นการตัดสินใจด้าน policy ที่เวอร์ชันเฉพาะนี้ยังปล่อยเป็น `.unwrap()` เพื่อความกระชับ — ดู finding ด้านบนว่าจะจัดการมันอย่างตั้งใจได้อย่างไร
+
+export const wr3FixedCode = `use std::sync::mpsc;
+use std::sync::Mutex;
+use std::thread;
+
+/// The actual unit of work: square a number.
+fn process_job(job: u32) -> u32 {
+    job * job
+}
+
+/// Runs \`jobs\` across \`worker_count\` threads and returns every result.
+fn run_worker_pool(jobs: Vec<u32>, worker_count: usize) -> Vec<u32> {
+    let (job_tx, job_rx) = mpsc::sync_channel::<u32>(4); // bounded -- applies backpressure to the sender
+    let job_rx = Mutex::new(job_rx);
+    let results = Mutex::new(Vec::new());
+
+    thread::scope(|scope| {
+        for _ in 0..worker_count {
+            scope.spawn(|| loop {
+                let job = { job_rx.lock().unwrap().recv() };
+                match job {
+                    Ok(job) => {
+                        let mut guard = results.lock().unwrap();
+                        guard.push(process_job(job));
+                    }
+                    Err(_) => break, // channel closed -- no more jobs
+                }
+            });
+        }
+
+        for job in jobs {
+            job_tx.send(job).unwrap();
+        }
+        drop(job_tx); // closes the channel once every job has been sent
+    }); // thread::scope joins every worker here, automatically, before results is read
+
+    results.into_inner().unwrap()
+}
+
+fn main() {
+    let jobs: Vec<u32> = (1..=10).collect();
+    let mut results = run_worker_pool(jobs, 4);
+    results.sort_unstable();
+    println!("processed {} jobs", results.len());
+    println!("results: {results:?}");
+    println!("sum of squares: {}", results.iter().sum::<u32>());
+}`;
+
+<Playground code={wr3FixedCode} />
+
+```text
+processed 10 jobs
+results: [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
+sum of squares: 385
+```
+
+ผลลัพธ์เดียวกัน ไม่มี sleep, ไม่มี `Arc`, และไม่มีทางที่ worker จะเสร็จ "ช้าเกินไป" — scope block ไม่ return จนกว่า worker ทุกตัวจะ return ซึ่งเป็นสิ่งที่รับประกันจริง ๆ ว่า `results` สมบูรณ์เมื่อมันถูกอ่าน แทนที่จะเป็น delay คงที่ที่หวังว่ามันจะจริง
+
+## เครื่องมือจับอะไรได้บ้าง
+
+ไม่มี bug ตัวไหนในสี่ตัวนี้ที่ถูกจับโดย clippy lint ไหนเลย — `cargo clippy -- -W clippy::all -W clippy::pedantic -W clippy::nursery` บนเวอร์ชัน bug ไม่รายงานอะไรเลยเกี่ยวกับ `Arc`, `Mutex`, poisoning, channel, หรือ `JoinHandle` ที่ถูกทิ้ง:
+
+```text
+$ cargo clippy --bin wr3_buggy -- -W clippy::all -W clippy::pedantic -W clippy::nursery
+warning: this function could have a `#[must_use]` attribute
+warning: this could be a `const fn`
+warning: `scratch` (bin "wr3_buggy") generated 1 warning
+```
+
+Warning สองอัน ทั้งคู่เป็น style suggestion ที่ไม่เกี่ยวข้อง หลักฐานจริงชิ้นเดียวในรีวิวทั้งหมดนี้คือ panic transcript ของ poisoning repro — ความเสี่ยงด้าน concurrency design เฉพาะนี้ ที่ระดับความลึกนี้ อยู่ในดินแดน "เครื่องมือ: ไม่มี — มนุษย์เท่านั้น" ที่โมดูลนี้ทำแผนที่ไว้ตลอด catalog
+
+## Mental Model
+
+bug ทุกตัวในไฟล์นี้คือการตัดสินใจที่ถูกต้อง*สำหรับ load และเงื่อนไข failure ที่ลอง* และผิดอย่างเงียบ ๆ นอกเหนือจากนั้น: `Arc` กับ `Mutex` เป็นเครื่องมือที่ถูกต้องเมื่อ thread มีชีวิตอยู่นานกว่า scope ที่ spawn มันจริง ๆ channel ไม่มีขอบเขตโอเคเมื่อ producer ถูกจำกัดได้อย่างพิสูจน์แล้ว sleep คงที่โอเคเมื่อคุณจำกัดระยะเวลาของงานได้ และ `.unwrap()` บน lock โอเคตราบใดที่ไม่มีอะไร panic ขณะถือมัน โค้ด concurrent คูณความเสี่ยงนี้เพิ่มขึ้นเพราะไม่มีข้อสมมติทั้งสี่ข้อนั้นที่เช็คได้จากการรันโปรแกรมครั้งเดียวบน happy path — แต่ละอันเป็นการอ้างสิทธิ์เกี่ยวกับ timing หรือ failure แบบ*เลวร้ายที่สุด* ไม่ใช่เกี่ยวกับ behavior ทั่วไป
+
+## Trade-offs
+
+`thread::scope` ไม่ได้ดีกว่าเสมอไปในทุกกรณี — มันต้องการให้ body ของ closure (และทุกอย่างที่มัน capture) ไม่มีชีวิตอยู่นานกว่า scope ซึ่งเป็นสิ่งที่ทำให้การ join อัตโนมัติและการแชร์แบบ borrow เป็นไปได้พอดี แต่ก็หมายความว่ามันแสดง fire-and-forget background task ที่ควรทำงานต่อหลังฟังก์ชันที่เริ่มมัน return ไปแล้วไม่ได้จริง ๆ `thread::spawn` ยังคงเป็นเครื่องมือที่ถูกต้องสำหรับปัญหารูปร่างเฉพาะนั้น bug ในรีวิวนี้คือการเอื้อมมือไปหยิบมันตรงนี้ ที่ lifetime ของ worker ทุกตัวถูกจำกัดโดย `run_worker_pool` ตลอดเวลาอยู่แล้วจริง ๆ
+
+## Common Misconceptions
+
+- **"spawned thread ที่ panic ทำให้ทั้งโปรแกรม crash"** มันไม่ทำแบบนั้น — panic ใน thread ที่ไม่ใช่ main unwind thread นั้นและ print ไป stderr เป็น default แต่ส่วนที่เหลือของโปรแกรม (รวมถึง `main`) ยังทำงานต่อไปเว้นแต่จะมีอะไรอื่น (เช่น lock ที่ poisoned) ส่งต่อ failure นั่นแหละคือเหตุผลว่าทำไม return value ของ `.join()` ถึงสำคัญ: มันเป็น signal แบบมีโครงสร้างเดียวที่บอกว่า thread ที่ spawn มา fail
+- **"ถ้า sleep นานพอ การ sleep แทนการ join ก็โอเคพื้นฐาน"** มันเปลี่ยน correctness bug ให้เป็นการเดิมพันเรื่อง timing — ถูกต้องจนกว่าจะถึง run ที่ job ใช้เวลานานขึ้น เครื่องอยู่ภายใต้ load หรือมีคนเปลี่ยน worker_count ตอนนั้น failure จะเงียบ (ผลลัพธ์น้อยกว่าที่คาดไว้ ไม่มี error) แทนที่จะดัง
+
+## อ่านโค้ดที่ AI เขียน
+
+Sleep-แทน-join กับ channel ที่ไม่มีขอบเขตเป็น default ทั้งคู่พบบ่อยพอในโค้ด concurrent ที่ AI สร้างจนคุ้มค่าที่จะจำได้ทันทีที่เห็น แม้จะอยู่นอก worker pool เต็มรูปแบบ
+
+<SpotTheBug code={`use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
+fn main() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+
+    for i in 0..3 {
+        let log = Arc::clone(&log);
+        thread::spawn(move || {
+            log.lock().unwrap().push(format!("task {i} done"));
+        });
+    }
+
+    thread::sleep(Duration::from_millis(50));
+    let log = log.lock().unwrap();
+    println!("{} entries logged", log.len());
+}
+`}>
+โค้ดนี้ print `3 entries logged` อย่างน่าเชื่อถือบนเครื่องปกติภายใต้ load ปกติ -- สาม thread เล็ก ๆ เสร็จได้สบายภายใน 50ms ไม่มีอะไรตรงนี้รับประกันแบบนั้น: ไม่มี join เลยที่ไหน ดังนั้น 50ms คือการเดิมพันว่า thread ที่ spawn ทุกตัวเสร็จก่อนที่ `main` จะอ่าน `log` ไม่ใช่ข้อเท็จจริงที่โปรแกรมสร้างขึ้น ภายใต้ load บนเครื่องที่ช้ากว่า หรือด้วยงานต่อ task ที่หนักกว่า โค้ดนี้จะ print ตัวเลขที่น้อยกว่า 3 อย่างเงียบ ๆ โดยไม่มี error เลย ทางแก้ลบการเดิมพันออก: `let handles: Vec<_> = (0..3).map(|i| { let log = Arc::clone(&log); thread::spawn(move || log.lock().unwrap().push(format!("task {i} done"))) }).collect(); for h in handles { h.join().unwrap(); }` -- หรือ เพราะทุก thread ตรงนี้ถูก join ก่อนที่ `main` จะต้องการผลลัพธ์อยู่แล้ว `thread::scope` ตัด `Arc` ออกได้ด้วย
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Sleep เป็นการเดิมพันเรื่อง timing ไม่ใช่การรับประกัน -- ถ้าโค้ดต้องรู้ว่า thread เสร็จแล้ว .join() (หรือการ join อัตโนมัติที่ thread::scope ให้) เป็นสิ่งเดียวที่ยืนยันสิ่งนั้นได้จริง และ JoinHandle ที่ถูกทิ้งเป็นวิธีเดียวที่ panic จะไม่ถูกสังเกตเห็น
+</Callout>
+
+export const quizWorkedReview3 = [
+    {
+        q: "ทำไม `thread::spawn` ถึงต้องการให้ค่าที่ capture เป็น `'static` และสิ่งนั้นบังคับให้โปรแกรมนี้ทำอะไร?",
+        options: [
+            "มันไม่ต้องการ 'static -- นี่เป็นความเข้าใจผิดที่พบบ่อย",
+            "thread ที่ spawn อาจมีชีวิตอยู่นานกว่าฟังก์ชันที่ spawn มันได้ในทางทฤษฎี ดังนั้นอะไรก็ตามที่มัน capture ต้องไม่มี lifetime ที่ผูกกับฟังก์ชันนั้น บังคับให้ shared state ต้องเป็น Arc (shared ownership ไม่มี lifetime คงที่) แทนที่จะเป็น plain borrow",
+            "'static ใช้ได้แค่กับ string literal เท่านั้น ไม่ใช่ thread closure",
+            "มันต้องการ 'static ด้วยเหตุผลด้าน performance ล้วน ๆ ไม่เกี่ยวกับ safety",
+        ],
+        answer: 1,
+        explain: "signature ของ thread::spawn ต้องการ F: Send + 'static โดยเฉพาะเพราะไม่มีอะไรจำกัดว่า thread ที่ spawn จะรันนานแค่ไหนเทียบกับ parent ของมัน thread::scope เปลี่ยนสิ่งนี้ด้วยการรับประกันว่าทุก scoped thread join ก่อน scope จบ ดังนั้น borrow จึงใช้ได้แทน",
+    },
+    {
+        q: "ใน poisoning repro ทำไม `.lock()` ครั้งที่สอง -- บน main thread ซึ่งไม่เคยแตะ job ที่ overflow เลย -- ก็ panic ด้วย?",
+        options: [
+            "มันไม่ได้ panic จริง ๆ -- ตัวอย่างนี้ผิด",
+            "เพราะ Mutex poison ตัวเองเมื่อ thread panic ขณะถือ lock; ทุก .lock().unwrap() ครั้งถัดไปบน Mutex เดียวกันนั้นจึง panic ด้วย ไม่ว่า thread ไหนจะเรียกหรือ thread นั้นทำอะไรผิดหรือไม่",
+            "เพราะสอง thread กำลังแข่งกันใช้ CPU core เดียวกัน",
+            "เพราะ Vec<u32> แชร์ระหว่าง thread ไม่ได้เลย",
+        ],
+        answer: 1,
+        explain: "Mutex poisoning เป็นการออกแบบที่ตั้งใจ: เมื่อ thread panic ขณะถือ lock Rust รับประกันไม่ได้ว่าข้อมูลที่ถูกปกป้องอยู่ในสถานะที่สอดคล้องกัน จึง poison Mutex ทุก .lock() ในอนาคต return Err(PoisonError) จนกว่าจะมีอะไรจัดการมันอย่างชัดเจน .unwrap() แค่เปลี่ยนมันให้เป็น panic ครั้งที่สอง",
+    },
+    {
+        q: "ทำไมการทิ้ง `JoinHandle` โดยไม่เรียก `.join()` ถึงเป็นความเสี่ยงจริง ในเมื่อ output ของโปรแกรม bug ดูถูกต้องสมบูรณ์?",
+        options: [
+            "มันไม่ใช่ความเสี่ยงจริง -- การทิ้ง JoinHandle ปลอดภัยสมบูรณ์เสมอ",
+            "return value ของ .join() (Ok หรือ Err) เป็นวิธีเดียวที่มีโครงสร้างที่ thread ที่ spawn จะรู้ว่า thread ที่ spawn มา panic หรือไม่; handle ที่ถูกทิ้งหมายความว่า panic ของ worker (ด้วยเหตุผลใดก็ตามที่ไม่เกี่ยวกับ lock ที่แชร์กัน) จะไม่ถูกสังเกตเห็นเลย ไม่มี error ไม่มี signal ใน output",
+            "การทิ้ง JoinHandle ฆ่า thread ที่ spawn มาทันที",
+            "มันทำให้ compile error ใน Rust edition ใหม่กว่า",
+        ],
+        answer: 1,
+        explain: "panic ใน thread ที่ spawn ไม่ทำให้โปรแกรม crash หรือส่งต่ออัตโนมัติที่ไหนเลย -- .join() ที่ return Err คือวิธีเฉพาะที่ parent จะรู้ การทิ้ง handle ทิ้ง signal นั้นไปด้วย ไม่ว่า run นี้เฉพาะจะบังเอิญทำงานหรือไม่",
+    },
+    {
+        q: "การแทนที่ `thread::spawn` ด้วย `thread::scope` ในเวอร์ชันที่แก้แล้วแก้อะไรพร้อมกัน และไม่แก้อะไรด้วยตัวมันเอง?",
+        options: [
+            "มันแก้ performance แต่นำ data race ใหม่เข้ามา",
+            "มันตัดความต้องการ Arc ออก (borrow ปลอดภัยเพราะทุก thread join ก่อน scope จบ) และรับประกันว่า worker ทุกตัวถูก join อัตโนมัติ -- มันไม่ได้เปลี่ยนวิธีจัดการ Mutex ที่ poisoned ด้วยตัวมันเอง ซึ่งยังเป็นการตัดสินใจด้าน policy แยกต่างหาก",
+            "มันแปลง channel ไม่มีขอบเขตให้เป็นแบบมีขอบเขตอัตโนมัติ",
+            "มันทำให้ process_job ป้องกัน integer overflow ได้อัตโนมัติ",
+        ],
+        answer: 1,
+        explain: "การรับประกันการ join ของ thread::scope คือสิ่งที่ทำให้ทั้งการตัด Arc ออกและการแก้ auto-join เป็นไปได้พร้อมกัน เพราะมันมี root cause เดียวกัน (ข้อกำหนด 'static ของ thread::spawn) ขอบเขตของ channel กับการจัดการ overflow/poisoning เป็นทางแก้แยกกันที่ใช้ควบคู่กันไป",
+    },
+];
+
+<Quiz client:visible id="reading-rust/worked-review-3" questions={quizWorkedReview3} />
+
+<ProgressTracker client:visible id="reading-rust/worked-review-3" />
