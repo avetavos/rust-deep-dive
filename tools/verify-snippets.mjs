@@ -2,6 +2,7 @@
 // EN lessons with the local stable rustc (edition 2024) and reports failures.
 // Markers on line 1 of a snippet:
 //   // @expect-error E0382 E0499   — must FAIL to compile with exactly these error codes
+//   // @expect-error nocode        — must FAIL to compile with an uncoded diagnostic (no error[EXXXX])
 //   // @skip-verify <reason>       — illustrative fragment / needs crates / stdin
 //   // @no-run                     — compile only (long-running, threads with sleep, etc.)
 //   // @expect-panic               — compiles, and the run must exit non-zero (panic)
@@ -49,7 +50,10 @@ for (const f of files) {
     const codes = codesOf(cerr);
     let ok, line = `${f}#${i}${name ? ` (${name})` : ''}${wrap ? ' WRAP' : ''}${isTest ? ' TEST' : ''}`;
     if (expect.length) {
-      ok = c.status !== 0 && JSON.stringify(codes) === JSON.stringify(expect);
+      // `// @expect-error nocode` = must fail to compile with a diagnostic that carries no E-code
+      // (e.g. the edition-2024 match-ergonomics errors).
+      const want = expect.filter((e) => e !== 'nocode');
+      ok = c.status !== 0 && JSON.stringify(codes) === JSON.stringify(want);
       line += ` expect[${expect}] got[${codes}]`;
     } else if (c.status !== 0) {
       ok = false; line += ` compile-error[${codes}]\n` + cerr.split('\n').slice(0, 8).join('\n');
